@@ -104,6 +104,13 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .line-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
 .line-label { font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
 .merge-dot, .fork-dot { stroke: #fff; stroke-width: 1.5; }
+.fork-control { cursor: pointer; }
+.fork-hit { fill: transparent; stroke: none; }
+.fork-dot.collapsed { fill: #fff; stroke-width: 2; }
+.fork-symbol {
+  fill: #24292f; font-size: 10px; font-weight: 700;
+  pointer-events: none; user-select: none;
+}
 
 .task-node { stroke: #fff; stroke-width: 2; cursor: pointer; }
 .task-bar { opacity: .25; }

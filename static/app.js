@@ -12,7 +12,7 @@ const state = {
   view: "canvas",
   show: { name: true, status: true, dur: true, owner: true },
   expandedClusters: new Set(),   // 已展开的同天多事务簇 key: "lineId|date"
-  collapsedLineIds: new Set(),   // 画布中已折叠子支线的线
+  hiddenBranchIds: new Set(),    // 画布中已折叠的支线（支线自身及其后代隐藏）
   canvasTaskPositions: new Map(),
   zoom: 1,                       // 画布缩放倍数 (Ctrl+滚轮)
   pan: { x: 0, y: 0 },           // 画布拖拽位移（屏幕像素）
@@ -193,6 +193,11 @@ async function reload() {
   state.priorityEnum = d.priority_enum || ["低", "中", "高", "紧急"];
   state.owners = d.owners || [];
   state.today = d.today;
+  for (const id of [...state.hiddenBranchIds]) {
+    if (!state.lines.some((line) => line.id === id && line.parent_id !== null)) {
+      state.hiddenBranchIds.delete(id);
+    }
+  }
   if (state.selectedLineId && !lineById(state.selectedLineId)) {
     state.selectedLineId = null;
   }
@@ -216,16 +221,18 @@ function render() {
 /* ---------------------------------------------------------------- toolbar */
 function renderToolbar() {
   const sel = state.selectedLineId ? lineById(state.selectedLineId) : null;
+  const children = sel ? state.lines.filter((line) => line.parent_id === sel.id) : [];
+  const allChildrenHidden = children.length > 0 &&
+    children.every((line) => state.hiddenBranchIds.has(line.id));
   $("#btn-add-branch").disabled = !sel;
   $("#btn-add-task").disabled = !sel;
   $("#btn-rename").disabled = !sel;
   $("#btn-delete-line").disabled = !sel;
   $("#btn-merge").disabled = !sel || sel.parent_id === null || sel.merge_date;
   $("#btn-undo").disabled = !state.canUndo;
-  $("#btn-toggle-children").disabled = !sel ||
-    !state.lines.some((l) => l.parent_id === sel.id);
+  $("#btn-toggle-children").disabled = !children.length;
   $("#btn-toggle-children").textContent =
-    sel && state.collapsedLineIds.has(sel.id) ? "展开子支线" : "折叠子支线";
+    allChildrenHidden ? "展开子支线" : "折叠子支线";
   $("#sel-info").textContent = sel
     ? `已选中：${sel.name}${sel.parent_id === null ? "（主线）" : "（支线）"}`
     : "未选中任何线";
@@ -294,7 +301,7 @@ function svgEl(tag, attrs, parent) {
 }
 
 /* 计算每条线的泳道行号：主线在上，支线递归排在父线之后 */
-function assignRows() {
+function assignRows(includeHidden = false) {
   const roots = state.lines.filter((l) => l.parent_id === null);
   const children = (pid) =>
     state.lines.filter((l) => l.parent_id === pid)
@@ -303,8 +310,9 @@ function assignRows() {
   let row = 0;
   function walk(line) {
     rows.set(line.id, row++);
-    if (state.collapsedLineIds.has(line.id)) return;
-    for (const c of children(line.id)) walk(c);
+    for (const c of children(line.id)) {
+      if (includeHidden || !state.hiddenBranchIds.has(c.id)) walk(c);
+    }
   }
   roots.sort((a, b) => a.id - b.id).forEach(walk);
   return rows;
@@ -362,7 +370,8 @@ function renderCanvas() {
   svg.innerHTML = "";
   state.canvasTaskPositions = new Map();
   const rows = assignRows();
-  const canvasTasks = filteredTasks();
+  const colorRows = assignRows(true);
+  const canvasTasks = filteredTasks().filter((task) => rows.has(task.line_id));
 
   if (!state.lines.length) {
     svg.setAttribute("width", Math.max(800 * z, wrap.clientWidth));
@@ -461,7 +470,8 @@ function renderCanvas() {
 
   /* ---- 线 ---- */
   const gLines = svgEl("g", {}, root);
-  const colorOf = (l) => LINE_COLORS[rows.get(l.id) % LINE_COLORS.length];
+  const colorOf = (line) =>
+    LINE_COLORS[colorRows.get(line.id) % LINE_COLORS.length];
 
   for (const line of visibleLines) {
     const y = lineY(line.id);
@@ -505,12 +515,7 @@ function renderCanvas() {
     path.addEventListener("click", select);
     hit.addEventListener("dblclick", () => openLineModal(line));
 
-    /* 分叉点 / 反合点 */
-    if (parent) {
-      svgEl("circle", {
-        cx: x1, cy: lineY(parent.id), r: 4.5, fill: color, class: "fork-dot",
-      }, gLines);
-    }
+    /* 反合点 */
     if (parent && line.merge_date) {
       svgEl("circle", {
         cx: x(line.merge_date) + 32, cy: lineY(parent.id),
@@ -519,14 +524,57 @@ function renderCanvas() {
     }
 
     /* 线名标签 */
-    const childCount = state.lines.filter((l) => l.parent_id === line.id).length;
+    const hiddenChildCount = state.lines.filter(
+      (child) => child.parent_id === line.id && state.hiddenBranchIds.has(child.id)
+    ).length;
     const lbl = svgEl("text", {
       x: x2 + 10, y: y + 4, fill: color, class: "line-label",
     }, gLines);
     lbl.textContent = line.name +
       (line.merge_date ? " ✓已反合" : "") +
-      (childCount && state.collapsedLineIds.has(line.id) ? `（已折叠 ${childCount}）` : "");
+      (hiddenChildCount ? `（已折叠 ${hiddenChildCount}支线）` : "");
     lbl.addEventListener("click", select);
+  }
+
+  /* 分叉点始终保留在父线上，点击可折叠或展开对应支线。 */
+  const gForks = svgEl("g", {}, root);
+  for (const branch of state.lines.filter((line) => line.parent_id !== null)) {
+    const parent = lineById(branch.parent_id);
+    if (!parent || !rows.has(parent.id)) continue;
+    const hidden = state.hiddenBranchIds.has(branch.id);
+    const cx = x(branch.fork_date);
+    const cy = lineY(parent.id);
+    const color = colorOf(branch);
+    const control = svgEl("g", {
+      class: `fork-control${hidden ? " collapsed" : ""}`,
+      "data-branch-id": branch.id,
+    }, gForks);
+    svgEl("circle", { cx, cy, r: 12, class: "fork-hit" }, control);
+    svgEl("circle", {
+      cx, cy, r: hidden ? 6 : 4.5, fill: color,
+      class: `fork-dot${hidden ? " collapsed" : ""}`,
+    }, control);
+    if (hidden) {
+      const symbol = svgEl("text", {
+        x: cx, y: cy + 3.5, "text-anchor": "middle", class: "fork-symbol",
+      }, control);
+      symbol.textContent = "+";
+    }
+    const title = svgEl("title", {}, control);
+    title.textContent = `${hidden ? "展开" : "折叠"}支线：${branch.name}`;
+    control.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (hidden) {
+        state.hiddenBranchIds.delete(branch.id);
+      } else {
+        state.hiddenBranchIds.add(branch.id);
+        const hiddenIds = new Set([branch.id, ...descendantIds(branch.id)]);
+        if (hiddenIds.has(state.selectedLineId)) state.selectedLineId = parent.id;
+        const selectedTask = state.tasks.find((task) => task.id === state.selectedTaskId);
+        if (selectedTask && hiddenIds.has(selectedTask.line_id)) state.selectedTaskId = null;
+      }
+      render();
+    });
   }
 
   /* ---- 事务节点（同线同天多事务折叠为聚合节点，点击展开/折叠） ---- */
@@ -1331,8 +1379,12 @@ $("#btn-fit").onclick = () => {
 $("#btn-toggle-children").onclick = () => {
   const id = state.selectedLineId;
   if (!id) return;
-  if (state.collapsedLineIds.has(id)) state.collapsedLineIds.delete(id);
-  else state.collapsedLineIds.add(id);
+  const children = state.lines.filter((line) => line.parent_id === id);
+  const allHidden = children.every((line) => state.hiddenBranchIds.has(line.id));
+  for (const child of children) {
+    if (allHidden) state.hiddenBranchIds.delete(child.id);
+    else state.hiddenBranchIds.add(child.id);
+  }
   render();
 };
 
