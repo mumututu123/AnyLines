@@ -1,4 +1,5 @@
 import http.client
+import io
 import json
 import os
 import sqlite3
@@ -7,6 +8,7 @@ import threading
 import unittest
 from datetime import date, timedelta
 
+from openpyxl import load_workbook
 from werkzeug.serving import make_server
 
 _IMPORT_TEMP_DIR = tempfile.TemporaryDirectory()
@@ -255,6 +257,51 @@ class AnyLineHttpTests(unittest.TestCase):
         self.request("POST", "/api/undo")
         _, state = self.request("GET", "/api/state")
         self.assertEqual(len(state["tasks"]), 2)
+
+    def test_excel_export_all_and_selected(self):
+        main_id = self.create_line("产品主线")
+        branch_id = self.create_line("交付支线", parent_id=main_id)
+        first = self.create_task(main_id, "=1+1")
+        second = self.create_task(branch_id, "交付事务", owner="李四")
+
+        status, content = self.request(
+            "POST", "/api/tasks/export", {"scope": "all", "ids": None}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(content.startswith(b"PK"))
+        workbook = load_workbook(io.BytesIO(content))
+        sheet = workbook["事务"]
+        self.assertEqual(sheet.freeze_panes, "A2")
+        self.assertEqual(sheet.auto_filter.ref, "A1:P3")
+        self.assertEqual(
+            [cell.value for cell in sheet[1]],
+            [column[0] for column in anyline.TASK_EXPORT_COLUMNS],
+        )
+        self.assertEqual(sheet["E2"].value, "=1+1")
+        self.assertEqual(sheet["E2"].data_type, "s")
+        self.assertEqual(sheet["C2"].value, "主线")
+        self.assertEqual(sheet["C3"].value, "支线")
+        self.assertEqual(sheet["D3"].value, "产品主线")
+
+        status, content = self.request(
+            "POST", "/api/tasks/export", {"scope": "selected", "ids": [second]}
+        )
+        self.assertEqual(status, 200)
+        sheet = load_workbook(io.BytesIO(content))["事务"]
+        self.assertEqual(sheet.auto_filter.ref, "A1:P2")
+        self.assertEqual(sheet.max_row, 2)
+        self.assertEqual(sheet["A2"].value, second)
+        self.assertEqual(sheet["E2"].value, "交付事务")
+
+        for payload, expected in (
+            ({"scope": "selected", "ids": []}, 400),
+            ({"scope": "selected", "ids": [first, first]}, 400),
+            ({"scope": "selected", "ids": [999999]}, 404),
+            ({"scope": "unknown"}, 400),
+        ):
+            with self.subTest(payload=payload):
+                status, data = self.request("POST", "/api/tasks/export", payload)
+                self.assertEqual(status, expected, data)
 
     def test_recursive_delete_restore_and_purge(self):
         main_id = self.create_line("主线")

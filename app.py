@@ -4,14 +4,36 @@
 import json
 import os
 import sqlite3
+from io import BytesIO
 from datetime import date
 
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, request, send_file, send_from_directory
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from werkzeug.exceptions import HTTPException
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "anyline.db")
 DEFAULT_STATUS_ENUM = ["未启动", "进行中", "有风险", "等待中", "已暂停", "已闭环", "已取消"]
 PRIORITY_ENUM = ["低", "中", "高", "紧急"]
+TASK_EXPORT_COLUMNS = (
+    ("事务ID", "id", 12),
+    ("线名", "line_name", 20),
+    ("线类型", "line_type", 12),
+    ("父线", "parent_name", 20),
+    ("事务名", "name", 24),
+    ("事务内容", "content", 36),
+    ("闭环目标", "goal", 28),
+    ("下一步动作", "next_action", 28),
+    ("风险原因", "risk_reason", 28),
+    ("优先级", "priority", 12),
+    ("责任人", "owner", 16),
+    ("进展状态", "status", 14),
+    ("起始日期", "start_date", 14),
+    ("结束日期", "end_date", 14),
+    ("状态起始日期", "status_since", 16),
+    ("更新日期", "updated_at", 14),
+)
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["DATABASE"] = os.environ.get("ANYLINE_DB_PATH", DB_PATH)
@@ -133,6 +155,51 @@ def line_color(value):
             any(char not in "0123456789abcdefABCDEF" for char in value[1:]):
         raise ApiError("颜色必须是 #RRGGBB 格式")
     return value.lower()
+
+
+def task_export_workbook(rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "事务"
+    headers = [column[0] for column in TASK_EXPORT_COLUMNS]
+    sheet.append(headers)
+
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    date_keys = {"start_date", "end_date", "status_since", "updated_at"}
+    for row in rows:
+        sheet.append([None] * len(TASK_EXPORT_COLUMNS))
+        row_index = sheet.max_row
+        for column_index, (_, key, _) in enumerate(TASK_EXPORT_COLUMNS, 1):
+            value = row[key]
+            cell = sheet.cell(row_index, column_index)
+            if key in date_keys and value:
+                try:
+                    cell.value = date.fromisoformat(value)
+                    cell.number_format = "yyyy-mm-dd"
+                    continue
+                except ValueError:
+                    pass
+            cell.value = "" if value is None else value
+            if isinstance(cell.value, str):
+                # 避免以 =、+、-、@ 开头的用户内容被 Excel 当作公式执行。
+                cell.data_type = "s"
+
+    last_column = get_column_letter(len(TASK_EXPORT_COLUMNS))
+    sheet.auto_filter.ref = f"A1:{last_column}{sheet.max_row}"
+    sheet.freeze_panes = "A2"
+    sheet.row_dimensions[1].height = 22
+    for index, (_, _, width) in enumerate(TASK_EXPORT_COLUMNS, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
 
 
 @app.errorhandler(ApiError)
@@ -614,6 +681,52 @@ def delete_task(tid):
     )
     db.commit()
     return jsonify({"ok": True, "can_undo": True})
+
+
+@app.route("/api/tasks/export", methods=["POST"])
+def export_tasks():
+    d = json_object()
+    scope = d.get("scope")
+    params = []
+    id_clause = ""
+    if scope == "selected":
+        ids = d.get("ids")
+        if not isinstance(ids, list) or not ids or \
+                not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            return jsonify({"error": "ids 必须是非空整数数组"}), 400
+        if len(ids) != len(set(ids)):
+            return jsonify({"error": "ids 不能包含重复项"}), 400
+        marks = ",".join("?" * len(ids))
+        id_clause = f" AND t.id IN ({marks})"
+        params = ids
+    elif scope != "all":
+        return jsonify({"error": "scope 必须是 all 或 selected"}), 400
+
+    db = get_db()
+    rows = [dict(row) for row in db.execute(
+        "SELECT t.id,l.name AS line_name,"
+        "CASE WHEN l.parent_id IS NULL THEN '主线' ELSE '支线' END AS line_type,"
+        "p.name AS parent_name,t.name,t.content,t.goal,t.next_action,"
+        "t.risk_reason,t.priority,t.owner,t.status,t.start_date,t.end_date,"
+        "t.status_since,t.updated_at FROM tasks t "
+        "JOIN lines l ON l.id=t.line_id "
+        "LEFT JOIN lines p ON p.id=l.parent_id "
+        "WHERE t.deleted=0 AND l.deleted=0" + id_clause +
+        " ORDER BY t.start_date,t.id",
+        params,
+    ).fetchall()]
+    if scope == "selected" and len(rows) != len(params):
+        return jsonify({"error": "部分事务不存在或已删除"}), 404
+
+    output = task_export_workbook(rows)
+    scope_name = "全部事务" if scope == "all" else "选中事务"
+    filename = f"AnyLine-{scope_name}-{date.today():%Y%m%d}.xlsx"
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 @app.route("/api/tasks/bulk", methods=["PATCH", "DELETE"])

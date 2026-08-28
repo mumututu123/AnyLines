@@ -26,7 +26,7 @@ body {
   padding: 5px 12px; font-size: 13px; cursor: pointer;
 }
 #toolbar button:hover:not(:disabled), #table-bar button:hover { background: #eaeef2; }
-#toolbar button:disabled { opacity: .4; cursor: not-allowed; }
+#toolbar button:disabled, #table-bar button:disabled { opacity: .4; cursor: not-allowed; }
 #toolbar button.danger, #table-bar button.danger { color: #cf222e; border-color: #f0b3b8; }
 #toolbar button.danger:hover:not(:disabled), #table-bar button.danger:hover:not(:disabled) { background: #ffebe9; }
 button.primary { background: #0969da !important; color: #fff; border-color: #0969da !important; }

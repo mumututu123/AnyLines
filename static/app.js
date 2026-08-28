@@ -833,6 +833,12 @@ function renderTable() {
   const checkAll = $("#check-all-tasks");
   checkAll.checked = sorted.length > 0 && sorted.every((t) => state.selectedTaskIds.has(t.id));
   checkAll.indeterminate = sorted.some((t) => state.selectedTaskIds.has(t.id)) && !checkAll.checked;
+  const exportAll = $("#btn-export-all");
+  const exportSelected = $("#btn-export-selected");
+  exportAll.disabled = state.tasks.length === 0;
+  exportSelected.disabled = state.selectedTaskIds.size === 0;
+  exportSelected.textContent = state.selectedTaskIds.size ?
+    `导出选中 (${state.selectedTaskIds.size})` : "导出选中";
   checkAll.onchange = () => {
     if (checkAll.checked) sorted.forEach((t) => state.selectedTaskIds.add(t.id));
     else sorted.forEach((t) => state.selectedTaskIds.delete(t.id));
@@ -1402,6 +1408,53 @@ async function bulkUpdate(field, value) {
   toast(`已更新 ${ids.length} 个事务`);
   await reload();
 }
+
+async function exportTasks(scope, ids, button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "正在导出...";
+  try {
+    const response = await fetch("/api/tasks/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope, ids }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || "导出失败");
+    }
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const filename = encodedName ? decodeURIComponent(encodedName[1]) :
+      `AnyLine-${scope === "all" ? "全部事务" : "选中事务"}.xlsx`;
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast(scope === "all" ? "已导出全部事务" : `已导出 ${ids.length} 个事务`);
+  } catch (error) {
+    toast(error.message || "导出失败");
+  } finally {
+    button.textContent = originalText;
+    button.disabled = scope === "all" ? state.tasks.length === 0 :
+      state.selectedTaskIds.size === 0;
+  }
+}
+
+$("#btn-export-all").onclick = (event) =>
+  exportTasks("all", null, event.currentTarget);
+$("#btn-export-selected").onclick = (event) => {
+  const ids = [...state.selectedTaskIds];
+  if (!ids.length) {
+    toast("请先勾选事务");
+    return;
+  }
+  exportTasks("selected", ids, event.currentTarget);
+};
 
 $("#bulk-status").onchange = async (e) => {
   await bulkUpdate("status", e.target.value);
