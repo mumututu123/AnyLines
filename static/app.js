@@ -15,6 +15,7 @@ const state = {
   collapsedLineIds: new Set(),   // 画布中已折叠子支线的线
   canvasTaskPositions: new Map(),
   zoom: 1,                       // 画布缩放倍数 (Ctrl+滚轮)
+  pan: { x: 0, y: 0 },           // 画布拖拽位移（屏幕像素）
   filters: { q: "", line: "", owner: "", status: "", priority: "", due: "" },
   quickFilter: "",
   sort: "start_asc",
@@ -356,14 +357,16 @@ function fanDy(i) {
 
 function renderCanvas() {
   const svg = $("#graph");
+  const wrap = $("#canvas-wrap");
+  const z = state.zoom;
   svg.innerHTML = "";
   state.canvasTaskPositions = new Map();
   const rows = assignRows();
   const canvasTasks = filteredTasks();
 
   if (!state.lines.length) {
-    svg.setAttribute("width", 800);
-    svg.setAttribute("height", 400);
+    svg.setAttribute("width", Math.max(800 * z, wrap.clientWidth));
+    svg.setAttribute("height", Math.max(400 * z, wrap.clientHeight));
     const t = svgEl("text", { x: 60, y: 80, fill: "#8c959f", "font-size": 15 }, svg);
     t.textContent = "还没有任何线，点击左上角「+ 主线」开始。";
     return;
@@ -417,14 +420,18 @@ function renderCanvas() {
   }
   const lineY = (id) => rowCenter.get(id);
 
-  const width = Math.max(x(stop.toISOString().slice(0, 10)) + CV.padR, 900);
-  const height = cursorY + 60;
-  const z = state.zoom;
-  svg.setAttribute("width", width * z);
-  svg.setAttribute("height", height * z);
+  const contentWidth = Math.max(x(stop.toISOString().slice(0, 10)) + CV.padR, 900);
+  const contentHeight = cursorY + 60;
+  const width = Math.max(contentWidth, wrap.clientWidth);
+  const height = Math.max(contentHeight, wrap.clientHeight);
+  svg.setAttribute("width", Math.max(Math.ceil(width * z), wrap.clientWidth));
+  svg.setAttribute("height", Math.max(Math.ceil(height * z), wrap.clientHeight));
 
   /* 根容器：整体缩放 */
-  const root = svgEl("g", { transform: `scale(${z})` }, svg);
+  const root = svgEl("g", {
+    id: "canvas-root",
+    transform: `translate(${state.pan.x} ${state.pan.y}) scale(${z})`,
+  }, svg);
 
   /* ---- 年月时间轴（淡淡显示） ---- */
   const gGrid = svgEl("g", {}, root);
@@ -554,7 +561,10 @@ function renderCanvas() {
       "data-task-id": t.id,
       class: `task-node ${statusClass(t.status)} ${health.className}`,
     }, gTasks);
-    state.canvasTaskPositions.set(t.id, { x: cx * state.zoom, y: y * state.zoom });
+    state.canvasTaskPositions.set(t.id, {
+      x: state.pan.x + cx * state.zoom,
+      y: state.pan.y + y * state.zoom,
+    });
     node.addEventListener("click", (e) => {
       e.stopPropagation();
       state.selectedLineId = line.id;
@@ -1297,11 +1307,12 @@ $("#btn-today").onclick = () => {
   const wrap = $("#canvas-wrap");
   const line = $("#graph .today-line");
   if (!line) return;
-  const x = parseFloat(line.getAttribute("x1")) * state.zoom;
+  const x = state.pan.x + parseFloat(line.getAttribute("x1")) * state.zoom;
   wrap.scrollLeft = Math.max(0, x - wrap.clientWidth / 2);
 };
 $("#btn-fit").onclick = () => {
   state.zoom = 1;
+  state.pan = { x: 0, y: 0 };
   savePrefs();
   renderCanvas();
   $("#canvas-wrap").scrollLeft = 0;
@@ -1347,6 +1358,13 @@ $("#btn-toggle-labels").onclick = () => {
 /* ---- 画布缩放 (Ctrl+滚轮) 与拖拽平移 (左键长按) ---- */
 const wrap = $("#canvas-wrap");
 
+let resizeFrame = null;
+window.addEventListener("resize", () => {
+  if (state.view !== "canvas") return;
+  cancelAnimationFrame(resizeFrame);
+  resizeFrame = requestAnimationFrame(renderCanvas);
+});
+
 wrap.addEventListener("wheel", (e) => {
   if (!e.ctrlKey) return;          // 仅 Ctrl+滚轮触发缩放
   e.preventDefault();
@@ -1358,25 +1376,39 @@ wrap.addEventListener("wheel", (e) => {
   /* 以鼠标位置为锚点缩放：保持指针下的内容不动 */
   const rect = wrap.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-  const cx = (wrap.scrollLeft + mx) / old;   // 指针处的画布坐标
-  const cy = (wrap.scrollTop + my) / old;
+  const cx = (wrap.scrollLeft + mx - state.pan.x) / old;
+  const cy = (wrap.scrollTop + my - state.pan.y) / old;
   state.zoom = next;
   savePrefs();
   renderCanvas();
-  wrap.scrollLeft = cx * next - mx;
-  wrap.scrollTop = cy * next - my;
+  wrap.scrollLeft = state.pan.x + cx * next - mx;
+  wrap.scrollTop = state.pan.y + cy * next - my;
 }, { passive: false });
 
 /* 左键长按拖拽平移（短按仍是点击选中） */
 const DRAG_HOLD_MS = 200;    // 长按判定时长
-const DRAG_MOVE_PX = 5;      // 或按住后移动超过该距离即进入拖拽
+const DRAG_MOVE_PX = 5;
 let drag = null;
 
-wrap.addEventListener("mousedown", (e) => {
-  if (e.button !== 0) return;
+function applyPanTransform() {
+  const root = $("#canvas-root");
+  if (root) {
+    root.setAttribute(
+      "transform",
+      `translate(${state.pan.x} ${state.pan.y}) scale(${state.zoom})`
+    );
+  }
+}
+
+wrap.addEventListener("pointerdown", (e) => {
+  if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (!$("#canvas-root")) return;
+  if (drag) return;
+  wrap.setPointerCapture(e.pointerId);
   drag = {
+    pointerId: e.pointerId,
     startX: e.clientX, startY: e.clientY,
-    scrollL: wrap.scrollLeft, scrollT: wrap.scrollTop,
+    panX: state.pan.x, panY: state.pan.y,
     active: false, downAt: Date.now(),
   };
   drag.timer = setTimeout(() => {
@@ -1384,8 +1416,8 @@ wrap.addEventListener("mousedown", (e) => {
   }, DRAG_HOLD_MS);
 });
 
-window.addEventListener("mousemove", (e) => {
-  if (!drag) return;
+wrap.addEventListener("pointermove", (e) => {
+  if (!drag || e.pointerId !== drag.pointerId) return;
   const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
   if (!drag.active && Math.hypot(dx, dy) > DRAG_MOVE_PX &&
       Date.now() - drag.downAt >= DRAG_HOLD_MS) {
@@ -1394,13 +1426,14 @@ window.addEventListener("mousemove", (e) => {
   }
   if (drag.active) {
     e.preventDefault();
-    wrap.scrollLeft = drag.scrollL - dx;
-    wrap.scrollTop = drag.scrollT - dy;
+    state.pan.x = drag.panX + dx;
+    state.pan.y = drag.panY + dy;
+    applyPanTransform();
   }
 });
 
-window.addEventListener("mouseup", () => {
-  if (!drag) return;
+function finishDrag(e) {
+  if (!drag || e.pointerId !== drag.pointerId) return;
   clearTimeout(drag.timer);
   if (drag.active) {
     /* 拖拽刚结束时抑制本次 click，避免误触选中/取消选中 */
@@ -1409,7 +1442,10 @@ window.addEventListener("mouseup", () => {
     setTimeout(() => { suppressNextClick = false; }, 0);
   }
   drag = null;
-});
+}
+
+wrap.addEventListener("pointerup", finishDrag);
+wrap.addEventListener("pointercancel", finishDrag);
 
 let suppressNextClick = false;
 wrap.addEventListener("click", (e) => {
