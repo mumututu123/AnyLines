@@ -5,6 +5,55 @@ body {
   background: #f6f8fa; color: #24292f; display: flex; flex-direction: column;
 }
 .hidden { display: none !important; }
+body:not(.authenticated) .app-surface { display: none !important; }
+
+/* ---------------- authentication & workspace ---------------- */
+#login-view {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: 24px; background: #f6f8fa;
+}
+body.authenticated #login-view { display: none; }
+#login-form {
+  width: min(360px, 100%); background: #fff; border: 1px solid #d8dee4;
+  border-radius: 8px; padding: 28px; box-shadow: 0 8px 24px rgba(66,74,83,.12);
+}
+.login-brand { font-size: 24px; font-weight: 700; margin-bottom: 20px; }
+.login-brand span { color: #0969da; }
+#login-form h1 { font-size: 18px; margin-bottom: 18px; }
+#login-form label { display: block; font-size: 13px; margin-bottom: 14px; color: #57606a; }
+#login-form input {
+  display: block; width: 100%; margin-top: 5px; padding: 9px 10px;
+  border: 1px solid #d0d7de; border-radius: 6px; font: inherit;
+}
+#login-form button { width: 100%; padding: 9px; border-radius: 6px; cursor: pointer; }
+#login-error { min-height: 20px; margin-bottom: 8px; color: #cf222e; font-size: 12px; }
+#account-bar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+#account-bar select, #account-bar button {
+  border: 1px solid #d0d7de; background: #fff; border-radius: 6px;
+  padding: 5px 8px; font-size: 12px; min-height: 30px;
+}
+#account-bar button { cursor: pointer; }
+#current-user { font-size: 12px; color: #57606a; white-space: nowrap; }
+.member-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; }
+.member-row {
+  display: grid; grid-template-columns: minmax(90px, 1fr) 100px 110px auto;
+  align-items: center; gap: 7px; padding-bottom: 8px; border-bottom: 1px solid #eaeef2;
+}
+#modal-body .member-row input, #modal-body .member-row select { min-width: 0; }
+.member-account { font-size: 11px; color: #8c959f; }
+.member-actions { display: flex; gap: 5px; }
+.member-actions button {
+  border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px;
+  padding: 5px 7px; cursor: pointer;
+}
+.member-add { border-top: 1px solid #d8dee4; padding-top: 14px; }
+
+@media (max-width: 900px) {
+  #account-bar { width: 100%; }
+  #workspace-select { flex: 1; }
+  .member-row { grid-template-columns: 1fr 100px; }
+  .member-actions { grid-column: 1 / -1; }
+}
 
 /* ---------------- top bar ---------------- */
 #topbar {
@@ -188,6 +237,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   background: #fff; border-radius: 10px; padding: 20px 22px; width: 420px;
   max-height: 84vh; overflow: auto; box-shadow: 0 8px 24px rgba(66,74,83,.25);
 }
+#modal.modal-wide { width: min(760px, calc(100vw - 32px)); }
 #modal h3 { margin-bottom: 14px; font-size: 16px; }
 #modal-body .field { margin-bottom: 10px; }
 #modal-body label { display: block; font-size: 12px; color: #57606a; margin-bottom: 3px; }

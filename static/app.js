@@ -7,6 +7,7 @@ const SVGNS = "http://www.w3.org/2000/svg";
 const state = {
   lines: [], tasks: [], canUndo: false, statusEnum: [], statusColors: {},
   priorityEnum: [], owners: [], today: "",
+  user: null, workspaces: [], currentWorkspace: null,
   selectedLineId: null,
   selectedTaskId: null,
   selectedTaskIds: new Set(),
@@ -96,10 +97,64 @@ async function api(url, method = "GET", body = null) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
+    if (res.status === 401 && url !== "/api/auth/login") showLoggedOut();
     toast(data.error || `请求失败 (${res.status})`);
     throw new Error(data.error || res.status);
   }
   return data;
+}
+
+function showLoggedOut() {
+  document.body.classList.remove("authenticated");
+  state.user = null;
+  state.workspaces = [];
+  state.currentWorkspace = null;
+  $("#modal-mask").classList.add("hidden");
+  $("#login-password").value = "";
+  $("#login-username").focus();
+}
+
+function applySession(data) {
+  state.user = data.user;
+  state.workspaces = data.workspaces || [];
+  state.currentWorkspace = data.current_workspace;
+  document.body.classList.add("authenticated");
+  const select = $("#workspace-select");
+  select.innerHTML = "";
+  for (const workspace of state.workspaces) {
+    const option = document.createElement("option");
+    option.value = workspace.id;
+    option.textContent = workspace.name;
+    option.selected = workspace.id === state.currentWorkspace.id;
+    select.appendChild(option);
+  }
+  const isCurrentAdmin = state.currentWorkspace?.role === "admin";
+  const canCreateWorkspace = state.workspaces.some((workspace) => workspace.role === "admin");
+  $("#btn-workspace-create").classList.toggle("hidden", !canCreateWorkspace);
+  $("#btn-members").classList.toggle("hidden", !isCurrentAdmin);
+  $("#current-user").textContent =
+    `${state.user.display_name} · ${isCurrentAdmin ? "管理员" : "普通用户"}`;
+}
+
+function resetWorkspaceState() {
+  state.selectedLineId = null;
+  state.selectedTaskId = null;
+  state.selectedTaskIds.clear();
+  state.expandedClusters.clear();
+  state.hiddenBranchIds.clear();
+  state.pan = { x: 0, y: 0 };
+  state.filters = { q: "", line: "", owner: "", status: "", priority: "", due: "" };
+  state.quickFilter = "";
+}
+
+async function refreshSession() {
+  const data = await api("/api/auth/session");
+  if (!data.authenticated) {
+    showLoggedOut();
+    return false;
+  }
+  applySession(data);
+  return true;
 }
 
 function parseDate(s) { return new Date(s + "T00:00:00"); }
@@ -1099,6 +1154,8 @@ function centerCanvasPoint(x, y = null) {
 /* ============================================================== 弹窗 */
 function openModal(title, bodyBuilder, onOk) {
   $("#modal-title").textContent = title;
+  $("#modal").classList.remove("modal-wide");
+  $("#modal-ok").textContent = "确定";
   const body = $("#modal-body");
   body.innerHTML = "";
   $("#modal-tools").innerHTML = "";
@@ -1356,7 +1413,185 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
   );
 }
 
+function openWorkspaceModal() {
+  openModal("新建项目空间", (body) => {
+    body._name = field(body, "空间名称", input("text"));
+    const description = document.createElement("textarea");
+    description.rows = 3;
+    body._description = field(body, "描述", description);
+    body._name.focus();
+  }, async () => {
+    const body = $("#modal-body");
+    const name = body._name.value.trim();
+    if (!name) { toast("空间名称不能为空"); return false; }
+    await api("/api/workspaces", "POST", {
+      name, description: body._description.value.trim(),
+    });
+    resetWorkspaceState();
+    await refreshSession();
+    await reload();
+    toast("项目空间已创建");
+  });
+}
+
+async function openMembersModal() {
+  const workspace = state.currentWorkspace;
+  const result = await api(`/api/workspaces/${workspace.id}/members`);
+  openModal(`成员管理 · ${workspace.name}`, (body) => {
+    $("#modal").classList.add("modal-wide");
+    const list = document.createElement("div");
+    list.className = "member-list";
+    for (const member of result.members) {
+      const row = document.createElement("div");
+      row.className = "member-row";
+      const identity = document.createElement("div");
+      const name = input("text", member.display_name);
+      name.disabled = !member.can_manage_account;
+      const account = document.createElement("div");
+      account.className = "member-account";
+      account.textContent = member.username;
+      identity.appendChild(name);
+      identity.appendChild(account);
+      const role = document.createElement("select");
+      for (const [value, label] of [["admin", "管理员"], ["member", "普通用户"]]) {
+        const option = document.createElement("option");
+        option.value = value; option.textContent = label;
+        option.selected = member.role === value;
+        role.appendChild(option);
+      }
+      const password = input("password");
+      password.placeholder = member.can_manage_account ?
+        "重置密码（可选）" : "由其他管理员维护";
+      password.disabled = !member.can_manage_account;
+      password.autocomplete = "new-password";
+      const actions = document.createElement("div");
+      actions.className = "member-actions";
+      const save = document.createElement("button");
+      save.type = "button"; save.textContent = "保存";
+      save.onclick = async () => {
+        const payload = { role: role.value };
+        if (member.can_manage_account) {
+          payload.display_name = name.value.trim();
+          if (password.value) payload.password = password.value;
+        }
+        await api(
+          `/api/workspaces/${workspace.id}/members/${member.id}`, "PATCH", payload
+        );
+        await refreshSession();
+        toast("成员配置已保存");
+        if (state.currentWorkspace?.role === "admin") openMembersModal();
+        else $("#modal-mask").classList.add("hidden");
+      };
+      actions.appendChild(save);
+      if (member.id !== state.user.id) {
+        const remove = document.createElement("button");
+        remove.type = "button"; remove.className = "row-del"; remove.textContent = "移除";
+        remove.onclick = async () => {
+          if (!confirm(`将账号「${member.username}」移出当前空间？`)) return;
+          await api(`/api/workspaces/${workspace.id}/members/${member.id}`, "DELETE");
+          toast("成员已移出项目空间");
+          openMembersModal();
+        };
+        actions.appendChild(remove);
+      }
+      row.appendChild(identity);
+      row.appendChild(role);
+      row.appendChild(password);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+
+    const add = document.createElement("div");
+    add.className = "member-add";
+    const title = document.createElement("div");
+    title.className = "opt-title"; title.textContent = "添加账号";
+    add.appendChild(title);
+    body._username = field(add, "账号", input("text"));
+    body._displayName = field(add, "姓名", input("text"));
+    body._password = field(add, "初始密码（新账号至少 6 位）", input("password"));
+    body._password.autocomplete = "new-password";
+    const addRole = document.createElement("select");
+    addRole.innerHTML = '<option value="member">普通用户</option><option value="admin">管理员</option>';
+    body._role = field(add, "空间角色", addRole);
+    body.appendChild(add);
+    $("#modal-ok").textContent = "添加成员";
+  }, async () => {
+    const body = $("#modal-body");
+    const username = body._username.value.trim();
+    if (!username) { toast("请输入账号"); return false; }
+    await api(`/api/workspaces/${workspace.id}/members`, "POST", {
+      username,
+      display_name: body._displayName.value.trim() || username,
+      password: body._password.value,
+      role: body._role.value,
+    });
+    toast("成员已添加");
+  });
+}
+
+function openPasswordModal() {
+  openModal("修改密码", (body) => {
+    body._current = field(body, "当前密码", input("password"));
+    body._next = field(body, "新密码（至少 6 位）", input("password"));
+    body._confirm = field(body, "确认新密码", input("password"));
+    body._current.autocomplete = "current-password";
+    body._next.autocomplete = body._confirm.autocomplete = "new-password";
+    body._current.focus();
+  }, async () => {
+    const body = $("#modal-body");
+    if (body._next.value !== body._confirm.value) {
+      toast("两次输入的新密码不一致");
+      return false;
+    }
+    await api("/api/auth/password", "PUT", {
+      current_password: body._current.value,
+      new_password: body._next.value,
+    });
+    toast("密码已修改");
+  });
+}
+
 /* ============================================================== 事件绑定 */
+$("#login-form").onsubmit = async (event) => {
+  event.preventDefault();
+  const error = $("#login-error");
+  error.textContent = "";
+  const button = event.currentTarget.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    const data = await api("/api/auth/login", "POST", {
+      username: $("#login-username").value.trim(),
+      password: $("#login-password").value,
+    });
+    applySession(data);
+    await reload();
+  } catch (loginError) {
+    error.textContent = loginError.message;
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$("#workspace-select").onchange = async (event) => {
+  const workspaceId = Number(event.target.value);
+  try {
+    await api(`/api/workspaces/${workspaceId}/select`, "POST");
+    resetWorkspaceState();
+    await refreshSession();
+    await reload();
+  } catch (_error) {
+    if (state.currentWorkspace) event.target.value = state.currentWorkspace.id;
+  }
+};
+$("#btn-workspace-create").onclick = openWorkspaceModal;
+$("#btn-members").onclick = openMembersModal;
+$("#btn-password").onclick = openPasswordModal;
+$("#btn-logout").onclick = async () => {
+  await api("/api/auth/logout", "POST");
+  showLoggedOut();
+};
+
 function switchView(v) {
   state.view = v;
   $("#btn-view-canvas").classList.toggle("active", v === "canvas");
@@ -1616,6 +1851,7 @@ async function exportTasks(scope, ids, button) {
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
+      if (response.status === 401) showLoggedOut();
       throw new Error(data.error || "导出失败");
     }
     const disposition = response.headers.get("Content-Disposition") || "";
@@ -1845,9 +2081,17 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") $("#modal-mask").classList.add("hidden");
 });
 
-/* ---- 启动：恢复上次的界面偏好并同步控件状态 ---- */
-loadPrefs();
-for (const [id, key] of SHOW_OPTS) $(id).checked = state.show[key];
-updateToggleLabelsBtn();
-switchView(state.view);   // 恢复视图模式（内部会调用 render）
-reload();
+/* ---- 启动：恢复界面偏好，登录后加载当前项目空间 ---- */
+async function bootstrap() {
+  loadPrefs();
+  for (const [id, key] of SHOW_OPTS) $(id).checked = state.show[key];
+  updateToggleLabelsBtn();
+  switchView(state.view);
+  try {
+    if (await refreshSession()) await reload();
+  } catch (_error) {
+    showLoggedOut();
+  }
+}
+
+bootstrap();

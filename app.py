@@ -7,11 +7,14 @@ import sqlite3
 from io import BytesIO
 from datetime import date
 
-from flask import Flask, g, jsonify, request, send_file, send_from_directory
+from flask import (
+    Flask, g, jsonify, request, send_file, send_from_directory, session,
+)
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from werkzeug.exceptions import HTTPException
+from werkzeug.security import check_password_hash, generate_password_hash
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "anyline.db")
 DEFAULT_STATUS_ENUM = ["未启动", "进行中", "有风险", "等待中", "已暂停", "已闭环", "已取消"]
@@ -46,7 +49,14 @@ TASK_EXPORT_COLUMNS = (
 )
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
-app.config["DATABASE"] = os.environ.get("ANYLINE_DB_PATH", DB_PATH)
+app.config.update(
+    DATABASE=os.environ.get("ANYLINE_DB_PATH", DB_PATH),
+    SECRET_KEY=os.environ.get(
+        "ANYLINE_SECRET_KEY", "anyline-local-secret-change-in-production"
+    ),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
 
 
 # ---------------------------------------------------------------- db helpers
@@ -106,18 +116,111 @@ def init_db(db_path=None):
             key   TEXT PRIMARY KEY,
             value TEXT
         );
+        CREATE TABLE IF NOT EXISTS users (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            username      TEXT NOT NULL COLLATE NOCASE UNIQUE,
+            display_name  TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            managed_by    INTEGER,
+            active        INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            created_by  INTEGER NOT NULL,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS workspace_members (
+            workspace_id INTEGER NOT NULL,
+            user_id      INTEGER NOT NULL,
+            role         TEXT NOT NULL CHECK(role IN ('admin','member')),
+            joined_at    TEXT NOT NULL,
+            PRIMARY KEY(workspace_id,user_id)
+        );
+        CREATE TABLE IF NOT EXISTS workspace_meta (
+            workspace_id INTEGER NOT NULL,
+            key          TEXT NOT NULL,
+            value        TEXT,
+            PRIMARY KEY(workspace_id,key)
+        );
         """
     )
     ensure_column(db, "lines", "description", "TEXT DEFAULT ''")
     ensure_column(db, "lines", "color", "TEXT")
     ensure_column(db, "lines", "deleted_at", "TEXT")
     ensure_column(db, "lines", "updated_at", "TEXT")
+    ensure_column(db, "lines", "workspace_id", "INTEGER")
     ensure_column(db, "tasks", "priority", "TEXT NOT NULL DEFAULT '中'")
     ensure_column(db, "tasks", "next_action", "TEXT DEFAULT ''")
     ensure_column(db, "tasks", "risk_reason", "TEXT DEFAULT ''")
     ensure_column(db, "tasks", "deleted_at", "TEXT")
     ensure_column(db, "tasks", "updated_at", "TEXT")
+    ensure_column(db, "tasks", "workspace_id", "INTEGER")
+    ensure_column(db, "users", "managed_by", "INTEGER")
     today = date.today().isoformat()
+
+    admin_username = os.environ.get("ANYLINE_ADMIN_USERNAME", "admin").strip() or "admin"
+    admin_password = os.environ.get("ANYLINE_ADMIN_PASSWORD", "admin123")
+    admin = db.execute("SELECT id FROM users ORDER BY id LIMIT 1").fetchone()
+    if not admin:
+        cur = db.execute(
+            "INSERT INTO users(username,display_name,password_hash,created_at,updated_at) "
+            "VALUES(?,?,?,?,?)",
+            (
+                admin_username, "系统管理员", generate_password_hash(admin_password),
+                today, today,
+            ),
+        )
+        admin_id = cur.lastrowid
+    else:
+        admin_id = admin["id"]
+    db.execute(
+        "UPDATE users SET managed_by=id WHERE managed_by IS NULL AND id=?", (admin_id,)
+    )
+
+    workspace = db.execute("SELECT id FROM workspaces ORDER BY id LIMIT 1").fetchone()
+    if not workspace:
+        cur = db.execute(
+            "INSERT INTO workspaces(name,description,created_by,created_at,updated_at) "
+            "VALUES(?,?,?,?,?)",
+            ("默认项目", "由原有 AnyLine 数据自动迁移", admin_id, today, today),
+        )
+        workspace_id = cur.lastrowid
+    else:
+        workspace_id = workspace["id"]
+    db.execute(
+        "INSERT OR IGNORE INTO workspace_members(workspace_id,user_id,role,joined_at) "
+        "VALUES(?,?,?,?)", (workspace_id, admin_id, "admin", today),
+    )
+    db.execute(
+        "UPDATE lines SET workspace_id=? WHERE workspace_id IS NULL", (workspace_id,)
+    )
+    db.execute(
+        "UPDATE tasks SET workspace_id=(SELECT workspace_id FROM lines "
+        "WHERE lines.id=tasks.line_id) WHERE workspace_id IS NULL"
+    )
+    db.execute(
+        "UPDATE tasks SET workspace_id=? WHERE workspace_id IS NULL", (workspace_id,)
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO workspace_meta(workspace_id,key,value) "
+        "SELECT ?,key,value FROM meta", (workspace_id,)
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_lines_workspace_deleted "
+        "ON lines(workspace_id,deleted)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_tasks_workspace_deleted "
+        "ON tasks(workspace_id,deleted)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)"
+    )
     db.execute("UPDATE lines SET updated_at=? WHERE updated_at IS NULL", (today,))
     db.execute("UPDATE tasks SET updated_at=? WHERE updated_at IS NULL", (today,))
     db.commit()
@@ -232,27 +335,108 @@ def handle_unexpected_error(exc):
     return "Internal Server Error", 500
 
 
+# ------------------------------------------------------------- auth helpers
+def user_workspaces(db, user_id):
+    return [dict(row) for row in db.execute(
+        "SELECT w.id,w.name,w.description,m.role FROM workspaces w "
+        "JOIN workspace_members m ON m.workspace_id=w.id "
+        "WHERE m.user_id=? ORDER BY w.name,w.id", (user_id,)
+    )]
+
+
+def current_workspace_id():
+    return g.workspace["id"]
+
+
+def require_workspace_admin(workspace_id=None):
+    workspace_id = workspace_id or current_workspace_id()
+    row = get_db().execute(
+        "SELECT role FROM workspace_members WHERE workspace_id=? AND user_id=?",
+        (workspace_id, g.user["id"]),
+    ).fetchone()
+    if not row or row["role"] != "admin":
+        raise ApiError("仅项目空间管理员可执行此操作", 403)
+    return row
+
+
+def validate_username(value):
+    if not isinstance(value, str):
+        raise ApiError("账号必须是字符串")
+    value = value.strip()
+    if len(value) < 2 or len(value) > 40 or any(c.isspace() for c in value):
+        raise ApiError("账号长度应为 2-40 个字符且不能包含空格")
+    return value
+
+
+def validate_password(value, required=True):
+    if value in (None, "") and not required:
+        return None
+    if not isinstance(value, str) or len(value) < 6 or len(value) > 128:
+        raise ApiError("密码长度应为 6-128 个字符")
+    return value
+
+
+@app.before_request
+def load_authenticated_context():
+    if not request.path.startswith("/api/"):
+        return None
+    if request.endpoint in {"auth_login", "auth_session"}:
+        return None
+    user_id = session.get("user_id")
+    if not user_id:
+        raise ApiError("请先登录", 401)
+    db = get_db()
+    user = db.execute(
+        "SELECT id,username,display_name,active FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    if not user or not user["active"]:
+        session.clear()
+        raise ApiError("账号不可用，请重新登录", 401)
+    g.user = user
+    workspaces = user_workspaces(db, user["id"])
+    if not workspaces:
+        raise ApiError("账号尚未加入任何项目空间", 403)
+    workspace_id = session.get("workspace_id")
+    current = next((w for w in workspaces if w["id"] == workspace_id), None)
+    if current is None:
+        current = workspaces[0]
+        session["workspace_id"] = current["id"]
+    g.workspace = current
+    return None
+
+
 # ------------------------------------------------------------- undo helpers
 def get_meta(db, key):
-    row = db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    row = db.execute(
+        "SELECT value FROM workspace_meta WHERE workspace_id=? AND key=?",
+        (current_workspace_id(), key),
+    ).fetchone()
     return row["value"] if row else None
 
 
 def set_meta(db, key, value):
     if value is None:
-        db.execute("DELETE FROM meta WHERE key=?", (key,))
+        db.execute(
+            "DELETE FROM workspace_meta WHERE workspace_id=? AND key=?",
+            (current_workspace_id(), key),
+        )
     else:
         db.execute(
-            "INSERT INTO meta(key,value) VALUES(?,?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, str(value)),
+            "INSERT INTO workspace_meta(workspace_id,key,value) VALUES(?,?,?) "
+            "ON CONFLICT(workspace_id,key) DO UPDATE SET value=excluded.value",
+            (current_workspace_id(), key, str(value)),
         )
 
 
 def purge_deleted(db):
     """物理删除所有软删除的行, 并清空撤销批次。"""
-    db.execute("DELETE FROM tasks WHERE deleted=1")
-    db.execute("DELETE FROM lines WHERE deleted=1")
+    workspace_id = current_workspace_id()
+    db.execute(
+        "DELETE FROM tasks WHERE deleted=1 AND workspace_id=?", (workspace_id,)
+    )
+    db.execute(
+        "DELETE FROM lines WHERE deleted=1 AND workspace_id=?", (workspace_id,)
+    )
     set_meta(db, "undo_batch", None)
 
 
@@ -303,7 +487,8 @@ def get_statuses(db):
     statuses = statuses or list(DEFAULT_STATUS_ENUM)
     # 保留历史数据中的状态, 避免配置变更后老事务无法编辑。
     rows = db.execute(
-        "SELECT DISTINCT status FROM tasks WHERE status IS NOT NULL ORDER BY status"
+        "SELECT DISTINCT status FROM tasks WHERE workspace_id=? "
+        "AND status IS NOT NULL ORDER BY status", (current_workspace_id(),)
     ).fetchall()
     for r in rows:
         if r["status"] and r["status"] not in statuses:
@@ -342,20 +527,284 @@ def index():
     return send_from_directory(str(app.static_folder), "index.html")
 
 
+def session_payload(db, user):
+    workspaces = user_workspaces(db, user["id"])
+    if not workspaces:
+        session.clear()
+        raise ApiError("账号尚未加入任何项目空间，请联系管理员", 403)
+    workspace_id = session.get("workspace_id")
+    current = next((w for w in workspaces if w["id"] == workspace_id), None)
+    if current is None and workspaces:
+        current = workspaces[0]
+        session["workspace_id"] = current["id"]
+    return {
+        "authenticated": True,
+        "user": {
+            "id": user["id"], "username": user["username"],
+            "display_name": user["display_name"],
+        },
+        "workspaces": workspaces,
+        "current_workspace": current,
+    }
+
+
+@app.route("/api/auth/session")
+def auth_session():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"authenticated": False})
+    db = get_db()
+    user = db.execute(
+        "SELECT id,username,display_name,active FROM users WHERE id=?", (user_id,)
+    ).fetchone()
+    if not user or not user["active"]:
+        session.clear()
+        return jsonify({"authenticated": False})
+    return jsonify(session_payload(db, user))
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = json_object()
+    username = validate_username(data.get("username"))
+    password = data.get("password")
+    if not isinstance(password, str):
+        raise ApiError("密码必须是字符串")
+    db = get_db()
+    user = db.execute(
+        "SELECT id,username,display_name,password_hash,active FROM users "
+        "WHERE username=?", (username,)
+    ).fetchone()
+    if not user or not user["active"] or not check_password_hash(
+            user["password_hash"], password):
+        raise ApiError("账号或密码错误", 401)
+    session.clear()
+    session["user_id"] = user["id"]
+    return jsonify(session_payload(db, user))
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/password", methods=["PUT"])
+def auth_change_password():
+    data = json_object()
+    current_password = data.get("current_password")
+    new_password = validate_password(data.get("new_password"))
+    db = get_db()
+    user = db.execute(
+        "SELECT password_hash FROM users WHERE id=?", (g.user["id"],)
+    ).fetchone()
+    if not isinstance(current_password, str) or not check_password_hash(
+            user["password_hash"], current_password):
+        raise ApiError("当前密码错误", 400)
+    db.execute(
+        "UPDATE users SET password_hash=?,updated_at=? WHERE id=?",
+        (generate_password_hash(new_password), date.today().isoformat(), g.user["id"]),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/workspaces", methods=["POST"])
+def create_workspace():
+    data = json_object()
+    name = text_field(data, "name", "项目空间名称").strip()
+    description = text_field(data, "description", "项目空间描述").strip()
+    if not name:
+        raise ApiError("项目空间名称不能为空")
+    db = get_db()
+    can_create = db.execute(
+        "SELECT 1 FROM workspace_members WHERE user_id=? AND role='admin' LIMIT 1",
+        (g.user["id"],),
+    ).fetchone()
+    if not can_create:
+        raise ApiError("仅管理员可创建项目空间", 403)
+    today = date.today().isoformat()
+    cur = db.execute(
+        "INSERT INTO workspaces(name,description,created_by,created_at,updated_at) "
+        "VALUES(?,?,?,?,?)", (name, description, g.user["id"], today, today),
+    )
+    workspace_id = cur.lastrowid
+    db.execute(
+        "INSERT INTO workspace_members(workspace_id,user_id,role,joined_at) "
+        "VALUES(?,?,?,?)", (workspace_id, g.user["id"], "admin", today),
+    )
+    db.commit()
+    session["workspace_id"] = workspace_id
+    return jsonify({"id": workspace_id}), 201
+
+
+@app.route("/api/workspaces/<int:workspace_id>", methods=["PATCH"])
+def update_workspace(workspace_id):
+    require_workspace_admin(workspace_id)
+    data = json_object()
+    fields, values = [], []
+    for key, label in (("name", "项目空间名称"), ("description", "项目空间描述")):
+        if key in data:
+            value = text_field(data, key, label).strip()
+            if key == "name" and not value:
+                raise ApiError("项目空间名称不能为空")
+            fields.append(f"{key}=?")
+            values.append(value)
+    if fields:
+        fields.append("updated_at=?")
+        values.extend([date.today().isoformat(), workspace_id])
+        get_db().execute(
+            f"UPDATE workspaces SET {','.join(fields)} WHERE id=?", values
+        )
+        get_db().commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/workspaces/<int:workspace_id>/select", methods=["POST"])
+def select_workspace(workspace_id):
+    row = get_db().execute(
+        "SELECT 1 FROM workspace_members WHERE workspace_id=? AND user_id=?",
+        (workspace_id, g.user["id"]),
+    ).fetchone()
+    if not row:
+        raise ApiError("无权访问该项目空间", 403)
+    session["workspace_id"] = workspace_id
+    return jsonify({"ok": True})
+
+
+@app.route("/api/workspaces/<int:workspace_id>/members", methods=["GET", "POST"])
+def workspace_members(workspace_id):
+    require_workspace_admin(workspace_id)
+    db = get_db()
+    if request.method == "GET":
+        rows = [dict(row) for row in db.execute(
+            "SELECT u.id,u.username,u.display_name,m.role,m.joined_at,"
+            "CASE WHEN u.managed_by=? THEN 1 ELSE 0 END AS can_manage_account "
+            "FROM workspace_members m JOIN users u ON u.id=m.user_id "
+            "WHERE m.workspace_id=? ORDER BY m.role,u.display_name,u.id",
+            (g.user["id"], workspace_id),
+        )]
+        return jsonify({"members": rows})
+
+    data = json_object()
+    username = validate_username(data.get("username"))
+    display_name = text_field(data, "display_name", "姓名", username).strip() or username
+    role = data.get("role", "member")
+    if role not in {"admin", "member"}:
+        raise ApiError("角色必须是 admin 或 member")
+    user = db.execute(
+        "SELECT id FROM users WHERE username=?", (username,)
+    ).fetchone()
+    today = date.today().isoformat()
+    if user:
+        user_id = user["id"]
+    else:
+        password = validate_password(data.get("password"))
+        cur = db.execute(
+            "INSERT INTO users(username,display_name,password_hash,managed_by,created_at,updated_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (
+                username, display_name, generate_password_hash(password),
+                g.user["id"], today, today,
+            ),
+        )
+        user_id = cur.lastrowid
+    try:
+        db.execute(
+            "INSERT INTO workspace_members(workspace_id,user_id,role,joined_at) "
+            "VALUES(?,?,?,?)", (workspace_id, user_id, role, today),
+        )
+    except sqlite3.IntegrityError:
+        raise ApiError("该账号已在项目空间中", 409)
+    db.commit()
+    return jsonify({"user_id": user_id}), 201
+
+
+@app.route(
+    "/api/workspaces/<int:workspace_id>/members/<int:user_id>",
+    methods=["PATCH", "DELETE"],
+)
+def workspace_member(workspace_id, user_id):
+    require_workspace_admin(workspace_id)
+    db = get_db()
+    member = db.execute(
+        "SELECT m.role,u.managed_by FROM workspace_members m "
+        "JOIN users u ON u.id=m.user_id "
+        "WHERE m.workspace_id=? AND m.user_id=?",
+        (workspace_id, user_id),
+    ).fetchone()
+    if not member:
+        raise ApiError("成员不存在", 404)
+    if user_id == g.user["id"] and request.method == "DELETE":
+        raise ApiError("不能将自己移出当前项目空间")
+
+    def ensure_not_last_admin(new_role=None):
+        if member["role"] != "admin" or new_role == "admin":
+            return
+        count = db.execute(
+            "SELECT COUNT(*) AS count FROM workspace_members "
+            "WHERE workspace_id=? AND role='admin'", (workspace_id,),
+        ).fetchone()["count"]
+        if count <= 1:
+            raise ApiError("项目空间至少需要保留一名管理员")
+
+    if request.method == "DELETE":
+        ensure_not_last_admin()
+        db.execute(
+            "DELETE FROM workspace_members WHERE workspace_id=? AND user_id=?",
+            (workspace_id, user_id),
+        )
+        db.commit()
+        return jsonify({"ok": True})
+
+    data = json_object()
+    if "role" in data:
+        role = data["role"]
+        if role not in {"admin", "member"}:
+            raise ApiError("角色必须是 admin 或 member")
+        ensure_not_last_admin(role)
+        db.execute(
+            "UPDATE workspace_members SET role=? WHERE workspace_id=? AND user_id=?",
+            (role, workspace_id, user_id),
+        )
+    fields, values = [], []
+    account_changes = "display_name" in data or data.get("password") not in (None, "")
+    if account_changes and member["managed_by"] != g.user["id"]:
+        raise ApiError("该账号由其他管理员维护，仅可调整其空间角色", 403)
+    if "display_name" in data:
+        display_name = text_field(data, "display_name", "姓名").strip()
+        if not display_name:
+            raise ApiError("姓名不能为空")
+        fields.append("display_name=?")
+        values.append(display_name)
+    if data.get("password") not in (None, ""):
+        fields.append("password_hash=?")
+        values.append(generate_password_hash(validate_password(data["password"])))
+    if fields:
+        fields.append("updated_at=?")
+        values.extend([date.today().isoformat(), user_id])
+        db.execute(f"UPDATE users SET {','.join(fields)} WHERE id=?", values)
+    db.commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/state")
 def api_state():
     db = get_db()
+    workspace_id = current_workspace_id()
     statuses = get_statuses(db)
     lines = [dict(r) for r in db.execute(
         "SELECT id,name,description,color,parent_id,fork_date,merge_date,updated_at "
         "FROM lines "
-        "WHERE deleted=0 ORDER BY id")]
+        "WHERE workspace_id=? AND deleted=0 ORDER BY id", (workspace_id,))]
     tasks = [dict(r) for r in db.execute(
         "SELECT t.id,t.line_id,t.name,t.content,t.goal,t.owner,t.priority,"
         "t.next_action,t.risk_reason,t.status,t.start_date,t.end_date,"
         "t.status_since,t.updated_at FROM tasks t "
         "JOIN lines l ON l.id=t.line_id "
-        "WHERE t.deleted=0 AND l.deleted=0 ORDER BY t.start_date,t.id")]
+        "WHERE t.workspace_id=? AND l.workspace_id=? "
+        "AND t.deleted=0 AND l.deleted=0 ORDER BY t.start_date,t.id",
+        (workspace_id, workspace_id))]
     return jsonify({
         "lines": lines,
         "tasks": tasks,
@@ -489,9 +938,11 @@ def create_line():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     db = get_db()
+    workspace_id = current_workspace_id()
     if parent_id is not None:
         p = db.execute(
-            "SELECT id,fork_date FROM lines WHERE id=? AND deleted=0", (parent_id,)
+            "SELECT id,fork_date FROM lines WHERE id=? AND workspace_id=? "
+            "AND deleted=0", (parent_id, workspace_id)
         ).fetchone()
         if not p:
             return jsonify({"error": "父线不存在"}), 404
@@ -499,9 +950,12 @@ def create_line():
             return jsonify({"error": "支线起始日期不能早于父线起始日期"}), 400
     on_edit(db)
     cur = db.execute(
-        "INSERT INTO lines(name,description,color,parent_id,fork_date,updated_at) "
-        "VALUES(?,?,?,?,?,?)",
-        (name, description, color, parent_id, fork_date, date.today().isoformat()),
+        "INSERT INTO lines(workspace_id,name,description,color,parent_id,fork_date,updated_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (
+            workspace_id, name, description, color, parent_id, fork_date,
+            date.today().isoformat(),
+        ),
     )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
@@ -513,8 +967,10 @@ def update_line(lid):
     if d.get("merge_date") == "":
         d["merge_date"] = None
     db = get_db()
+    workspace_id = current_workspace_id()
     row = db.execute(
-        "SELECT * FROM lines WHERE id=? AND deleted=0", (lid,)
+        "SELECT * FROM lines WHERE id=? AND workspace_id=? AND deleted=0",
+        (lid, workspace_id),
     ).fetchone()
     if not row:
         return jsonify({"error": "线不存在"}), 404
@@ -548,20 +1004,20 @@ def update_line(lid):
         return jsonify({"error": "反合日期不能早于支线起始日期"}), 400
     if row["parent_id"] is not None:
         parent = db.execute(
-            "SELECT fork_date FROM lines WHERE id=? AND deleted=0",
-            (row["parent_id"],),
+            "SELECT fork_date FROM lines WHERE id=? AND workspace_id=? AND deleted=0",
+            (row["parent_id"], workspace_id),
         ).fetchone()
         if parent and new_fork < parent["fork_date"]:
             return jsonify({"error": "支线起始日期不能早于父线起始日期"}), 400
     child = db.execute(
         "SELECT MIN(fork_date) AS first_date FROM lines "
-        "WHERE parent_id=? AND deleted=0", (lid,)
+        "WHERE parent_id=? AND workspace_id=? AND deleted=0", (lid, workspace_id)
     ).fetchone()
     if child["first_date"] and child["first_date"] < new_fork:
         return jsonify({"error": "起始日期不能晚于子支线的起始日期"}), 400
     task = db.execute(
         "SELECT MIN(start_date) AS first_date FROM tasks "
-        "WHERE line_id=? AND deleted=0", (lid,)
+        "WHERE line_id=? AND workspace_id=? AND deleted=0", (lid, workspace_id)
     ).fetchone()
     if task["first_date"] and task["first_date"] < new_fork:
         return jsonify({"error": "起始日期不能晚于线上已有事务的起始日期"}), 400
@@ -576,17 +1032,21 @@ def update_line(lid):
         fields.append("updated_at=?")
         vals.append(date.today().isoformat())
         vals.append(lid)
-        db.execute(f"UPDATE lines SET {','.join(fields)} WHERE id=?", vals)
+        vals.append(workspace_id)
+        db.execute(
+            f"UPDATE lines SET {','.join(fields)} WHERE id=? AND workspace_id=?", vals
+        )
         db.commit()
     return jsonify({"ok": True})
 
 
-def collect_descendants(db, lid):
+def collect_descendants(db, lid, workspace_id):
     ids = [lid]
     i = 0
     while i < len(ids):
         rows = db.execute(
-            "SELECT id FROM lines WHERE parent_id=? AND deleted=0", (ids[i],)
+            "SELECT id FROM lines WHERE parent_id=? AND workspace_id=? AND deleted=0",
+            (ids[i], workspace_id),
         ).fetchall()
         ids.extend(r["id"] for r in rows)
         i += 1
@@ -596,23 +1056,26 @@ def collect_descendants(db, lid):
 @app.route("/api/lines/<int:lid>", methods=["DELETE"])
 def delete_line(lid):
     db = get_db()
+    workspace_id = current_workspace_id()
     row = db.execute(
-        "SELECT id FROM lines WHERE id=? AND deleted=0", (lid,)
+        "SELECT id FROM lines WHERE id=? AND workspace_id=? AND deleted=0",
+        (lid, workspace_id),
     ).fetchone()
     if not row:
         return jsonify({"error": "线不存在"}), 404
     batch = new_batch(db)
-    ids = collect_descendants(db, lid)
+    ids = collect_descendants(db, lid, workspace_id)
     marks = ",".join("?" * len(ids))
     today = date.today().isoformat()
     db.execute(
-        f"UPDATE lines SET deleted=1, del_batch=?, deleted_at=? WHERE id IN ({marks})",
-        [batch, today] + ids,
+        f"UPDATE lines SET deleted=1, del_batch=?, deleted_at=? "
+        f"WHERE workspace_id=? AND id IN ({marks})",
+        [batch, today, workspace_id] + ids,
     )
     db.execute(
         f"UPDATE tasks SET deleted=1, del_batch=?, deleted_at=? WHERE deleted=0 "
-        f"AND line_id IN ({marks})",
-        [batch, today] + ids,
+        f"AND workspace_id=? AND line_id IN ({marks})",
+        [batch, today, workspace_id] + ids,
     )
     db.commit()
     return jsonify({"ok": True, "can_undo": True})
@@ -626,9 +1089,11 @@ def create_task():
     if not name:
         return jsonify({"error": "事务名不能为空"}), 400
     db = get_db()
+    workspace_id = current_workspace_id()
     line_id = required_id(d.get("line_id"), "line_id")
     line = db.execute(
-        "SELECT id,fork_date FROM lines WHERE id=? AND deleted=0", (line_id,)
+        "SELECT id,fork_date FROM lines WHERE id=? AND workspace_id=? AND deleted=0",
+        (line_id, workspace_id),
     ).fetchone()
     if not line:
         return jsonify({"error": "所属线不存在"}), 404
@@ -654,11 +1119,11 @@ def create_task():
         return jsonify({"error": "事务起始日期不能早于所属线起始日期"}), 400
     on_edit(db)
     cur = db.execute(
-        "INSERT INTO tasks(line_id,name,content,goal,owner,priority,next_action,"
+        "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,priority,next_action,"
         "risk_reason,status,start_date,end_date,status_since,updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            line_id, name, content, goal, owner, priority,
+            workspace_id, line_id, name, content, goal, owner, priority,
             next_action, risk_reason,
             status, start_date, end_date, today,
             today,
@@ -674,8 +1139,10 @@ def update_task(tid):
     if d.get("end_date") == "":
         d["end_date"] = None
     db = get_db()
+    workspace_id = current_workspace_id()
     row = db.execute(
-        "SELECT * FROM tasks WHERE id=? AND deleted=0", (tid,)
+        "SELECT * FROM tasks WHERE id=? AND workspace_id=? AND deleted=0",
+        (tid, workspace_id),
     ).fetchone()
     if not row:
         return jsonify({"error": "事务不存在"}), 404
@@ -692,7 +1159,8 @@ def update_task(tid):
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     target_line = db.execute(
-        "SELECT fork_date FROM lines WHERE id=? AND deleted=0", (new_line_id,)
+        "SELECT fork_date FROM lines WHERE id=? AND workspace_id=? AND deleted=0",
+        (new_line_id, workspace_id),
     ).fetchone()
     if not target_line:
         return jsonify({"error": "所属线不存在"}), 404
@@ -734,7 +1202,10 @@ def update_task(tid):
         fields.append("updated_at=?")
         vals.append(date.today().isoformat())
         vals.append(tid)
-        db.execute(f"UPDATE tasks SET {','.join(fields)} WHERE id=?", vals)
+        vals.append(workspace_id)
+        db.execute(
+            f"UPDATE tasks SET {','.join(fields)} WHERE id=? AND workspace_id=?", vals
+        )
         db.commit()
     return jsonify({"ok": True})
 
@@ -742,15 +1213,18 @@ def update_task(tid):
 @app.route("/api/tasks/<int:tid>", methods=["DELETE"])
 def delete_task(tid):
     db = get_db()
+    workspace_id = current_workspace_id()
     row = db.execute(
-        "SELECT id FROM tasks WHERE id=? AND deleted=0", (tid,)
+        "SELECT id FROM tasks WHERE id=? AND workspace_id=? AND deleted=0",
+        (tid, workspace_id),
     ).fetchone()
     if not row:
         return jsonify({"error": "事务不存在"}), 404
     batch = new_batch(db)
     db.execute(
-        "UPDATE tasks SET deleted=1, del_batch=?, deleted_at=? WHERE id=?",
-        (batch, date.today().isoformat(), tid),
+        "UPDATE tasks SET deleted=1, del_batch=?, deleted_at=? "
+        "WHERE id=? AND workspace_id=?",
+        (batch, date.today().isoformat(), tid, workspace_id),
     )
     db.commit()
     return jsonify({"ok": True, "can_undo": True})
@@ -760,7 +1234,9 @@ def delete_task(tid):
 def export_tasks():
     d = json_object()
     scope = d.get("scope")
-    params = []
+    workspace_id = current_workspace_id()
+    params = [workspace_id, workspace_id]
+    selected_count = None
     id_clause = ""
     if scope == "selected":
         ids = d.get("ids")
@@ -771,7 +1247,8 @@ def export_tasks():
             return jsonify({"error": "ids 不能包含重复项"}), 400
         marks = ",".join("?" * len(ids))
         id_clause = f" AND t.id IN ({marks})"
-        params = ids
+        params.extend(ids)
+        selected_count = len(ids)
     elif scope != "all":
         return jsonify({"error": "scope 必须是 all 或 selected"}), 400
 
@@ -784,11 +1261,12 @@ def export_tasks():
         "t.status_since,t.updated_at FROM tasks t "
         "JOIN lines l ON l.id=t.line_id "
         "LEFT JOIN lines p ON p.id=l.parent_id "
-        "WHERE t.deleted=0 AND l.deleted=0" + id_clause +
+        "WHERE t.workspace_id=? AND l.workspace_id=? "
+        "AND t.deleted=0 AND l.deleted=0" + id_clause +
         " ORDER BY t.start_date,t.id",
         params,
     ).fetchall()]
-    if scope == "selected" and len(rows) != len(params):
+    if scope == "selected" and len(rows) != selected_count:
         return jsonify({"error": "部分事务不存在或已删除"}), 404
 
     output = task_export_workbook(rows)
@@ -812,9 +1290,11 @@ def bulk_tasks():
     if len(ids) != len(set(ids)):
         return jsonify({"error": "ids 不能包含重复项"}), 400
     db = get_db()
+    workspace_id = current_workspace_id()
     marks = ",".join("?" * len(ids))
     existing = db.execute(
-        f"SELECT id FROM tasks WHERE deleted=0 AND id IN ({marks})", ids
+        f"SELECT id FROM tasks WHERE workspace_id=? AND deleted=0 "
+        f"AND id IN ({marks})", [workspace_id] + ids
     ).fetchall()
     if len(existing) != len(set(ids)):
         return jsonify({"error": "部分事务不存在或已删除"}), 404
@@ -823,8 +1303,8 @@ def bulk_tasks():
         batch = new_batch(db)
         db.execute(
             f"UPDATE tasks SET deleted=1, del_batch=?, deleted_at=? "
-            f"WHERE id IN ({marks})",
-            [batch, date.today().isoformat()] + ids,
+            f"WHERE workspace_id=? AND id IN ({marks})",
+            [batch, date.today().isoformat(), workspace_id] + ids,
         )
         db.commit()
         return jsonify({"ok": True, "count": len(ids), "can_undo": True})
@@ -845,14 +1325,15 @@ def bulk_tasks():
     if "line_id" in patch:
         required_id(patch["line_id"], "line_id")
         ln = db.execute(
-            "SELECT id,fork_date FROM lines WHERE id=? AND deleted=0",
-            (patch["line_id"],)
+            "SELECT id,fork_date FROM lines WHERE id=? AND workspace_id=? "
+            "AND deleted=0", (patch["line_id"], workspace_id)
         ).fetchone()
         if not ln:
             return jsonify({"error": "所属线不存在"}), 404
         first_task = db.execute(
             f"SELECT MIN(start_date) AS first_date FROM tasks "
-            f"WHERE deleted=0 AND id IN ({marks})", ids
+            f"WHERE workspace_id=? AND deleted=0 AND id IN ({marks})",
+            [workspace_id] + ids,
         ).fetchone()
         if first_task["first_date"] < ln["fork_date"]:
             return jsonify({"error": "部分事务的起始日期早于目标线起始日期"}), 400
@@ -867,8 +1348,9 @@ def bulk_tasks():
     fields.append("updated_at=?")
     vals.append(date.today().isoformat())
     db.execute(
-        f"UPDATE tasks SET {','.join(fields)} WHERE id IN ({marks})",
-        vals + ids,
+        f"UPDATE tasks SET {','.join(fields)} WHERE workspace_id=? "
+        f"AND id IN ({marks})",
+        vals + [workspace_id] + ids,
     )
     db.commit()
     return jsonify({"ok": True, "count": len(ids)})
@@ -878,16 +1360,17 @@ def bulk_tasks():
 @app.route("/api/undo", methods=["POST"])
 def undo():
     db = get_db()
+    workspace_id = current_workspace_id()
     batch = get_meta(db, "undo_batch")
     if batch is None:
         return jsonify({"error": "没有可撤销的删除"}), 400
     db.execute(
         "UPDATE lines SET deleted=0, del_batch=NULL, deleted_at=NULL "
-        "WHERE del_batch=?", (batch,)
+        "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
     )
     db.execute(
         "UPDATE tasks SET deleted=0, del_batch=NULL, deleted_at=NULL "
-        "WHERE del_batch=?", (batch,)
+        "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
     )
     set_meta(db, "undo_batch", None)
     db.commit()
@@ -898,14 +1381,16 @@ def undo():
 @app.route("/api/trash", methods=["GET"])
 def trash():
     db = get_db()
+    workspace_id = current_workspace_id()
     line_rows = [dict(r) for r in db.execute(
         "SELECT id,name,parent_id,fork_date,merge_date,del_batch,deleted_at "
-        "FROM lines WHERE deleted=1 ORDER BY deleted_at DESC,id DESC"
+        "FROM lines WHERE workspace_id=? AND deleted=1 "
+        "ORDER BY deleted_at DESC,id DESC", (workspace_id,)
     )]
     task_rows = [dict(r) for r in db.execute(
         "SELECT id,line_id,name,status,owner,priority,start_date,end_date,"
-        "del_batch,deleted_at FROM tasks WHERE deleted=1 "
-        "ORDER BY deleted_at DESC,id DESC"
+        "del_batch,deleted_at FROM tasks WHERE workspace_id=? AND deleted=1 "
+        "ORDER BY deleted_at DESC,id DESC", (workspace_id,)
     )]
     batches = {}
     for row in line_rows:
@@ -943,32 +1428,37 @@ def restore_trash():
         return jsonify({"error": "batch 不能为空"}), 400
     required_id(batch, "batch")
     db = get_db()
+    workspace_id = current_workspace_id()
     found = db.execute(
-        "SELECT 1 FROM lines WHERE del_batch=? AND deleted=1 "
-        "UNION SELECT 1 FROM tasks WHERE del_batch=? AND deleted=1",
-        (batch, batch),
+        "SELECT 1 FROM lines WHERE workspace_id=? AND del_batch=? AND deleted=1 "
+        "UNION SELECT 1 FROM tasks WHERE workspace_id=? AND del_batch=? AND deleted=1",
+        (workspace_id, batch, workspace_id, batch),
     ).fetchone()
     if not found:
         return jsonify({"error": "未找到该删除批次"}), 404
     blocked_line = db.execute(
         "SELECT child.id FROM lines child JOIN lines parent "
         "ON parent.id=child.parent_id WHERE child.del_batch=? AND child.deleted=1 "
-        "AND parent.deleted=1 AND parent.del_batch<>? LIMIT 1", (batch, batch)
+        "AND child.workspace_id=? AND parent.workspace_id=? "
+        "AND parent.deleted=1 AND parent.del_batch<>? LIMIT 1",
+        (batch, workspace_id, workspace_id, batch)
     ).fetchone()
     blocked_task = db.execute(
         "SELECT task.id FROM tasks task JOIN lines line ON line.id=task.line_id "
         "WHERE task.del_batch=? AND task.deleted=1 AND line.deleted=1 "
-        "AND line.del_batch<>? LIMIT 1", (batch, batch)
+        "AND task.workspace_id=? AND line.workspace_id=? "
+        "AND line.del_batch<>? LIMIT 1",
+        (batch, workspace_id, workspace_id, batch)
     ).fetchone()
     if blocked_line or blocked_task:
         return jsonify({"error": "请先恢复该批次所依赖的所属线"}), 409
     db.execute(
         "UPDATE lines SET deleted=0, del_batch=NULL, deleted_at=NULL "
-        "WHERE del_batch=?", (batch,)
+        "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
     )
     db.execute(
         "UPDATE tasks SET deleted=0, del_batch=NULL, deleted_at=NULL "
-        "WHERE del_batch=?", (batch,)
+        "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
     )
     if str(get_meta(db, "undo_batch")) == str(batch):
         set_meta(db, "undo_batch", None)

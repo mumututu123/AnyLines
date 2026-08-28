@@ -13,6 +13,8 @@ from werkzeug.serving import make_server
 
 _IMPORT_TEMP_DIR = tempfile.TemporaryDirectory()
 os.environ["ANYLINE_DB_PATH"] = os.path.join(_IMPORT_TEMP_DIR.name, "import.db")
+os.environ["ANYLINE_ADMIN_USERNAME"] = "admin"
+os.environ["ANYLINE_ADMIN_PASSWORD"] = "admin123"
 import app as anyline
 
 
@@ -38,6 +40,11 @@ class AnyLineHttpTests(unittest.TestCase):
         anyline.app.config.update(DATABASE=db_path, TESTING=True)
         anyline.init_db(db_path)
         self.today = date.today()
+        self.cookie = None
+        status, data = self.request(
+            "POST", "/api/auth/login", {"username": "admin", "password": "admin123"}
+        )
+        self.assertEqual(status, 200, data)
 
     def request(self, method, path, payload=None, raw_body=None):
         body = raw_body
@@ -47,14 +54,25 @@ class AnyLineHttpTests(unittest.TestCase):
             headers["Content-Type"] = "application/json"
         elif raw_body is not None:
             headers["Content-Type"] = "application/json"
+        if self.cookie:
+            headers["Cookie"] = self.cookie
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
+        set_cookie = response.getheader("Set-Cookie")
+        if set_cookie:
+            self.cookie = set_cookie.split(";", 1)[0]
         content_type = response.getheader("Content-Type", "")
         raw = response.read()
         connection.close()
         data = json.loads(raw.decode("utf-8")) if "application/json" in content_type else raw
         return response.status, data
+
+    def login(self, username, password):
+        self.cookie = None
+        return self.request(
+            "POST", "/api/auth/login", {"username": username, "password": password}
+        )
 
     def create_line(
         self, name="主线", fork_date=None, parent_id=None,
@@ -118,6 +136,128 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertIn("cx: merge.end.x, cy: merge.end.y", source)
         self.assertNotIn("d += ` C ${mx + 24}", source)
+
+    def test_authentication_is_required(self):
+        self.cookie = None
+        status, data = self.request("GET", "/api/state")
+        self.assertEqual(status, 401, data)
+        self.assertIn("登录", data["error"])
+
+        status, data = self.login("admin", "wrong-password")
+        self.assertEqual(status, 401, data)
+        status, data = self.login("admin", "admin123")
+        self.assertEqual(status, 200, data)
+        self.assertTrue(data["authenticated"])
+        self.assertEqual(data["current_workspace"]["role"], "admin")
+
+    def test_workspace_isolation_and_member_permissions(self):
+        default_line = self.create_line("默认空间主线")
+        status, created = self.request(
+            "POST", "/api/workspaces", {"name": "第二项目", "description": "隔离测试"}
+        )
+        self.assertEqual(status, 201, created)
+        second_workspace = created["id"]
+        second_line = self.create_line("第二空间主线")
+        status, state = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual([line["id"] for line in state["lines"]], [second_line])
+
+        status, member = self.request(
+            "POST", f"/api/workspaces/{second_workspace}/members", {
+                "username": "member1", "display_name": "普通成员",
+                "password": "member123", "role": "member",
+            }
+        )
+        self.assertEqual(status, 201, member)
+        admin_cookie = self.cookie
+
+        status, login = self.login("member1", "member123")
+        self.assertEqual(status, 200, login)
+        self.assertEqual(login["current_workspace"]["id"], second_workspace)
+        status, state = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual([line["id"] for line in state["lines"]], [second_line])
+        status, _ = self.request("POST", "/api/lines", {
+            "name": "成员可写主线", "fork_date": self.today.isoformat(),
+        })
+        self.assertEqual(status, 201)
+        second_task = self.create_task(second_line, "第二空间事务")
+        self.assertEqual(
+            self.request("PUT", "/api/owners", {"owners": ["空间二责任人"]})[0], 200
+        )
+        self.assertEqual(
+            self.request("POST", "/api/workspaces", {"name": "越权空间"})[0], 403
+        )
+        self.assertEqual(
+            self.request("GET", f"/api/workspaces/{second_workspace}/members")[0], 403
+        )
+        session_data = self.request("GET", "/api/auth/session")[1]
+        self.assertEqual(len(session_data["workspaces"]), 1)
+
+        self.cookie = admin_cookie
+        default_workspace = next(
+            workspace["id"] for workspace in
+            self.request("GET", "/api/auth/session")[1]["workspaces"]
+            if workspace["name"] == "默认项目"
+        )
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/workspaces/{default_workspace}/select"
+            )[0], 200
+        )
+        state = self.request("GET", "/api/state")[1]
+        self.assertEqual([line["id"] for line in state["lines"]], [default_line])
+        self.assertEqual(state["owners"], [])
+        self.assertEqual(
+            self.request(
+                "PATCH", f"/api/lines/{second_line}", {"name": "跨空间修改"}
+            )[0], 404
+        )
+        self.assertEqual(
+            self.request(
+                "PATCH", f"/api/tasks/{second_task}", {"name": "跨空间事务"}
+            )[0], 404
+        )
+        self.assertEqual(
+            self.request(
+                "POST", "/api/tasks/export", {"scope": "selected", "ids": [second_task]}
+            )[0], 404
+        )
+
+    def test_admin_can_manage_member_role_and_password(self):
+        auth = self.request("GET", "/api/auth/session")[1]
+        workspace_id = auth["current_workspace"]["id"]
+        status, created = self.request(
+            "POST", f"/api/workspaces/{workspace_id}/members", {
+                "username": "project-admin", "display_name": "项目成员",
+                "password": "initial123", "role": "member",
+            }
+        )
+        self.assertEqual(status, 201, created)
+        user_id = created["user_id"]
+
+        members = self.request(
+            "GET", f"/api/workspaces/{workspace_id}/members"
+        )[1]["members"]
+        managed = next(member for member in members if member["id"] == user_id)
+        self.assertEqual(managed["role"], "member")
+        self.assertTrue(managed["can_manage_account"])
+
+        status, data = self.request(
+            "PATCH", f"/api/workspaces/{workspace_id}/members/{user_id}", {
+                "display_name": "项目管理员", "password": "changed123",
+                "role": "admin",
+            }
+        )
+        self.assertEqual(status, 200, data)
+        self.assertEqual(self.login("project-admin", "initial123")[0], 401)
+        status, login = self.login("project-admin", "changed123")
+        self.assertEqual(status, 200, login)
+        self.assertEqual(login["current_workspace"]["role"], "admin")
+        self.assertEqual(
+            self.request("POST", "/api/workspaces", {"name": "管理员新空间"})[0],
+            201,
+        )
 
     def test_configuration_validation_and_deduplication(self):
         status, data = self.request(
@@ -398,6 +538,12 @@ class DatabaseMigrationTests(unittest.TestCase):
                     deleted INTEGER DEFAULT 0, del_batch INTEGER
                 );
                 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+                INSERT INTO lines(id,name,parent_id,fork_date,deleted)
+                VALUES(1,'历史主线',NULL,'2026-01-01',0);
+                INSERT INTO tasks(
+                    id,line_id,name,status,start_date,status_since,deleted
+                ) VALUES(1,1,'历史事务','未启动','2026-01-01','2026-01-01',0);
+                INSERT INTO meta(key,value) VALUES('owners','["历史责任人"]');
                 """
             )
             db.commit()
@@ -407,15 +553,32 @@ class DatabaseMigrationTests(unittest.TestCase):
             db = sqlite3.connect(db_path)
             line_columns = {row[1] for row in db.execute("PRAGMA table_info(lines)")}
             task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
+            workspace_id = db.execute("SELECT workspace_id FROM lines WHERE id=1").fetchone()[0]
+            task_workspace_id = db.execute(
+                "SELECT workspace_id FROM tasks WHERE id=1"
+            ).fetchone()[0]
+            admin_count = db.execute(
+                "SELECT COUNT(*) FROM workspace_members WHERE role='admin'"
+            ).fetchone()[0]
+            migrated_owners = db.execute(
+                "SELECT value FROM workspace_meta WHERE workspace_id=? AND key='owners'",
+                (workspace_id,),
+            ).fetchone()[0]
             db.close()
             self.assertTrue(
-                {"description", "color", "deleted_at", "updated_at"}
+                {"description", "color", "deleted_at", "updated_at", "workspace_id"}
                 .issubset(line_columns)
             )
             self.assertTrue(
-                {"priority", "next_action", "risk_reason", "deleted_at", "updated_at"}
+                {
+                    "priority", "next_action", "risk_reason", "deleted_at",
+                    "updated_at", "workspace_id",
+                }
                 .issubset(task_columns)
             )
+            self.assertEqual(task_workspace_id, workspace_id)
+            self.assertEqual(admin_count, 1)
+            self.assertEqual(json.loads(migrated_owners), ["历史责任人"])
 
 
 if __name__ == "__main__":

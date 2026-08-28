@@ -7,7 +7,18 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header id="topbar">
+<section id="login-view">
+  <form id="login-form">
+    <div class="login-brand">Any<span>Line</span></div>
+    <h1>登录事务空间</h1>
+    <label>账号<input id="login-username" type="text" autocomplete="username" required></label>
+    <label>密码<input id="login-password" type="password" autocomplete="current-password" required></label>
+    <div id="login-error" role="alert"></div>
+    <button type="submit" class="primary">登录</button>
+  </form>
+</section>
+
+<header id="topbar" class="app-surface">
   <div id="brand">Any<span>Line</span></div>
 
   <nav id="view-switch">
@@ -29,9 +40,17 @@
   </div>
 
   <div id="sel-info">未选中任何线</div>
+  <div id="account-bar">
+    <select id="workspace-select" title="切换项目空间"></select>
+    <button id="btn-workspace-create" class="admin-only" title="创建项目空间">新建空间</button>
+    <button id="btn-members" class="admin-only" title="管理当前空间成员">成员管理</button>
+    <button id="btn-password" title="修改当前账号密码">修改密码</button>
+    <span id="current-user"></span>
+    <button id="btn-logout">退出</button>
+  </div>
 </header>
 
-<section id="workbench">
+<section id="workbench" class="app-surface">
   <div id="summary-strip">
     <button class="summary-card" data-quick="active">
       <span class="summary-num" id="sum-active">0</span><span>未闭环</span>
@@ -72,7 +91,7 @@
 </section>
 
 <!-- 画布视图 -->
-<main id="canvas-view">
+<main id="canvas-view" class="app-surface hidden">
   <aside id="canvas-opts">
     <div class="opt-title">节点标签显示</div>
     <button id="btn-toggle-labels" title="一键显示/隐藏所有节点文字信息">隐藏全部标签</button>
@@ -92,7 +111,7 @@
 </main>
 
 <!-- 表格视图 -->
-<main id="table-view" class="hidden">
+<main id="table-view" class="app-surface hidden">
   <div id="table-bar">
     <button id="btn-table-add">+ 新增事务</button>
     <button id="btn-export-all">导出全部</button>
