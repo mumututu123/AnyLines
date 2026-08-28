@@ -487,9 +487,34 @@ function renderCanvas() {
   const z = state.zoom;
   svg.innerHTML = "";
   state.canvasTaskPositions = new Map();
-  const rows = assignRows();
+  const layoutRows = assignRows();
   const colorRows = assignRows(true);
-  const canvasTasks = filteredTasks().filter((task) => rows.has(task.line_id));
+  const taskScopedFilterActive = Boolean(
+    state.filters.q.trim() || state.filters.owner || state.filters.status ||
+    state.filters.priority || state.filters.due || state.quickFilter
+  );
+  const hasActiveCanvasFilter = Boolean(state.filters.line || taskScopedFilterActive);
+  const taskRows = hasActiveCanvasFilter ? colorRows : layoutRows;
+  const canvasTasks = filteredTasks().filter((task) => taskRows.has(task.line_id));
+  const filterMatchedLineIds = new Set();
+  const retainLineAndAncestors = (lineId) => {
+    const visited = new Set();
+    let line = lineById(lineId);
+    while (line && !visited.has(line.id)) {
+      filterMatchedLineIds.add(line.id);
+      visited.add(line.id);
+      line = line.parent_id !== null ? lineById(line.parent_id) : null;
+    }
+  };
+  for (const task of canvasTasks) retainLineAndAncestors(task.line_id);
+  if (state.filters.line && !taskScopedFilterActive) {
+    retainLineAndAncestors(Number(state.filters.line));
+  }
+  const rows = hasActiveCanvasFilter
+    ? new Map([...colorRows.keys()]
+      .filter((id) => filterMatchedLineIds.has(id))
+      .map((id, index) => [id, index]))
+    : layoutRows;
 
   if (!state.lines.length) {
     svg.setAttribute("width", Math.max(800 * z, wrap.clientWidth));
@@ -502,6 +527,13 @@ function renderCanvas() {
   /* 时间范围 */
   let minD = state.today, maxD = state.today;
   const visibleLines = state.lines.filter((l) => rows.has(l.id));
+  if (!visibleLines.length) {
+    svg.setAttribute("width", Math.max(800 * z, wrap.clientWidth));
+    svg.setAttribute("height", Math.max(400 * z, wrap.clientHeight));
+    const t = svgEl("text", { x: 60, y: 80, fill: "#8c959f", "font-size": 15 }, svg);
+    t.textContent = "没有符合当前筛选条件的线或事务。";
+    return;
+  }
   for (const l of visibleLines) {
     if (l.fork_date < minD) minD = l.fork_date;
     const e = lineEnd(l);
@@ -569,7 +601,8 @@ function renderCanvas() {
   function lineGeometry(line) {
     if (lineGeometryCache.has(line.id)) return lineGeometryCache.get(line.id);
     const y = lineY(line.id);
-    const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const parentLine = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const parent = parentLine && rows.has(parentLine.id) ? parentLine : null;
     if (!parent) {
       const point = { x: x(line.fork_date), y };
       const geometry = {
@@ -598,7 +631,8 @@ function renderCanvas() {
 
   function mergeGeometry(line) {
     if (mergeGeometryCache.has(line.id)) return mergeGeometryCache.get(line.id);
-    const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const parentLine = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const parent = parentLine && rows.has(parentLine.id) ? parentLine : null;
     if (!parent || !line.merge_date) {
       mergeGeometryCache.set(line.id, null);
       return null;
@@ -688,7 +722,8 @@ function renderCanvas() {
     const geometry = lineGeometry(line);
     const endDate = lineEnd(line);
     const selected = line.id === state.selectedLineId;
-    const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const parentLine = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const parent = parentLine && rows.has(parentLine.id) ? parentLine : null;
     const merge = mergeGeometry(line);
     const x2 = Math.max(
       merge ? merge.horizontalEnd.x : x(endDate),
@@ -714,7 +749,8 @@ function renderCanvas() {
 
     const path = svgEl("path", {
       d, stroke: color,
-      class: "line-path" + (selected ? " selected" : ""),
+      class: "line-path" + (selected ? " selected" : "") +
+        (hasActiveCanvasFilter && filterMatchedLineIds.has(line.id) ? " filter-match" : ""),
     }, gLines);
     /* 加宽的透明命中区域 */
     const hit = svgEl("path", { d, class: "line-hit" }, gLines);
@@ -739,7 +775,7 @@ function renderCanvas() {
     }
 
     /* 线名标签 */
-    const hiddenChildCount = state.lines.filter(
+    const hiddenChildCount = hasActiveCanvasFilter ? 0 : state.lines.filter(
       (child) => child.parent_id === line.id && state.hiddenBranchIds.has(child.id)
     ).length;
     const lbl = svgEl("text", {
@@ -757,7 +793,8 @@ function renderCanvas() {
   for (const branch of state.lines.filter((line) => line.parent_id !== null)) {
     const parent = lineById(branch.parent_id);
     if (!parent || !rows.has(parent.id)) continue;
-    const hidden = state.hiddenBranchIds.has(branch.id);
+    if (hasActiveCanvasFilter && !rows.has(branch.id)) continue;
+    const hidden = !hasActiveCanvasFilter && state.hiddenBranchIds.has(branch.id);
     const { x: cx, y: cy } = branchStartPoint(branch, parent);
     const color = colorOf(branch);
     const control = svgEl("g", {
@@ -826,7 +863,8 @@ function renderCanvas() {
     const node = svgEl("polygon", {
       points: trianglePoints(cx, y, selectedTask ? 12 : 9),
       "data-task-id": t.id,
-      class: `task-node ${statusClass(t.status)} ${health.className}`,
+      class: `task-node ${statusClass(t.status)} ${health.className}` +
+        (hasActiveCanvasFilter ? " filter-match" : ""),
     }, gTasks);
     node.style.fill = statusColor(t.status);
     state.canvasTaskPositions.set(t.id, { x: cx, y });
@@ -917,11 +955,14 @@ function renderCanvas() {
       /* 底层错位三角形暗示"这是一叠节点" */
       const backNode = svgEl("polygon", {
         points: trianglePoints(cx + 3, baseY + 3, 13),
-        class: `task-node ${statusClass(st)} ${clusterHealth}`, opacity: .35,
+        class: `task-node ${statusClass(st)} ${clusterHealth}` +
+          (hasActiveCanvasFilter ? " filter-match" : ""),
+        opacity: .35,
       }, g);
       const node = svgEl("polygon", {
         points: trianglePoints(cx, baseY, 13),
-        class: `task-node ${statusClass(st)} ${clusterHealth}`,
+        class: `task-node ${statusClass(st)} ${clusterHealth}` +
+          (hasActiveCanvasFilter ? " filter-match" : ""),
       }, g);
       backNode.style.fill = statusColor(st);
       node.style.fill = statusColor(st);

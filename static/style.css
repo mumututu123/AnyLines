@@ -204,6 +204,11 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   cursor: pointer;
 }
 .line-path.selected { stroke-width: 5; filter: drop-shadow(0 0 3px rgba(9,105,218,.6)); }
+.line-path.filter-match {
+  stroke-width: 5;
+  filter: drop-shadow(0 2px 3px rgba(31, 35, 40, .5))
+    drop-shadow(0 0 5px rgba(9, 105, 218, .8));
+}
 .line-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
 .line-label { font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
 .merge-dot, .fork-dot { stroke: #fff; stroke-width: 1.5; }
@@ -216,6 +221,10 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 
 .task-node { stroke: #fff; stroke-width: 2; cursor: pointer; }
+.task-node.filter-match {
+  filter: drop-shadow(0 2px 3px rgba(31, 35, 40, .55))
+    drop-shadow(0 0 5px rgba(9, 105, 218, .85));
+}
 .task-bar { opacity: .25; }
 .task-label { font-size: 11px; pointer-events: none; user-select: none; }
 .task-label.t-name { font-weight: 600; fill: #24292f; }
