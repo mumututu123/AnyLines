@@ -62,6 +62,13 @@ function loadPrefs() {
 const LINE_COLORS = ["#0969da", "#8250df", "#bf3989", "#d4772c",
                      "#1a7f37", "#cf222e", "#0e7490", "#6e7781"];
 
+function lineDisplayColor(line, colorRows = null) {
+  if (line && line.color) return line.color;
+  const row = line && colorRows ? colorRows.get(line.id) :
+    (line ? assignRows(true).get(line.id) : state.lines.length);
+  return LINE_COLORS[(row ?? state.lines.length) % LINE_COLORS.length];
+}
+
 /* ---------------------------------------------------------------- utils */
 function toast(msg) {
   const t = $("#toast");
@@ -470,8 +477,7 @@ function renderCanvas() {
 
   /* ---- 线 ---- */
   const gLines = svgEl("g", {}, root);
-  const colorOf = (line) =>
-    LINE_COLORS[colorRows.get(line.id) % LINE_COLORS.length];
+  const colorOf = (line) => lineDisplayColor(line, colorRows);
 
   for (const line of visibleLines) {
     const y = lineY(line.id);
@@ -505,7 +511,8 @@ function renderCanvas() {
     /* 加宽的透明命中区域 */
     const hit = svgEl("path", { d, class: "line-hit" }, gLines);
     const lineTip = svgEl("title", {}, hit);
-    lineTip.textContent = `${line.name}\n${line.description || "暂无描述"}`;
+    lineTip.textContent =
+      `${line.name}\n${line.description || "暂无描述"}\n颜色：${color}`;
     const select = () => {
       state.selectedLineId = line.id;
       state.selectedTaskId = null;
@@ -962,6 +969,7 @@ function openModal(title, bodyBuilder, onOk) {
   $("#modal-title").textContent = title;
   const body = $("#modal-body");
   body.innerHTML = "";
+  $("#modal-tools").innerHTML = "";
   bodyBuilder(body);
   $("#modal-mask").classList.remove("hidden");
   const close = () => $("#modal-mask").classList.add("hidden");
@@ -1031,6 +1039,9 @@ function openLineModal(line, parentId = null) {
       description.rows = 3;
       description.value = line ? (line.description || "") : "";
       body._description = field(body, "描述", description);
+      const color = input("color", lineDisplayColor(line));
+      color.className = "line-color-input";
+      body._color = field($("#modal-tools"), "颜色", color);
       body._date = field(body, isNew ? "起始日期（支线即分叉日）" : "起始日期",
         input("date", line ? line.fork_date : state.today));
       if (parentId) {
@@ -1045,16 +1056,17 @@ function openLineModal(line, parentId = null) {
       const body = $("#modal-body");
       const name = body._name.value.trim();
       const description = body._description.value.trim();
+      const color = body._color.value;
       if (!name) { toast("线名不能为空"); return false; }
       if (isNew) {
         const r = await api("/api/lines", "POST", {
-          name, description, parent_id: parentId,
+          name, description, color, parent_id: parentId,
           fork_date: body._date.value || state.today,
         });
         state.selectedLineId = r.id;
       } else {
         await api(`/api/lines/${line.id}`, "PATCH", {
-          name, description, fork_date: body._date.value,
+          name, description, color, fork_date: body._date.value,
         });
       }
       reload();

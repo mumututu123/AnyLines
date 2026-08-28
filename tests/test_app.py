@@ -54,10 +54,14 @@ class AnyLineHttpTests(unittest.TestCase):
         data = json.loads(raw.decode("utf-8")) if "application/json" in content_type else raw
         return response.status, data
 
-    def create_line(self, name="主线", fork_date=None, parent_id=None, description=""):
+    def create_line(
+        self, name="主线", fork_date=None, parent_id=None,
+        description="", color=None,
+    ):
         payload = {
             "name": name,
             "description": description,
+            "color": color,
             "fork_date": fork_date or self.today.isoformat(),
             "parent_id": parent_id,
         }
@@ -122,16 +126,24 @@ class AnyLineHttpTests(unittest.TestCase):
     def test_line_crud_and_date_rules(self):
         yesterday = (self.today - timedelta(days=1)).isoformat()
         tomorrow = (self.today + timedelta(days=1)).isoformat()
-        main_id = self.create_line(description="主线描述")
+        main_id = self.create_line(description="主线描述", color="#123ABC")
 
         _, state = self.request("GET", "/api/state")
         self.assertEqual(state["lines"][0]["description"], "主线描述")
+        self.assertEqual(state["lines"][0]["color"], "#123abc")
         status, data = self.request(
-            "PATCH", f"/api/lines/{main_id}", {"description": "更新后的描述"}
+            "PATCH", f"/api/lines/{main_id}", {
+                "description": "更新后的描述", "color": "#abcdef",
+            }
         )
         self.assertEqual(status, 200, data)
         _, state = self.request("GET", "/api/state")
         self.assertEqual(state["lines"][0]["description"], "更新后的描述")
+        self.assertEqual(state["lines"][0]["color"], "#abcdef")
+        status, data = self.request(
+            "PATCH", f"/api/lines/{main_id}", {"color": "red"}
+        )
+        self.assertEqual(status, 400, data)
 
         status, data = self.request("POST", "/api/lines", {
             "name": "非法支线", "parent_id": main_id, "fork_date": yesterday,
@@ -319,7 +331,8 @@ class DatabaseMigrationTests(unittest.TestCase):
             task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
             db.close()
             self.assertTrue(
-                {"description", "deleted_at", "updated_at"}.issubset(line_columns)
+                {"description", "color", "deleted_at", "updated_at"}
+                .issubset(line_columns)
             )
             self.assertTrue(
                 {"priority", "next_action", "risk_reason", "deleted_at", "updated_at"}

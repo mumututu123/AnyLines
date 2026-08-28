@@ -42,6 +42,7 @@ def init_db(db_path=None):
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             name       TEXT NOT NULL,
             description TEXT DEFAULT '',
+            color      TEXT,
             parent_id  INTEGER,                 -- NULL = 主线
             fork_date  TEXT NOT NULL,           -- 线的起点(支线=分叉日)
             merge_date TEXT,                    -- 反合回父线的日期, NULL=未反合
@@ -76,6 +77,7 @@ def init_db(db_path=None):
         """
     )
     ensure_column(db, "lines", "description", "TEXT DEFAULT ''")
+    ensure_column(db, "lines", "color", "TEXT")
     ensure_column(db, "lines", "deleted_at", "TEXT")
     ensure_column(db, "lines", "updated_at", "TEXT")
     ensure_column(db, "tasks", "priority", "TEXT NOT NULL DEFAULT '中'")
@@ -122,6 +124,15 @@ def text_field(data, key, label, default="", nullable=False):
     if not isinstance(value, str):
         raise ApiError(f"{label} 必须是字符串")
     return value
+
+
+def line_color(value):
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or len(value) != 7 or value[0] != "#" or \
+            any(char not in "0123456789abcdefABCDEF" for char in value[1:]):
+        raise ApiError("颜色必须是 #RRGGBB 格式")
+    return value.lower()
 
 
 @app.errorhandler(ApiError)
@@ -233,7 +244,7 @@ def index():
 def api_state():
     db = get_db()
     lines = [dict(r) for r in db.execute(
-        "SELECT id,name,description,parent_id,fork_date,merge_date,updated_at "
+        "SELECT id,name,description,color,parent_id,fork_date,merge_date,updated_at "
         "FROM lines "
         "WHERE deleted=0 ORDER BY id")]
     tasks = [dict(r) for r in db.execute(
@@ -322,6 +333,7 @@ def create_line():
     d = json_object()
     name = text_field(d, "name", "线名").strip()
     description = text_field(d, "description", "描述").strip()
+    color = line_color(d.get("color"))
     if not name:
         return jsonify({"error": "线名不能为空"}), 400
     parent_id = d.get("parent_id")
@@ -347,9 +359,9 @@ def create_line():
             return jsonify({"error": "支线起始日期不能早于父线起始日期"}), 400
     on_edit(db)
     cur = db.execute(
-        "INSERT INTO lines(name,description,parent_id,fork_date,updated_at) "
-        "VALUES(?,?,?,?,?)",
-        (name, description, parent_id, fork_date, date.today().isoformat()),
+        "INSERT INTO lines(name,description,color,parent_id,fork_date,updated_at) "
+        "VALUES(?,?,?,?,?,?)",
+        (name, description, color, parent_id, fork_date, date.today().isoformat()),
     )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
@@ -370,6 +382,7 @@ def update_line(lid):
     new_description = text_field(
         d, "description", "描述", row["description"] or ""
     )
+    new_color = line_color(d.get("color", row["color"]))
     new_fork = text_field(d, "fork_date", "起始日期", row["fork_date"])
     new_merge = text_field(
         d, "merge_date", "反合日期", row["merge_date"], nullable=True
@@ -380,6 +393,8 @@ def update_line(lid):
         d["name"] = new_name.strip()
     if "description" in d:
         d["description"] = new_description.strip()
+    if "color" in d:
+        d["color"] = new_color
     if not new_fork:
         return jsonify({"error": "起始日期不能为空"}), 400
     try:
@@ -412,7 +427,7 @@ def update_line(lid):
         return jsonify({"error": "起始日期不能晚于线上已有事务的起始日期"}), 400
 
     fields, vals = [], []
-    for k in ("name", "description", "fork_date", "merge_date"):
+    for k in ("name", "description", "color", "fork_date", "merge_date"):
         if k in d:
             fields.append(f"{k}=?")
             vals.append(d[k])
