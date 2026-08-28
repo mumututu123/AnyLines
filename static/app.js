@@ -5,13 +5,26 @@ const $ = (sel) => document.querySelector(sel);
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = {
-  lines: [], tasks: [], canUndo: false, statusEnum: [], owners: [], today: "",
+  lines: [], tasks: [], canUndo: false, statusEnum: [], priorityEnum: [], owners: [], today: "",
   selectedLineId: null,
+  selectedTaskId: null,
+  selectedTaskIds: new Set(),
   view: "canvas",
   show: { name: true, status: true, dur: true, owner: true },
   expandedClusters: new Set(),   // 已展开的同天多事务簇 key: "lineId|date"
+  collapsedLineIds: new Set(),   // 画布中已折叠子支线的线
+  canvasTaskPositions: new Map(),
   zoom: 1,                       // 画布缩放倍数 (Ctrl+滚轮)
+  filters: { q: "", line: "", owner: "", status: "", priority: "", due: "" },
+  quickFilter: "",
+  sort: "start_asc",
 };
+
+const SOON_DAYS = 7;
+const STALE_DAYS = 7;
+const DONE_STATUSES = new Set(["已闭环", "已取消"]);
+const RISK_STATUSES = new Set(["有风险"]);
+const PRIORITY_WEIGHT = { "低": 1, "中": 2, "高": 3, "紧急": 4 };
 
 /* ---------------------------------------------- 界面偏好记忆 (localStorage) */
 const PREFS_KEY = "anyline.prefs";
@@ -22,6 +35,7 @@ function savePrefs() {
       show: state.show,
       view: state.view,
       zoom: state.zoom,
+      sort: state.sort,
     }));
   } catch (_e) { /* 隐私模式等场景忽略 */ }
 }
@@ -37,6 +51,9 @@ function loadPrefs() {
     if (p.view === "canvas" || p.view === "table") state.view = p.view;
     if (typeof p.zoom === "number" && p.zoom >= 0.25 && p.zoom <= 4) {
       state.zoom = p.zoom;
+    }
+    if (["start_asc", "due_asc", "priority_desc", "updated_desc"].includes(p.sort)) {
+      state.sort = p.sort;
     }
   } catch (_e) { /* 数据损坏则用默认值 */ }
 }
@@ -56,7 +73,13 @@ function toast(msg) {
 async function api(url, method = "GET", body = null) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
   if (body) opt.body = JSON.stringify(body);
-  const res = await fetch(url, opt);
+  let res;
+  try {
+    res = await fetch(url, opt);
+  } catch (error) {
+    toast("无法连接服务器，请检查服务是否已启动");
+    throw error;
+  }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     toast(data.error || `请求失败 (${res.status})`);
@@ -73,6 +96,91 @@ function daysBetween(a, b) {
   return Math.round((parseDate(b) - parseDate(a)) / 86400000);
 }
 function lineById(id) { return state.lines.find((l) => l.id === id); }
+function isDone(t) { return DONE_STATUSES.has(t.status); }
+function priorityRank(p) { return PRIORITY_WEIGHT[p] || 0; }
+function statusClass(status) {
+  return ["未启动", "进行中", "有风险", "等待中", "已暂停", "已闭环", "已取消"].includes(status)
+    ? `st-${status}` : "st-custom";
+}
+function ownerOptions() {
+  const owners = new Set(state.owners);
+  for (const t of state.tasks) if (t.owner) owners.add(t.owner);
+  return [...owners].sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+function taskHealth(t) {
+  const h = {
+    overdue: false, soon: false, stale: false, risk: RISK_STATUSES.has(t.status),
+    labels: [],
+    className: "",
+  };
+  if (!isDone(t) && t.end_date) {
+    const left = daysBetween(state.today, t.end_date);
+    h.overdue = left < 0;
+    h.soon = left >= 0 && left <= SOON_DAYS;
+  }
+  h.stale = !isDone(t) && daysBetween(t.status_since, state.today) >= STALE_DAYS;
+  if (h.overdue) h.labels.push(["超期", "badge-overdue"]);
+  else if (h.soon) h.labels.push(["即将到期", "badge-soon"]);
+  if (h.risk) h.labels.push(["风险", "badge-risk"]);
+  if (h.stale) h.labels.push(["停留过久", "badge-stale"]);
+  if (!h.labels.length && isDone(t)) h.labels.push(["已结束", "badge-ok"]);
+  h.className = h.overdue ? "health-overdue" : (h.soon ? "health-soon" : (h.stale ? "health-stale" : ""));
+  return h;
+}
+function searchableText(t) {
+  const ln = lineById(t.line_id);
+  return [
+    ln && ln.name, t.name, t.content, t.goal, t.owner, t.status,
+    t.priority, t.next_action, t.risk_reason,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+function taskMatchesFilters(t) {
+  const f = state.filters;
+  const q = f.q.trim().toLowerCase();
+  const h = taskHealth(t);
+  if (q && !searchableText(t).includes(q)) return false;
+  if (f.line && String(t.line_id) !== f.line) return false;
+  if (f.owner && t.owner !== f.owner) return false;
+  if (f.status && t.status !== f.status) return false;
+  if (f.priority && t.priority !== f.priority) return false;
+  if (f.due === "overdue" && !h.overdue) return false;
+  if (f.due === "soon" && !h.soon) return false;
+  if (f.due === "none" && t.end_date) return false;
+  if (state.quickFilter === "active" && isDone(t)) return false;
+  if (state.quickFilter === "risk" && !h.risk) return false;
+  if (state.quickFilter === "overdue" && !h.overdue) return false;
+  if (state.quickFilter === "soon" && !h.soon) return false;
+  if (state.quickFilter === "stale" && !h.stale) return false;
+  return true;
+}
+function compareTasks(a, b) {
+  if (state.sort === "due_asc") {
+    return (a.end_date || "9999-12-31").localeCompare(b.end_date || "9999-12-31") ||
+      a.start_date.localeCompare(b.start_date) || a.id - b.id;
+  }
+  if (state.sort === "priority_desc") {
+    return priorityRank(b.priority) - priorityRank(a.priority) ||
+      (a.end_date || "9999-12-31").localeCompare(b.end_date || "9999-12-31") || a.id - b.id;
+  }
+  if (state.sort === "updated_desc") {
+    return (b.updated_at || "").localeCompare(a.updated_at || "") || b.id - a.id;
+  }
+  return a.start_date.localeCompare(b.start_date) || a.id - b.id;
+}
+function filteredTasks() {
+  return state.tasks.filter(taskMatchesFilters).sort(compareTasks);
+}
+function descendantIds(rootId) {
+  const ids = [];
+  const walk = (pid) => {
+    for (const l of state.lines.filter((x) => x.parent_id === pid)) {
+      ids.push(l.id);
+      walk(l.id);
+    }
+  };
+  walk(rootId);
+  return ids;
+}
 
 /* ---------------------------------------------------------------- data */
 async function reload() {
@@ -81,16 +189,25 @@ async function reload() {
   state.tasks = d.tasks;
   state.canUndo = d.can_undo;
   state.statusEnum = d.status_enum;
+  state.priorityEnum = d.priority_enum || ["低", "中", "高", "紧急"];
   state.owners = d.owners || [];
   state.today = d.today;
   if (state.selectedLineId && !lineById(state.selectedLineId)) {
     state.selectedLineId = null;
   }
+  for (const id of [...state.selectedTaskIds]) {
+    if (!state.tasks.some((t) => t.id === id)) state.selectedTaskIds.delete(id);
+  }
+  if (state.selectedTaskId && !state.tasks.some((t) => t.id === state.selectedTaskId)) {
+    state.selectedTaskId = null;
+  }
+  renderFilterControls();
   render();
 }
 
 function render() {
   renderToolbar();
+  renderSummary();
   if (state.view === "canvas") renderCanvas();
   else renderTable();
 }
@@ -104,9 +221,63 @@ function renderToolbar() {
   $("#btn-delete-line").disabled = !sel;
   $("#btn-merge").disabled = !sel || sel.parent_id === null || sel.merge_date;
   $("#btn-undo").disabled = !state.canUndo;
+  $("#btn-toggle-children").disabled = !sel ||
+    !state.lines.some((l) => l.parent_id === sel.id);
+  $("#btn-toggle-children").textContent =
+    sel && state.collapsedLineIds.has(sel.id) ? "展开子支线" : "折叠子支线";
   $("#sel-info").textContent = sel
     ? `已选中：${sel.name}${sel.parent_id === null ? "（主线）" : "（支线）"}`
     : "未选中任何线";
+}
+
+function setSelectOptions(sel, values, allText, selected) {
+  const old = selected == null ? sel.value : selected;
+  sel.innerHTML = "";
+  const first = document.createElement("option");
+  first.value = "";
+  first.textContent = allText;
+  sel.appendChild(first);
+  for (const v of values) {
+    const o = document.createElement("option");
+    o.value = String(v.value ?? v);
+    o.textContent = String(v.label ?? v);
+    if (o.value === old) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+function renderFilterControls() {
+  setSelectOptions($("#filter-line"), state.lines.map((l) => ({ value: l.id, label: l.name })),
+    "全部线", state.filters.line);
+  setSelectOptions($("#filter-owner"), ownerOptions(), "全部责任人", state.filters.owner);
+  setSelectOptions($("#filter-status"), state.statusEnum, "全部状态", state.filters.status);
+  setSelectOptions($("#filter-priority"), state.priorityEnum, "全部优先级", state.filters.priority);
+  setSelectOptions($("#bulk-status"), state.statusEnum, "批量改状态", "");
+  setSelectOptions($("#bulk-owner"), ownerOptions(), "批量改责任人", "");
+  setSelectOptions($("#bulk-priority"), state.priorityEnum, "批量改优先级", "");
+  $("#filter-q").value = state.filters.q;
+  $("#filter-due").value = state.filters.due;
+  $("#sort-tasks").value = state.sort;
+}
+
+function renderSummary() {
+  let active = 0, risk = 0, overdue = 0, soon = 0, stale = 0;
+  for (const t of state.tasks) {
+    const h = taskHealth(t);
+    if (!isDone(t)) active++;
+    if (h.risk) risk++;
+    if (h.overdue) overdue++;
+    if (h.soon) soon++;
+    if (h.stale) stale++;
+  }
+  $("#sum-active").textContent = active;
+  $("#sum-risk").textContent = risk;
+  $("#sum-overdue").textContent = overdue;
+  $("#sum-soon").textContent = soon;
+  $("#sum-stale").textContent = stale;
+  for (const btn of document.querySelectorAll(".summary-card")) {
+    btn.classList.toggle("active", btn.dataset.quick === state.quickFilter);
+  }
 }
 
 /* ============================================================== 画布视图 */
@@ -131,6 +302,7 @@ function assignRows() {
   let row = 0;
   function walk(line) {
     rows.set(line.id, row++);
+    if (state.collapsedLineIds.has(line.id)) return;
     for (const c of children(line.id)) walk(c);
   }
   roots.sort((a, b) => a.id - b.id).forEach(walk);
@@ -166,9 +338,9 @@ function leastMatureStatus(tasks) {
 }
 
 /* 按 线+同天 分簇。返回 Map<key, task[]>，簇内按 id 排序 */
-function buildClusters() {
+function buildClusters(tasks = state.tasks) {
   const clusters = new Map();
-  for (const t of state.tasks) {
+  for (const t of tasks) {
     const k = clusterKey(t);
     if (!clusters.has(k)) clusters.set(k, []);
     clusters.get(k).push(t);
@@ -185,7 +357,9 @@ function fanDy(i) {
 function renderCanvas() {
   const svg = $("#graph");
   svg.innerHTML = "";
+  state.canvasTaskPositions = new Map();
   const rows = assignRows();
+  const canvasTasks = filteredTasks();
 
   if (!state.lines.length) {
     svg.setAttribute("width", 800);
@@ -197,12 +371,13 @@ function renderCanvas() {
 
   /* 时间范围 */
   let minD = state.today, maxD = state.today;
-  for (const l of state.lines) {
+  const visibleLines = state.lines.filter((l) => rows.has(l.id));
+  for (const l of visibleLines) {
     if (l.fork_date < minD) minD = l.fork_date;
     const e = lineEnd(l);
     if (e > maxD) maxD = e;
   }
-  for (const t of state.tasks) {
+  for (const t of canvasTasks) {
     if (t.start_date < minD) minD = t.start_date;
     const e = t.end_date || t.start_date;
     if (e > maxD) maxD = e;
@@ -215,7 +390,7 @@ function renderCanvas() {
     CV.padL + ((parseDate(dateStr) - start) / 86400000) * CV.pxPerDay;
 
   /* 同线同天分簇；清理已失效的展开记录 */
-  const clusters = buildClusters();
+  const clusters = buildClusters(canvasTasks);
   for (const k of [...state.expandedClusters]) {
     if (!clusters.has(k) || clusters.get(k).length < 2) {
       state.expandedClusters.delete(k);
@@ -273,14 +448,15 @@ function renderCanvas() {
   /* 今日虚线 */
   svgEl("line", {
     x1: x(state.today), y1: 28, x2: x(state.today), y2: height - 10,
-    stroke: "#fb8f44", "stroke-width": 1, "stroke-dasharray": "4 4", opacity: .6,
+    stroke: "#fb8f44", "stroke-width": 1, "stroke-dasharray": "4 4",
+    opacity: .6, class: "today-line",
   }, gGrid);
 
   /* ---- 线 ---- */
   const gLines = svgEl("g", {}, root);
   const colorOf = (l) => LINE_COLORS[rows.get(l.id) % LINE_COLORS.length];
 
-  for (const line of state.lines) {
+  for (const line of visibleLines) {
     const y = lineY(line.id);
     const color = colorOf(line);
     const x1 = x(line.fork_date);
@@ -311,7 +487,11 @@ function renderCanvas() {
     }, gLines);
     /* 加宽的透明命中区域 */
     const hit = svgEl("path", { d, class: "line-hit" }, gLines);
-    const select = () => { state.selectedLineId = line.id; render(); };
+    const select = () => {
+      state.selectedLineId = line.id;
+      state.selectedTaskId = null;
+      render();
+    };
     hit.addEventListener("click", select);
     path.addEventListener("click", select);
     hit.addEventListener("dblclick", () => openLineModal(line));
@@ -330,10 +510,13 @@ function renderCanvas() {
     }
 
     /* 线名标签 */
+    const childCount = state.lines.filter((l) => l.parent_id === line.id).length;
     const lbl = svgEl("text", {
       x: x2 + 10, y: y + 4, fill: color, class: "line-label",
     }, gLines);
-    lbl.textContent = line.name + (line.merge_date ? " ✓已反合" : "");
+    lbl.textContent = line.name +
+      (line.merge_date ? " ✓已反合" : "") +
+      (childCount && state.collapsedLineIds.has(line.id) ? `（已折叠 ${childCount}）` : "");
     lbl.addEventListener("click", select);
   }
 
@@ -360,16 +543,23 @@ function renderCanvas() {
     if (t.end_date && t.end_date > t.start_date) {
       svgEl("rect", {
         x: cx, y: y - 4, width: Math.max(x(t.end_date) - cx, 2), height: 8,
-        rx: 4, class: `task-bar st-${t.status}`,
+        rx: 4, class: `task-bar ${statusClass(t.status)}`,
       }, gTasks);
     }
 
+    const health = taskHealth(t);
+    const selectedTask = state.selectedTaskId === t.id;
     const node = svgEl("circle", {
-      cx, cy: y, r: 7, class: `task-node st-${t.status}`,
+      cx, cy: y, r: selectedTask ? 10 : 7,
+      "data-task-id": t.id,
+      class: `task-node ${statusClass(t.status)} ${health.className}`,
     }, gTasks);
+    state.canvasTaskPositions.set(t.id, { x: cx * state.zoom, y: y * state.zoom });
     node.addEventListener("click", (e) => {
       e.stopPropagation();
-      state.selectedLineId = line.id; render();
+      state.selectedLineId = line.id;
+      state.selectedTaskId = t.id;
+      render();
     });
     node.addEventListener("dblclick", (e) => {
       e.stopPropagation();
@@ -378,13 +568,16 @@ function renderCanvas() {
     const title = svgEl("title", {}, node);
     title.textContent =
       `${t.name}\n状态：${t.status}\n责任人：${t.owner || "—"}\n` +
-      `${t.start_date} ~ ${t.end_date || "…"}\n内容：${t.content || "—"}\n闭环目标：${t.goal || "—"}`;
+      `优先级：${t.priority || "中"}\n` +
+      `${t.start_date} ~ ${t.end_date || "…"}\n内容：${t.content || "—"}\n` +
+      `闭环目标：${t.goal || "—"}\n下一步：${t.next_action || "—"}\n风险原因：${t.risk_reason || "—"}`;
 
     const parts1 = [], parts2 = [];
     if (state.show.name) parts1.push(t.name);
     if (state.show.status) parts2.push(t.status);
     if (state.show.dur) parts2.push(fmtDays(daysBetween(t.status_since, state.today)));
     if (state.show.owner && t.owner) parts2.push("@" + t.owner);
+    if (t.priority === "高" || t.priority === "紧急") parts2.push(t.priority);
 
     if (labelRight) {
       /* 展开的簇成员：标签横排在节点右侧 */
@@ -419,7 +612,7 @@ function renderCanvas() {
 
   for (const [key, arr] of clusters) {
     const line = lineById(arr[0].line_id);
-    if (!line) continue;
+    if (!line || !rows.has(line.id)) continue;
     const baseY = lineY(line.id);
     const cx = nodeX(arr[0]);
     const color = colorOf(line);
@@ -441,10 +634,14 @@ function renderCanvas() {
     if (!expanded) {
       /* ---- 折叠态：一个聚合节点，颜色 = 最不成熟的状态 ---- */
       const st = leastMatureStatus(arr);
+      const hs = arr.map(taskHealth);
+      const clusterHealth = hs.some((h) => h.overdue) ? "health-overdue" :
+        (hs.some((h) => h.soon) ? "health-soon" :
+          (hs.some((h) => h.stale) ? "health-stale" : ""));
       const g = svgEl("g", { class: "cluster-node" }, gTasks);
       /* 底层双环暗示"这是一叠节点" */
-      svgEl("circle", { cx: cx + 3, cy: baseY + 3, r: 9, class: `task-node st-${st}`, opacity: .35 }, g);
-      const node = svgEl("circle", { cx, cy: baseY, r: 9, class: `task-node st-${st}` }, g);
+      svgEl("circle", { cx: cx + 3, cy: baseY + 3, r: 9, class: `task-node ${statusClass(st)} ${clusterHealth}`, opacity: .35 }, g);
+      const node = svgEl("circle", { cx, cy: baseY, r: 9, class: `task-node ${statusClass(st)} ${clusterHealth}` }, g);
       /* 数量徽标 */
       const badge = svgEl("text", {
         x: cx, y: baseY + 3.5, "text-anchor": "middle", class: "cluster-count",
@@ -499,7 +696,11 @@ function renderCanvas() {
 
   /* 点击空白取消选中 */
   svg.onclick = (e) => {
-    if (e.target === svg) { state.selectedLineId = null; render(); }
+    if (e.target === svg) {
+      state.selectedLineId = null;
+      state.selectedTaskId = null;
+      render();
+    }
   };
 }
 
@@ -507,11 +708,49 @@ function renderCanvas() {
 function renderTable() {
   const tbody = $("#task-tbody");
   tbody.innerHTML = "";
-  const sorted = [...state.tasks].sort(
-    (a, b) => a.start_date.localeCompare(b.start_date) || a.id - b.id);
+  const sorted = filteredTasks();
+  const visibleIds = new Set(sorted.map((t) => t.id));
+  for (const id of [...state.selectedTaskIds]) {
+    if (!visibleIds.has(id)) state.selectedTaskIds.delete(id);
+  }
+  const checkAll = $("#check-all-tasks");
+  checkAll.checked = sorted.length > 0 && sorted.every((t) => state.selectedTaskIds.has(t.id));
+  checkAll.indeterminate = sorted.some((t) => state.selectedTaskIds.has(t.id)) && !checkAll.checked;
+  checkAll.onchange = () => {
+    if (checkAll.checked) sorted.forEach((t) => state.selectedTaskIds.add(t.id));
+    else sorted.forEach((t) => state.selectedTaskIds.delete(t.id));
+    renderTable();
+  };
 
   for (const t of sorted) {
     const tr = document.createElement("tr");
+    if (state.selectedTaskId === t.id) tr.classList.add("selected-row");
+
+    const tdCheck = document.createElement("td");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.className = "task-check";
+    cb.checked = state.selectedTaskIds.has(t.id);
+    cb.onchange = () => {
+      if (cb.checked) state.selectedTaskIds.add(t.id);
+      else state.selectedTaskIds.delete(t.id);
+      renderTable();
+    };
+    tdCheck.appendChild(cb);
+    tr.appendChild(tdCheck);
+
+    const tdHealth = document.createElement("td");
+    const badges = document.createElement("div");
+    badges.className = "health-badges";
+    const health = taskHealth(t);
+    for (const [text, cls] of health.labels) {
+      const b = document.createElement("span");
+      b.className = `badge ${cls}`;
+      b.textContent = text;
+      badges.appendChild(b);
+    }
+    tdHealth.appendChild(badges);
+    tr.appendChild(tdHealth);
 
     /* 线名（下拉切换所属线） */
     const tdLine = document.createElement("td");
@@ -539,6 +778,22 @@ function renderTable() {
     tr.appendChild(textField("name", t.name));
     tr.appendChild(textField("content", t.content));
     tr.appendChild(textField("goal", t.goal));
+    tr.appendChild(textField("next_action", t.next_action));
+    tr.appendChild(textField("risk_reason", t.risk_reason));
+
+    /* 优先级 */
+    const tdPriority = document.createElement("td");
+    const selPriority = document.createElement("select");
+    for (const p of state.priorityEnum) {
+      const o = document.createElement("option");
+      o.value = p; o.textContent = p;
+      if ((t.priority || "中") === p) o.selected = true;
+      selPriority.appendChild(o);
+    }
+    selPriority.className = `priority-${t.priority || "中"}`;
+    selPriority.onchange = () => saveTask(t.id, { priority: selPriority.value });
+    tdPriority.appendChild(selPriority);
+    tr.appendChild(tdPriority);
 
     /* 责任人：配置了名单则下拉选择，否则文本输入 */
     const tdOwner = document.createElement("td");
@@ -573,8 +828,17 @@ function renderTable() {
     tr.appendChild(dateField("start_date", t.start_date));
     tr.appendChild(dateField("end_date", t.end_date));
 
+    const tdUpdated = document.createElement("td");
+    tdUpdated.className = "muted-cell";
+    tdUpdated.textContent = t.updated_at || "—";
+    tr.appendChild(tdUpdated);
+
     /* 删除 */
     const tdDel = document.createElement("td");
+    const locate = document.createElement("button");
+    locate.className = "row-action";
+    locate.textContent = "定位";
+    locate.onclick = () => locateTask(t.id);
     const btn = document.createElement("button");
     btn.className = "row-del";
     btn.textContent = "删除";
@@ -583,6 +847,7 @@ function renderTable() {
       toast("已删除事务，可点「撤销删除」恢复");
       reload();
     };
+    tdDel.appendChild(locate);
     tdDel.appendChild(btn);
     tr.appendChild(tdDel);
 
@@ -591,17 +856,41 @@ function renderTable() {
   if (!sorted.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 9;
+    td.colSpan = 15;
     td.style.color = "#8c959f";
-    td.textContent = "暂无事务，点击「+ 新增事务」添加。";
+    td.textContent = state.tasks.length ? "没有匹配筛选条件的事务。" : "暂无事务，点击「+ 新增事务」添加。";
     tr.appendChild(td);
     tbody.appendChild(tr);
   }
 }
 
 async function saveTask(id, patch) {
-  await api(`/api/tasks/${id}`, "PATCH", patch);
-  reload();
+  try {
+    await api(`/api/tasks/${id}`, "PATCH", patch);
+  } catch (_error) {
+    // 表格控件已先显示新值，失败后重新加载以恢复服务端数据。
+  } finally {
+    await reload();
+  }
+}
+
+function locateTask(id) {
+  const t = state.tasks.find((x) => x.id === id);
+  if (!t) return;
+  state.selectedTaskId = id;
+  state.selectedLineId = t.line_id;
+  const sameDay = state.tasks.filter((x) => x.line_id === t.line_id && x.start_date === t.start_date);
+  if (sameDay.length > 1) state.expandedClusters.add(clusterKey(t));
+  switchView("canvas");
+  setTimeout(() => scrollToCanvasTask(id), 0);
+}
+
+function scrollToCanvasTask(id) {
+  const pos = state.canvasTaskPositions.get(id);
+  if (!pos) return;
+  const wrap = $("#canvas-wrap");
+  wrap.scrollLeft = Math.max(0, pos.x - wrap.clientWidth / 2);
+  wrap.scrollTop = Math.max(0, pos.y - wrap.clientHeight / 2);
 }
 
 /* ============================================================== 弹窗 */
@@ -614,7 +903,16 @@ function openModal(title, bodyBuilder, onOk) {
   const close = () => $("#modal-mask").classList.add("hidden");
   $("#modal-cancel").onclick = close;
   $("#modal-ok").onclick = async () => {
-    if (await onOk() !== false) close();
+    const ok = $("#modal-ok");
+    if (ok.disabled) return;
+    ok.disabled = true;
+    try {
+      if (await onOk() !== false) close();
+    } catch (_error) {
+      // api() 已显示具体错误，保留弹窗方便修改后重试。
+    } finally {
+      ok.disabled = false;
+    }
   };
 }
 
@@ -705,6 +1003,16 @@ function openTaskModal(task, lineId = null) {
       ta.value = task ? task.content : "";
       body._content = field(body, "事务内容", ta);
       body._goal = field(body, "闭环目标", input("text", task ? task.goal : ""));
+      body._next = field(body, "下一步动作", input("text", task ? task.next_action : ""));
+      body._risk = field(body, "风险原因", input("text", task ? task.risk_reason : ""));
+      const priority = document.createElement("select");
+      for (const p of state.priorityEnum) {
+        const o = document.createElement("option");
+        o.value = p; o.textContent = p;
+        if ((task ? task.priority : "中") === p) o.selected = true;
+        priority.appendChild(o);
+      }
+      body._priority = field(body, "优先级", priority);
       body._owner = field(body, "责任人", ownerInput(task ? task.owner : ""));
       const sel = document.createElement("select");
       for (const s of state.statusEnum) {
@@ -739,6 +1047,9 @@ function openTaskModal(task, lineId = null) {
         name: body._name.value.trim(),
         content: body._content.value,
         goal: body._goal.value,
+        next_action: body._next.value,
+        risk_reason: body._risk.value,
+        priority: body._priority.value,
         owner: body._owner.value.trim(),
         status: body._status.value,
         start_date: body._start.value || state.today,
@@ -798,14 +1109,15 @@ $("#btn-merge").onclick = () => {
 $("#btn-delete-line").onclick = async () => {
   const line = lineById(state.selectedLineId);
   if (!line) return;
-  const subs = state.lines.filter((l) => l.parent_id === line.id).length;
-  const n = state.tasks.filter((t) => t.line_id === line.id).length;
+  const ids = [line.id, ...descendantIds(line.id)];
+  const subs = ids.length - 1;
+  const n = state.tasks.filter((t) => ids.includes(t.line_id)).length;
   if (!confirm(
     `递归删除「${line.name}」？\n将同时删除其所有子支线及事务` +
-    `（直属支线 ${subs} 条、直属事务 ${n} 个）。\n删除后可立即撤销。`)) return;
+    `（全部子支线 ${subs} 条、全部事务 ${n} 个）。\n删除后会进入回收站，可恢复。`)) return;
   await api(`/api/lines/${line.id}`, "DELETE");
   state.selectedLineId = null;
-  toast("已递归删除，可点「撤销删除」恢复");
+  toast("已移入回收站，可撤销或从回收站恢复");
   reload();
 };
 
@@ -843,6 +1155,164 @@ $("#btn-owners").onclick = () => {
     toast(owners.length ? `名单已保存（${owners.length} 人）` : "名单已清空，恢复自由输入");
     reload();
   });
+};
+
+$("#btn-statuses").onclick = () => {
+  openModal("配置进展状态", (body) => {
+    const ta = document.createElement("textarea");
+    ta.rows = 8;
+    ta.value = state.statusEnum.join("\n");
+    body._statuses = field(body, "进展状态（每行一个）", ta);
+    const hint = document.createElement("div");
+    hint.className = "opt-hint";
+    hint.textContent = "已有事务使用的历史状态会继续保留，避免数据无法编辑。";
+    body.appendChild(hint);
+    ta.focus();
+  }, async () => {
+    const statuses = $("#modal-body")._statuses.value
+      .split("\n").map((s) => s.trim()).filter(Boolean);
+    await api("/api/statuses", "PUT", { statuses });
+    toast(`状态已保存（${statuses.length} 项）`);
+    reload();
+  });
+};
+
+$("#btn-trash").onclick = async () => {
+  const trash = await api("/api/trash");
+  openModal("回收站", (body) => {
+    if (!trash.batches.length) {
+      const empty = document.createElement("div");
+      empty.className = "opt-hint";
+      empty.textContent = "回收站为空。";
+      body.appendChild(empty);
+      return;
+    }
+    for (const b of trash.batches) {
+      const row = document.createElement("div");
+      row.className = "trash-row";
+      const info = document.createElement("div");
+      const names = (b.names || []).slice(0, 4).join("、");
+      info.textContent =
+        `批次 ${b.batch} · ${b.deleted_at || "未知日期"} · ` +
+        `线 ${b.line_count} 条 · 事务 ${b.task_count} 个` +
+        (names ? ` · ${names}` : "");
+      const restore = document.createElement("button");
+      restore.textContent = "恢复";
+      restore.onclick = async () => {
+        await api("/api/trash/restore", "POST", { batch: b.batch });
+        $("#modal-mask").classList.add("hidden");
+        toast("已从回收站恢复");
+        reload();
+      };
+      row.appendChild(info);
+      row.appendChild(restore);
+      body.appendChild(row);
+    }
+    const purge = document.createElement("button");
+    purge.className = "row-del";
+    purge.style.marginTop = "12px";
+    purge.textContent = "清空回收站";
+    purge.onclick = async () => {
+      if (!confirm("确定永久清空回收站？此操作不可撤销。")) return;
+      await api("/api/trash/purge", "POST");
+      $("#modal-mask").classList.add("hidden");
+      toast("回收站已清空");
+      reload();
+    };
+    body.appendChild(purge);
+  }, async () => true);
+};
+
+function setFilter(key, value) {
+  state.filters[key] = value;
+  state.selectedTaskIds.clear();
+  render();
+}
+
+$("#filter-q").oninput = (e) => setFilter("q", e.target.value);
+$("#filter-line").onchange = (e) => setFilter("line", e.target.value);
+$("#filter-owner").onchange = (e) => setFilter("owner", e.target.value);
+$("#filter-status").onchange = (e) => setFilter("status", e.target.value);
+$("#filter-priority").onchange = (e) => setFilter("priority", e.target.value);
+$("#filter-due").onchange = (e) => setFilter("due", e.target.value);
+$("#sort-tasks").onchange = (e) => {
+  state.sort = e.target.value;
+  savePrefs();
+  render();
+};
+$("#btn-clear-filters").onclick = () => {
+  state.filters = { q: "", line: "", owner: "", status: "", priority: "", due: "" };
+  state.quickFilter = "";
+  state.selectedTaskIds.clear();
+  renderFilterControls();
+  render();
+};
+for (const btn of document.querySelectorAll(".summary-card")) {
+  btn.onclick = () => {
+    state.quickFilter = state.quickFilter === btn.dataset.quick ? "" : btn.dataset.quick;
+    state.selectedTaskIds.clear();
+    render();
+  };
+}
+
+async function bulkUpdate(field, value) {
+  if (!value) return;
+  const ids = [...state.selectedTaskIds];
+  if (!ids.length) {
+    toast("请先勾选事务");
+    return;
+  }
+  await api("/api/tasks/bulk", "PATCH", { ids, patch: { [field]: value } });
+  state.selectedTaskIds.clear();
+  toast(`已更新 ${ids.length} 个事务`);
+  await reload();
+}
+
+$("#bulk-status").onchange = async (e) => {
+  await bulkUpdate("status", e.target.value);
+  e.target.value = "";
+};
+$("#bulk-owner").onchange = async (e) => {
+  await bulkUpdate("owner", e.target.value);
+  e.target.value = "";
+};
+$("#bulk-priority").onchange = async (e) => {
+  await bulkUpdate("priority", e.target.value);
+  e.target.value = "";
+};
+$("#btn-bulk-delete").onclick = async () => {
+  const ids = [...state.selectedTaskIds];
+  if (!ids.length) {
+    toast("请先勾选事务");
+    return;
+  }
+  if (!confirm(`确定删除选中的 ${ids.length} 个事务？删除后会进入回收站。`)) return;
+  await api("/api/tasks/bulk", "DELETE", { ids });
+  state.selectedTaskIds.clear();
+  toast(`已删除 ${ids.length} 个事务，可从回收站恢复`);
+  reload();
+};
+
+$("#btn-today").onclick = () => {
+  const wrap = $("#canvas-wrap");
+  const line = $("#graph .today-line");
+  if (!line) return;
+  const x = parseFloat(line.getAttribute("x1")) * state.zoom;
+  wrap.scrollLeft = Math.max(0, x - wrap.clientWidth / 2);
+};
+$("#btn-fit").onclick = () => {
+  state.zoom = 1;
+  savePrefs();
+  renderCanvas();
+  $("#canvas-wrap").scrollLeft = 0;
+  $("#canvas-wrap").scrollTop = 0;
+};
+$("#btn-toggle-children").onclick = () => {
+  const id = state.selectedLineId;
+  if (!id) return;
+  if (state.collapsedLineIds.has(id)) state.collapsedLineIds.delete(id);
+  else state.collapsedLineIds.add(id);
+  render();
 };
 
 /* 画布显示开关 */

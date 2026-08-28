@@ -21,17 +21,51 @@ body {
 .view-btn.active { background: #0969da; color: #fff; }
 
 #toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
-#toolbar button, #table-bar button, #modal-btns button {
+#toolbar button, #table-bar button, #modal-btns button, #filters button {
   border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px;
   padding: 5px 12px; font-size: 13px; cursor: pointer;
 }
 #toolbar button:hover:not(:disabled), #table-bar button:hover { background: #eaeef2; }
 #toolbar button:disabled { opacity: .4; cursor: not-allowed; }
-#toolbar button.danger { color: #cf222e; border-color: #f0b3b8; }
-#toolbar button.danger:hover:not(:disabled) { background: #ffebe9; }
+#toolbar button.danger, #table-bar button.danger { color: #cf222e; border-color: #f0b3b8; }
+#toolbar button.danger:hover:not(:disabled), #table-bar button.danger:hover:not(:disabled) { background: #ffebe9; }
 button.primary { background: #0969da !important; color: #fff; border-color: #0969da !important; }
 
 #sel-info { margin-left: auto; font-size: 12px; color: #57606a; }
+
+/* ---------------- workbench ---------------- */
+#workbench {
+  background: #fff; border-bottom: 1px solid #d8dee4;
+  padding: 10px 16px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+#summary-strip { display: flex; gap: 8px; flex-wrap: wrap; }
+.summary-card {
+  display: inline-flex; align-items: baseline; gap: 6px; min-width: 82px;
+  border: 1px solid #d0d7de; background: #fff; border-radius: 6px;
+  padding: 6px 10px; cursor: pointer; color: #57606a;
+}
+.summary-card:hover, .summary-card.active { border-color: #0969da; color: #0969da; background: #ddf4ff; }
+.summary-num { font-size: 18px; font-weight: 700; color: #24292f; }
+#filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 1; }
+#filters input, #filters select, #table-bar select {
+  border: 1px solid #d0d7de; background: #fff; border-radius: 6px;
+  padding: 5px 8px; font-size: 13px; font-family: inherit; min-height: 30px;
+}
+#filter-q { min-width: 220px; flex: 1; }
+.health-badges { display: flex; gap: 4px; flex-wrap: wrap; min-width: 92px; }
+.badge {
+  display: inline-flex; align-items: center; border-radius: 999px;
+  padding: 1px 7px; font-size: 11px; line-height: 18px; white-space: nowrap;
+}
+.badge-overdue { color: #cf222e; background: #ffebe9; }
+.badge-soon { color: #9a6700; background: #fff8c5; }
+.badge-stale { color: #8250df; background: #fbefff; }
+.badge-risk { color: #9a6700; background: #fff8c5; }
+.badge-ok { color: #1a7f37; background: #dafbe1; }
+.priority-低 { color: #57606a; }
+.priority-中 { color: #0969da; }
+.priority-高 { color: #9a6700; font-weight: 600; }
+.priority-紧急 { color: #cf222e; font-weight: 700; }
 
 /* ---------------- canvas view ---------------- */
 #canvas-view { flex: 1; display: flex; min-height: 0; }
@@ -49,11 +83,12 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 #canvas-wrap.grabbing * { cursor: grabbing !important; }
 #graph { display: block; background: #fdfdfe; }
 
-#btn-toggle-labels {
+#btn-toggle-labels, #btn-today, #btn-fit, #btn-toggle-children {
   border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px;
   padding: 5px 10px; font-size: 12px; cursor: pointer;
 }
-#btn-toggle-labels:hover { background: #eaeef2; }
+#btn-toggle-labels:hover, #btn-today:hover, #btn-fit:hover, #btn-toggle-children:hover:not(:disabled) { background: #eaeef2; }
+#btn-toggle-children:disabled { opacity: .45; cursor: not-allowed; }
 
 /* svg elements */
 .month-line { stroke: #e7ebef; stroke-width: 1; }
@@ -72,6 +107,9 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .task-label { font-size: 11px; pointer-events: none; user-select: none; }
 .task-label.t-name { font-weight: 600; fill: #24292f; }
 .task-label.t-meta { fill: #57606a; }
+.task-node.health-overdue { stroke: #cf222e; stroke-width: 4; }
+.task-node.health-soon { stroke: #d4a72c; stroke-width: 4; }
+.task-node.health-stale { stroke: #8250df; stroke-width: 4; }
 
 /* 同天多事务聚合节点 */
 .cluster-node { cursor: pointer; }
@@ -92,23 +130,34 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .st-未启动 { fill: #8c959f; }
 .st-进行中 { fill: #0969da; }
 .st-有风险 { fill: #d4a72c; }
+.st-等待中 { fill: #0e7490; }
+.st-已暂停 { fill: #8250df; }
 .st-已闭环 { fill: #1a7f37; }
+.st-已取消 { fill: #57606a; }
+.st-custom { fill: #6e7781; }
 
 /* ---------------- table view ---------------- */
 #table-view { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 12px 16px; gap: 10px; }
-#table-bar { display: flex; align-items: center; gap: 12px; }
+#table-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 #table-wrap { flex: 1; overflow: auto; background: #fff; border: 1px solid #d8dee4; border-radius: 6px; }
 #task-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 #task-table th, #task-table td {
   border-bottom: 1px solid #eaeef2; padding: 6px 10px; text-align: left; white-space: nowrap;
 }
 #task-table th { background: #f6f8fa; position: sticky; top: 0; font-weight: 600; color: #57606a; }
+#task-table tr.selected-row { background: #ddf4ff; }
 #task-table td input, #task-table td select {
   border: 1px solid transparent; background: transparent; font-size: 13px;
   padding: 3px 5px; border-radius: 4px; width: 100%; min-width: 80px; font-family: inherit;
 }
 #task-table td input:hover, #task-table td select:hover { border-color: #d0d7de; }
 #task-table td input:focus, #task-table td select:focus { border-color: #0969da; outline: none; background: #fff; }
+.task-check { width: 16px; height: 16px; }
+.muted-cell { color: #8c959f; font-size: 12px; }
+.row-action {
+  color: #0969da; cursor: pointer; border: none; background: none;
+  font-size: 13px; margin-right: 8px;
+}
 .row-del { color: #cf222e; cursor: pointer; border: none; background: none; font-size: 13px; }
 .status-badge { padding: 1px 8px; border-radius: 10px; color: #fff; font-size: 12px; }
 
@@ -131,6 +180,14 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 #modal-body textarea { resize: vertical; min-height: 52px; }
 #modal-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 #modal-btns .left { margin-right: auto; }
+.trash-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 0; border-bottom: 1px solid #eaeef2; font-size: 13px;
+}
+.trash-row button {
+  border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px;
+  padding: 4px 10px; cursor: pointer; flex-shrink: 0;
+}
 
 #toast {
   position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
