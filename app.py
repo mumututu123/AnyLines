@@ -112,6 +112,13 @@ def init_db(db_path=None):
             deleted_at   TEXT,
             updated_at   TEXT
         );
+        CREATE TABLE IF NOT EXISTS task_dependencies (
+            workspace_id        INTEGER NOT NULL,
+            dependent_task_id   INTEGER NOT NULL,
+            prerequisite_task_id INTEGER NOT NULL,
+            PRIMARY KEY(workspace_id,dependent_task_id,prerequisite_task_id),
+            CHECK(dependent_task_id <> prerequisite_task_id)
+        );
         CREATE TABLE IF NOT EXISTS meta (
             key   TEXT PRIMARY KEY,
             value TEXT
@@ -222,6 +229,10 @@ def init_db(db_path=None):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_tasks_workspace_deleted "
         "ON tasks(workspace_id,deleted)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_dependencies_prerequisite "
+        "ON task_dependencies(workspace_id,prerequisite_task_id)"
     )
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)"
@@ -437,6 +448,12 @@ def purge_deleted(db):
     """物理删除所有软删除的行, 并清空相关撤销状态。"""
     workspace_id = current_workspace_id()
     db.execute(
+        "DELETE FROM task_dependencies WHERE workspace_id=? AND ("
+        "dependent_task_id IN (SELECT id FROM tasks WHERE workspace_id=? AND deleted=1) "
+        "OR prerequisite_task_id IN (SELECT id FROM tasks WHERE workspace_id=? AND deleted=1))",
+        (workspace_id, workspace_id, workspace_id),
+    )
+    db.execute(
         "DELETE FROM tasks WHERE deleted=1 AND workspace_id=?", (workspace_id,)
     )
     db.execute(
@@ -455,6 +472,10 @@ def on_edit(db):
         )],
         "tasks": [dict(row) for row in db.execute(
             "SELECT * FROM tasks WHERE workspace_id=? ORDER BY id", (workspace_id,)
+        )],
+        "task_dependencies": [dict(row) for row in db.execute(
+            "SELECT * FROM task_dependencies WHERE workspace_id=? "
+            "ORDER BY dependent_task_id,prerequisite_task_id", (workspace_id,)
         )],
     }
     db.execute(
@@ -479,9 +500,10 @@ def has_undo(db):
 
 def restore_snapshot(db, snapshot):
     workspace_id = current_workspace_id()
+    db.execute("DELETE FROM task_dependencies WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
-    for table in ("lines", "tasks"):
+    for table in ("lines", "tasks", "task_dependencies"):
         rows = snapshot.get(table, [])
         if not isinstance(rows, list):
             raise ApiError("撤销数据已损坏", 500)
@@ -527,6 +549,129 @@ def validate_date_range(start, end):
     e = parse_iso_date(end, "结束日期")
     if s and e and e < s:
         raise ValueError("结束日期不能早于起始日期")
+
+
+def dependency_id_list(value):
+    if not isinstance(value, list) or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in value):
+        raise ApiError("依赖事务必须是整数数组")
+    if len(value) != len(set(value)):
+        raise ApiError("依赖事务不能包含重复项")
+    return value
+
+
+def current_dependency_ids(db, workspace_id, dependent_task_id):
+    return [row["prerequisite_task_id"] for row in db.execute(
+        "SELECT prerequisite_task_id FROM task_dependencies "
+        "WHERE workspace_id=? AND dependent_task_id=? "
+        "ORDER BY prerequisite_task_id",
+        (workspace_id, dependent_task_id),
+    )]
+
+
+def validate_dependencies(db, workspace_id, dependent_task_id, prerequisite_ids):
+    prerequisite_ids = dependency_id_list(prerequisite_ids)
+    if dependent_task_id is not None and dependent_task_id in prerequisite_ids:
+        raise ApiError("事务不能依赖自身")
+    if prerequisite_ids:
+        marks = ",".join("?" * len(prerequisite_ids))
+        rows = db.execute(
+            f"SELECT id FROM tasks WHERE workspace_id=? AND deleted=0 "
+            f"AND id IN ({marks})",
+            [workspace_id] + prerequisite_ids,
+        ).fetchall()
+        if len(rows) != len(prerequisite_ids):
+            raise ApiError("部分依赖事务不存在或已删除", 404)
+
+    if dependent_task_id is None:
+        return prerequisite_ids
+
+    graph = {}
+    for row in db.execute(
+        "SELECT d.dependent_task_id,d.prerequisite_task_id "
+        "FROM task_dependencies d "
+        "JOIN tasks dependent ON dependent.id=d.dependent_task_id "
+        "JOIN tasks prerequisite ON prerequisite.id=d.prerequisite_task_id "
+        "WHERE d.workspace_id=? AND dependent.workspace_id=? "
+        "AND prerequisite.workspace_id=? AND dependent.deleted=0 "
+        "AND prerequisite.deleted=0",
+        (workspace_id, workspace_id, workspace_id),
+    ):
+        graph.setdefault(row["dependent_task_id"], set()).add(
+            row["prerequisite_task_id"]
+        )
+    graph[dependent_task_id] = set(prerequisite_ids)
+
+    visiting, visited = set(), set()
+
+    def walk(task_id):
+        if task_id in visiting:
+            return True
+        if task_id in visited:
+            return False
+        visiting.add(task_id)
+        if any(walk(next_id) for next_id in graph.get(task_id, ())):
+            return True
+        visiting.remove(task_id)
+        visited.add(task_id)
+        return False
+
+    if walk(dependent_task_id):
+        raise ApiError("事务依赖不能形成循环")
+    return prerequisite_ids
+
+
+def ensure_dependencies_closed(db, workspace_id, prerequisite_ids):
+    if not prerequisite_ids:
+        return
+    marks = ",".join("?" * len(prerequisite_ids))
+    rows = db.execute(
+        f"SELECT id,name FROM tasks WHERE workspace_id=? AND deleted=0 "
+        f"AND status<>'已闭环' AND id IN ({marks}) ORDER BY id",
+        [workspace_id] + prerequisite_ids,
+    ).fetchall()
+    if rows:
+        names = "、".join(row["name"] for row in rows[:3])
+        if len(rows) > 3:
+            names += f"等 {len(rows)} 项"
+        raise ApiError(f"被依赖事务尚未闭环：{names}", 409)
+
+
+def replace_task_dependencies(db, workspace_id, dependent_task_id, prerequisite_ids):
+    db.execute(
+        "DELETE FROM task_dependencies WHERE workspace_id=? AND dependent_task_id=?",
+        (workspace_id, dependent_task_id),
+    )
+    db.executemany(
+        "INSERT INTO task_dependencies("
+        "workspace_id,dependent_task_id,prerequisite_task_id) VALUES(?,?,?)",
+        [
+            (workspace_id, dependent_task_id, prerequisite_id)
+            for prerequisite_id in prerequisite_ids
+        ],
+    )
+
+
+def ensure_tasks_not_required(db, workspace_id, task_ids):
+    if not task_ids:
+        return
+    marks = ",".join("?" * len(task_ids))
+    params = [workspace_id, workspace_id] + task_ids + task_ids
+    row = db.execute(
+        f"SELECT dependent.name AS dependent_name,prerequisite.name AS prerequisite_name "
+        f"FROM task_dependencies d "
+        f"JOIN tasks dependent ON dependent.id=d.dependent_task_id "
+        f"JOIN tasks prerequisite ON prerequisite.id=d.prerequisite_task_id "
+        f"WHERE d.workspace_id=? AND dependent.workspace_id=? "
+        f"AND dependent.deleted=0 AND d.prerequisite_task_id IN ({marks}) "
+        f"AND d.dependent_task_id NOT IN ({marks}) LIMIT 1",
+        params,
+    ).fetchone()
+    if row:
+        raise ApiError(
+            f"事务“{row['prerequisite_name']}”仍被“{row['dependent_name']}”依赖，不能删除",
+            409,
+        )
 
 
 def get_statuses(db):
@@ -860,9 +1005,21 @@ def api_state():
         "WHERE t.workspace_id=? AND l.workspace_id=? "
         "AND t.deleted=0 AND l.deleted=0 ORDER BY t.start_date,t.id",
         (workspace_id, workspace_id))]
+    dependencies = [dict(r) for r in db.execute(
+        "SELECT d.dependent_task_id,d.prerequisite_task_id "
+        "FROM task_dependencies d "
+        "JOIN tasks dependent ON dependent.id=d.dependent_task_id "
+        "JOIN tasks prerequisite ON prerequisite.id=d.prerequisite_task_id "
+        "WHERE d.workspace_id=? AND dependent.workspace_id=? "
+        "AND prerequisite.workspace_id=? AND dependent.deleted=0 "
+        "AND prerequisite.deleted=0 "
+        "ORDER BY d.dependent_task_id,d.prerequisite_task_id",
+        (workspace_id, workspace_id, workspace_id),
+    )]
     return jsonify({
         "lines": lines,
         "tasks": tasks,
+        "dependencies": dependencies,
         "can_undo": has_undo(db),
         "status_enum": statuses,
         "status_colors": get_status_colors(db, statuses),
@@ -1118,10 +1275,16 @@ def delete_line(lid):
     ).fetchone()
     if not row:
         return jsonify({"error": "线不存在"}), 404
-    on_edit(db)
-    batch = new_batch(db)
     ids = collect_descendants(db, lid, workspace_id)
     marks = ",".join("?" * len(ids))
+    task_ids = [row["id"] for row in db.execute(
+        f"SELECT id FROM tasks WHERE workspace_id=? AND deleted=0 "
+        f"AND line_id IN ({marks})",
+        [workspace_id] + ids,
+    )]
+    ensure_tasks_not_required(db, workspace_id, task_ids)
+    on_edit(db)
+    batch = new_batch(db)
     today = date.today().isoformat()
     db.execute(
         f"UPDATE lines SET deleted=1, del_batch=?, deleted_at=? "
@@ -1167,6 +1330,11 @@ def create_task():
     owner = text_field(d, "owner", "责任人")
     next_action = text_field(d, "next_action", "下一步动作")
     risk_reason = text_field(d, "risk_reason", "风险原因")
+    prerequisite_ids = validate_dependencies(
+        db, workspace_id, None, d.get("prerequisite_ids", [])
+    )
+    if status == "已闭环":
+        ensure_dependencies_closed(db, workspace_id, prerequisite_ids)
     try:
         validate_date_range(start_date, end_date)
     except ValueError as e:
@@ -1184,6 +1352,9 @@ def create_task():
             status, start_date, end_date, today,
             today,
         ),
+    )
+    replace_task_dependencies(
+        db, workspace_id, cur.lastrowid, prerequisite_ids
     )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
@@ -1223,6 +1394,12 @@ def update_task(tid):
     if new_start < target_line["fork_date"]:
         return jsonify({"error": "事务起始日期不能早于所属线起始日期"}), 400
 
+    prerequisite_ids = None
+    if "prerequisite_ids" in d:
+        prerequisite_ids = validate_dependencies(
+            db, workspace_id, tid, d["prerequisite_ids"]
+        )
+
     fields, vals = [], []
     for k in ("line_id", "name", "content", "goal", "owner", "priority",
               "next_action", "risk_reason", "status", "start_date", "end_date"):
@@ -1253,17 +1430,72 @@ def update_task(tid):
                 vals.append(date.today().isoformat())
         fields.append(f"{k}=?")
         vals.append(d[k])
-    if fields:
+    final_status = d.get("status", row["status"])
+    final_prerequisite_ids = prerequisite_ids
+    if final_prerequisite_ids is None:
+        final_prerequisite_ids = current_dependency_ids(db, workspace_id, tid)
+    if final_status == "已闭环":
+        ensure_dependencies_closed(db, workspace_id, final_prerequisite_ids)
+
+    if fields or prerequisite_ids is not None:
         on_edit(db)
-        fields.append("updated_at=?")
-        vals.append(date.today().isoformat())
-        vals.append(tid)
-        vals.append(workspace_id)
-        db.execute(
-            f"UPDATE tasks SET {','.join(fields)} WHERE id=? AND workspace_id=?", vals
-        )
+        if fields:
+            fields.append("updated_at=?")
+            vals.append(date.today().isoformat())
+            vals.append(tid)
+            vals.append(workspace_id)
+            db.execute(
+                f"UPDATE tasks SET {','.join(fields)} WHERE id=? AND workspace_id=?", vals
+            )
+        if prerequisite_ids is not None:
+            replace_task_dependencies(db, workspace_id, tid, prerequisite_ids)
         db.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/tasks/<int:tid>/dependencies", methods=["POST", "DELETE"])
+def task_dependency(tid):
+    d = json_object()
+    prerequisite_task_id = required_id(
+        d.get("prerequisite_task_id"), "prerequisite_task_id"
+    )
+    db = get_db()
+    workspace_id = current_workspace_id()
+    task = db.execute(
+        "SELECT id,status FROM tasks WHERE id=? AND workspace_id=? AND deleted=0",
+        (tid, workspace_id),
+    ).fetchone()
+    if not task:
+        raise ApiError("事务不存在", 404)
+    existing_ids = current_dependency_ids(db, workspace_id, tid)
+
+    if request.method == "DELETE":
+        if prerequisite_task_id not in existing_ids:
+            raise ApiError("依赖关系不存在", 404)
+        on_edit(db)
+        db.execute(
+            "DELETE FROM task_dependencies WHERE workspace_id=? "
+            "AND dependent_task_id=? AND prerequisite_task_id=?",
+            (workspace_id, tid, prerequisite_task_id),
+        )
+        db.commit()
+        return jsonify({"ok": True})
+
+    if prerequisite_task_id in existing_ids:
+        return jsonify({"ok": True, "created": False})
+    dependency_ids = validate_dependencies(
+        db, workspace_id, tid, existing_ids + [prerequisite_task_id]
+    )
+    if task["status"] == "已闭环":
+        ensure_dependencies_closed(db, workspace_id, dependency_ids)
+    on_edit(db)
+    db.execute(
+        "INSERT INTO task_dependencies("
+        "workspace_id,dependent_task_id,prerequisite_task_id) VALUES(?,?,?)",
+        (workspace_id, tid, prerequisite_task_id),
+    )
+    db.commit()
+    return jsonify({"ok": True, "created": True}), 201
 
 
 @app.route("/api/tasks/<int:tid>", methods=["DELETE"])
@@ -1276,6 +1508,7 @@ def delete_task(tid):
     ).fetchone()
     if not row:
         return jsonify({"error": "事务不存在"}), 404
+    ensure_tasks_not_required(db, workspace_id, [tid])
     on_edit(db)
     batch = new_batch(db)
     db.execute(
@@ -1357,6 +1590,7 @@ def bulk_tasks():
         return jsonify({"error": "部分事务不存在或已删除"}), 404
 
     if request.method == "DELETE":
+        ensure_tasks_not_required(db, workspace_id, ids)
         on_edit(db)
         batch = new_batch(db)
         db.execute(
@@ -1378,6 +1612,12 @@ def bulk_tasks():
         return jsonify({"error": "非法的优先级"}), 400
     if "status" in patch and patch["status"] not in get_statuses(db):
         return jsonify({"error": "非法的进展状态"}), 400
+    if patch.get("status") == "已闭环":
+        for task_id in ids:
+            ensure_dependencies_closed(
+                db, workspace_id,
+                current_dependency_ids(db, workspace_id, task_id),
+            )
     if "owner" in patch and not isinstance(patch["owner"], str):
         return jsonify({"error": "责任人必须是字符串"}), 400
     if "line_id" in patch:
@@ -1526,8 +1766,17 @@ def restore_trash():
         "AND line.del_batch<>? LIMIT 1",
         (batch, workspace_id, workspace_id, batch)
     ).fetchone()
-    if blocked_line or blocked_task:
-        return jsonify({"error": "请先恢复该批次所依赖的所属线"}), 409
+    blocked_dependency = db.execute(
+        "SELECT dependent.id FROM task_dependencies d "
+        "JOIN tasks dependent ON dependent.id=d.dependent_task_id "
+        "JOIN tasks prerequisite ON prerequisite.id=d.prerequisite_task_id "
+        "WHERE d.workspace_id=? AND dependent.workspace_id=? "
+        "AND dependent.deleted=1 AND dependent.del_batch=? "
+        "AND prerequisite.deleted=1 AND prerequisite.del_batch<>? LIMIT 1",
+        (workspace_id, workspace_id, batch, batch),
+    ).fetchone()
+    if blocked_line or blocked_task or blocked_dependency:
+        return jsonify({"error": "请先恢复该批次依赖的所属线或前置事务"}), 409
     on_edit(db)
     db.execute(
         "UPDATE lines SET deleted=0, del_batch=NULL, deleted_at=NULL "

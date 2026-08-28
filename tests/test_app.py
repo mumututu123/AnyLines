@@ -384,6 +384,101 @@ class AnyLineHttpTests(unittest.TestCase):
         _, state = self.request("GET", "/api/state")
         self.assertEqual([task["id"] for task in state["tasks"]], [task_id])
 
+    def test_task_dependencies_and_closure_guard(self):
+        line_id = self.create_line()
+        prerequisite_one = self.create_task(line_id, "前置事务一")
+        prerequisite_two = self.create_task(
+            line_id, "前置事务二", status="已闭环"
+        )
+        dependent_one = self.create_task(
+            line_id, "依赖事务一",
+            prerequisite_ids=[prerequisite_one, prerequisite_two],
+        )
+        dependent_two = self.create_task(line_id, "依赖事务二")
+
+        status, data = self.request(
+            "POST", f"/api/tasks/{dependent_two}/dependencies",
+            {"prerequisite_task_id": prerequisite_one},
+        )
+        self.assertEqual(status, 201, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(
+            {
+                (row["dependent_task_id"], row["prerequisite_task_id"])
+                for row in state["dependencies"]
+            },
+            {
+                (dependent_one, prerequisite_one),
+                (dependent_one, prerequisite_two),
+                (dependent_two, prerequisite_one),
+            },
+        )
+
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{dependent_one}", {"status": "已闭环"}
+        )
+        self.assertEqual(status, 409, data)
+        self.assertIn("前置事务一", data["error"])
+        status, data = self.request(
+            "PATCH", "/api/tasks/bulk",
+            {"ids": [dependent_one, dependent_two], "patch": {"status": "已闭环"}},
+        )
+        self.assertEqual(status, 409, data)
+
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{prerequisite_one}", {"status": "已闭环"}
+        )
+        self.assertEqual(status, 200, data)
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{dependent_one}", {"status": "已闭环"}
+        )
+        self.assertEqual(status, 200, data)
+
+        status, data = self.request("DELETE", f"/api/tasks/{prerequisite_one}")
+        self.assertEqual(status, 409, data)
+        status, data = self.request(
+            "DELETE", f"/api/tasks/{dependent_two}/dependencies",
+            {"prerequisite_task_id": prerequisite_one},
+        )
+        self.assertEqual(status, 200, data)
+
+        cycle_one = self.create_task(line_id, "环路一")
+        cycle_two = self.create_task(line_id, "环路二")
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{cycle_one}",
+            {"prerequisite_ids": [cycle_two]},
+        )
+        self.assertEqual(status, 200, data)
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{cycle_two}",
+            {"prerequisite_ids": [cycle_one]},
+        )
+        self.assertEqual(status, 400, data)
+        self.assertIn("循环", data["error"])
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{cycle_one}",
+            {"prerequisite_ids": [cycle_one]},
+        )
+        self.assertEqual(status, 400, data)
+
+        undo_source = self.create_task(line_id, "撤销来源")
+        undo_target = self.create_task(line_id, "撤销目标")
+        status, data = self.request(
+            "POST", f"/api/tasks/{undo_source}/dependencies",
+            {"prerequisite_task_id": undo_target},
+        )
+        self.assertEqual(status, 201, data)
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertNotIn(
+            (undo_source, undo_target),
+            {
+                (row["dependent_task_id"], row["prerequisite_task_id"])
+                for row in state["dependencies"]
+            },
+        )
+
     def test_general_undo_for_canvas_edits(self):
         main_id = self.create_line("初始主线")
         status, data = self.request("POST", "/api/undo")

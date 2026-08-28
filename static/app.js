@@ -5,7 +5,7 @@ const $ = (sel) => document.querySelector(sel);
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = {
-  lines: [], tasks: [], canUndo: false, statusEnum: [], statusColors: {},
+  lines: [], tasks: [], dependencies: [], canUndo: false, statusEnum: [], statusColors: {},
   priorityEnum: [], owners: [], today: "",
   user: null, workspaces: [], currentWorkspace: null,
   selectedLineId: null,
@@ -172,6 +172,7 @@ function resetWorkspaceState() {
   state.selectedTaskIds.clear();
   state.expandedClusters.clear();
   state.hiddenBranchIds.clear();
+  state.dependencies = [];
   state.pan = { x: 0, y: 0 };
   state.filters = { q: "", line: "", owner: "", status: "", priority: "", due: "" };
   state.quickFilter = "";
@@ -195,6 +196,12 @@ function daysBetween(a, b) {
   return Math.round((parseDate(b) - parseDate(a)) / 86400000);
 }
 function lineById(id) { return state.lines.find((l) => l.id === id); }
+function taskById(id) { return state.tasks.find((t) => t.id === id); }
+function prerequisiteIds(taskId) {
+  return state.dependencies
+    .filter((dependency) => dependency.dependent_task_id === taskId)
+    .map((dependency) => dependency.prerequisite_task_id);
+}
 function isDone(t) { return DONE_STATUSES.has(t.status); }
 function priorityRank(p) { return PRIORITY_WEIGHT[p] || 0; }
 function statusClass(status) {
@@ -306,6 +313,7 @@ async function reload() {
   const d = await api("/api/state");
   state.lines = d.lines;
   state.tasks = d.tasks;
+  state.dependencies = d.dependencies || [];
   state.canUndo = d.can_undo;
   state.statusEnum = d.status_enum;
   state.statusColors = d.status_colors || {};
@@ -340,6 +348,7 @@ function render() {
 /* ---------------------------------------------------------------- toolbar */
 function renderToolbar() {
   const sel = state.selectedLineId ? lineById(state.selectedLineId) : null;
+  const selectedTask = state.selectedTaskId ? taskById(state.selectedTaskId) : null;
   const children = sel ? state.lines.filter((line) => line.parent_id === sel.id) : [];
   const allChildrenHidden = children.length > 0 &&
     children.every((line) => state.hiddenBranchIds.has(line.id));
@@ -349,9 +358,11 @@ function renderToolbar() {
   $("#btn-toggle-children").disabled = !children.length;
   $("#btn-toggle-children").textContent =
     allChildrenHidden ? "展开子支线" : "折叠子支线";
-  $("#sel-info").textContent = sel
-    ? `已选中：${sel.name}${sel.parent_id === null ? "（主线）" : "（支线）"}`
-    : "未选中任何线";
+  $("#sel-info").textContent = selectedTask
+    ? `已选中事务：${selectedTask.name}`
+    : (sel
+      ? `已选中：${sel.name}${sel.parent_id === null ? "（主线）" : "（支线）"}`
+      : "未选中任何对象");
 }
 
 function setSelectOptions(sel, values, allText, selected) {
@@ -684,6 +695,12 @@ function renderCanvas() {
     id: "canvas-root",
     transform: `translate(${state.pan.x} ${state.pan.y}) scale(${z})`,
   }, svg);
+  const defs = svgEl("defs", {}, root);
+  const dependencyArrow = svgEl("marker", {
+    id: "dependency-arrow", viewBox: "0 0 8 8", refX: 7, refY: 4,
+    markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse",
+  }, defs);
+  svgEl("path", { d: "M 0 0 L 8 4 L 0 8 z", class: "dependency-arrow-head" }, dependencyArrow);
 
   /* ---- 年月时间轴（淡淡显示） ---- */
   const gGrid = svgEl("g", {}, root);
@@ -830,6 +847,7 @@ function renderCanvas() {
   }
 
   /* ---- 事务节点（同线同天多事务折叠为聚合节点，点击展开/折叠） ---- */
+  const gDependencies = svgEl("g", { class: "task-dependencies" }, root);
   const gTasks = svgEl("g", {}, root);
 
   /* 事务日期为分叉当日时，钳制到对应支线圆角过渡后的水平段。 */
@@ -843,6 +861,76 @@ function renderCanvas() {
     const halfWidth = Math.sqrt(3) * size / 2;
     return `${cx},${cy - size} ${cx + halfWidth},${cy + size / 2} ` +
       `${cx - halfWidth},${cy + size / 2}`;
+  };
+
+  const canvasPointFromClient = (clientX, clientY) => {
+    const rect = svg.getBoundingClientRect();
+    return {
+      x: (clientX - rect.left - state.pan.x) / state.zoom,
+      y: (clientY - rect.top - state.pan.y) / state.zoom,
+    };
+  };
+
+  const startDependencyDrag = (event, sourceTask) => {
+    if (event.pointerType !== "mouse" || event.button !== 0) return;
+    const start = state.canvasTaskPositions.get(sourceTask.id);
+    if (!start) return;
+    event.preventDefault();
+    event.stopPropagation();
+    let moved = false;
+    const preview = svgEl("line", {
+      x1: start.x, y1: start.y, x2: start.x, y2: start.y,
+      class: "dependency-line dependency-preview",
+      "marker-end": "url(#dependency-arrow)",
+    }, gDependencies);
+    for (const candidate of svg.querySelectorAll(".task-node[data-task-id]")) {
+      if (Number(candidate.dataset.taskId) !== sourceTask.id) {
+        candidate.classList.add("dependency-target");
+      }
+    }
+
+    const cleanup = () => {
+      preview.remove();
+      for (const candidate of svg.querySelectorAll(".dependency-target")) {
+        candidate.classList.remove("dependency-target");
+      }
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", cancel);
+    };
+    const move = (moveEvent) => {
+      if (moveEvent.pointerId !== event.pointerId) return;
+      const point = canvasPointFromClient(moveEvent.clientX, moveEvent.clientY);
+      preview.setAttribute("x2", point.x);
+      preview.setAttribute("y2", point.y);
+      moved = moved || Math.hypot(point.x - start.x, point.y - start.y) > 5;
+    };
+    const finish = async (upEvent) => {
+      if (upEvent.pointerId !== event.pointerId) return;
+      const targetElement = document.elementFromPoint(upEvent.clientX, upEvent.clientY)
+        ?.closest?.(".task-node[data-task-id]");
+      const targetTaskId = targetElement ? Number(targetElement.dataset.taskId) : null;
+      cleanup();
+      if (!moved) return;
+      suppressNextClick = true;
+      setTimeout(() => { suppressNextClick = false; }, 0);
+      if (!targetTaskId || targetTaskId === sourceTask.id) return;
+      try {
+        const result = await api(`/api/tasks/${sourceTask.id}/dependencies`, "POST", {
+          prerequisite_task_id: targetTaskId,
+        });
+        toast(result.created === false ? "依赖关系已存在" : "已建立事务依赖");
+        await reload();
+      } catch (_error) {
+        // api() 已显示自依赖、循环依赖或跨空间等具体错误。
+      }
+    };
+    const cancel = (cancelEvent) => {
+      if (cancelEvent.pointerId === event.pointerId) cleanup();
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", cancel);
   };
 
   /* 单个事务节点 + 标签 */
@@ -873,6 +961,9 @@ function renderCanvas() {
       state.selectedLineId = line.id;
       state.selectedTaskId = t.id;
       render();
+    });
+    node.addEventListener("pointerdown", (e) => {
+      if (state.selectedTaskId === t.id) startDependencyDrag(e, t);
     });
     node.addEventListener("dblclick", (e) => {
       e.stopPropagation();
@@ -952,6 +1043,9 @@ function renderCanvas() {
         (hs.some((h) => h.soon) ? "health-soon" :
           (hs.some((h) => h.stale) ? "health-stale" : ""));
       const g = svgEl("g", { class: "cluster-node" }, gTasks);
+      for (const task of arr) {
+        state.canvasTaskPositions.set(task.id, { x: cx, y: baseY });
+      }
       /* 底层错位三角形暗示"这是一叠节点" */
       const backNode = svgEl("polygon", {
         points: trianglePoints(cx + 3, baseY + 3, 13),
@@ -1016,6 +1110,34 @@ function renderCanvas() {
       title.textContent = "折叠同天事务";
       g.addEventListener("click", toggle);
     }
+  }
+
+  const dependencySegment = (from, to) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < 2) return null;
+    const ux = dx / distance;
+    const uy = dy / distance;
+    return {
+      x1: from.x + ux * 10, y1: from.y + uy * 10,
+      x2: to.x - ux * 10, y2: to.y - uy * 10,
+    };
+  };
+  for (const dependency of state.dependencies) {
+    const from = state.canvasTaskPositions.get(dependency.dependent_task_id);
+    const to = state.canvasTaskPositions.get(dependency.prerequisite_task_id);
+    if (!from || !to) continue;
+    const segment = dependencySegment(from, to);
+    if (!segment) continue;
+    const dependent = taskById(dependency.dependent_task_id);
+    const prerequisite = taskById(dependency.prerequisite_task_id);
+    const path = svgEl("line", {
+      ...segment, class: "dependency-line",
+      "marker-end": "url(#dependency-arrow)",
+    }, gDependencies);
+    const title = svgEl("title", {}, path);
+    title.textContent = `${dependent?.name || "事务"} 依赖 ${prerequisite?.name || "事务"}`;
   }
 
   /* 点击空白取消选中 */
@@ -1146,6 +1268,19 @@ function renderTable() {
     tdSt.appendChild(selSt);
     tr.appendChild(tdSt);
 
+    const tdDependencies = document.createElement("td");
+    const dependencyIds = prerequisiteIds(t.id);
+    const dependencyButton = document.createElement("button");
+    dependencyButton.type = "button";
+    dependencyButton.className = "dependency-config-button";
+    dependencyButton.textContent = dependencyIds.length ? `${dependencyIds.length} 项` : "配置";
+    dependencyButton.title = dependencyIds.length
+      ? dependencyIds.map((id) => taskById(id)?.name).filter(Boolean).join("、")
+      : "配置依赖事务";
+    dependencyButton.onclick = () => openTaskDependenciesModal(t);
+    tdDependencies.appendChild(dependencyButton);
+    tr.appendChild(tdDependencies);
+
     /* 日期 */
     const dateField = (key, val) => {
       const td = document.createElement("td");
@@ -1187,7 +1322,7 @@ function renderTable() {
   if (!sorted.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 15;
+    td.colSpan = 16;
     td.style.color = "#8c959f";
     td.textContent = state.tasks.length ? "没有匹配筛选条件的事务。" : "暂无事务，点击「+ 新增事务」添加。";
     tr.appendChild(td);
@@ -1355,6 +1490,60 @@ function lineOptionLabel(line) {
   return `${line.parent_id === null ? "主线" : "支线"} · ${names.join(" / ")}`;
 }
 
+function createDependencyPicker(body, task, selectedIds = []) {
+  const selected = new Set(selectedIds);
+  const candidates = state.tasks
+    .filter((candidate) => !task || candidate.id !== task.id)
+    .sort((a, b) => a.start_date.localeCompare(b.start_date) || a.id - b.id);
+  const picker = document.createElement("div");
+  picker.className = "dependency-picker";
+  body._dependencyChecks = [];
+  if (!candidates.length) {
+    const empty = document.createElement("div");
+    empty.className = "dependency-empty";
+    empty.textContent = "暂无其他事务";
+    picker.appendChild(empty);
+  }
+  for (const candidate of candidates) {
+    const option = document.createElement("label");
+    option.className = "dependency-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selected.has(candidate.id);
+    const text = document.createElement("span");
+    const line = lineById(candidate.line_id);
+    text.textContent = `${candidate.name} · ${line ? line.name : "未知线"}`;
+    const status = document.createElement("span");
+    status.className = "dependency-status";
+    status.textContent = candidate.status;
+    status.style.color = statusColor(candidate.status);
+    option.appendChild(checkbox);
+    option.appendChild(text);
+    option.appendChild(status);
+    picker.appendChild(option);
+    body._dependencyChecks.push({ checkbox, taskId: candidate.id });
+  }
+  field(body, "依赖事务", picker);
+}
+
+function selectedDependencyIds(body) {
+  return (body._dependencyChecks || [])
+    .filter(({ checkbox }) => checkbox.checked)
+    .map(({ taskId }) => taskId);
+}
+
+function openTaskDependenciesModal(task) {
+  openModal(`配置依赖（${task.name}）`, (body) => {
+    createDependencyPicker(body, task, prerequisiteIds(task.id));
+  }, async () => {
+    const body = $("#modal-body");
+    await api(`/api/tasks/${task.id}`, "PATCH", {
+      prerequisite_ids: selectedDependencyIds(body),
+    });
+    await reload();
+  });
+}
+
 /* 新建/编辑事务 */
 function openTaskModal(task, lineId = null, allowLineSelection = false) {
   const isNew = !task;
@@ -1431,6 +1620,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
       body._start = field(body, "起始日期",
         input("date", task ? task.start_date : initialStart));
       body._end = field(body, "结束日期", input("date", task && task.end_date || ""));
+      createDependencyPicker(body, task, task ? prerequisiteIds(task.id) : []);
 
       if (body._line) {
         const syncStartDate = () => {
@@ -1475,6 +1665,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         status: body._status.value,
         start_date: body._start.value || state.today,
         end_date: body._end.value || null,
+        prerequisite_ids: selectedDependencyIds(body),
       };
       if (!payload.name) { toast("事务名不能为空"); return false; }
       if (isNew) {

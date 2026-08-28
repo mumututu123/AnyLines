@@ -232,6 +232,14 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .task-node.health-overdue { stroke: #cf222e; stroke-width: 4; }
 .task-node.health-soon { stroke: #d4a72c; stroke-width: 4; }
 .task-node.health-stale { stroke: #8250df; stroke-width: 4; }
+.dependency-line {
+  stroke: #57606a; stroke-width: 1.6; stroke-dasharray: 6 5;
+  opacity: .78; pointer-events: stroke;
+}
+.dependency-line:hover { stroke: #0969da; stroke-width: 2.2; opacity: 1; }
+.dependency-preview { stroke: #0969da; stroke-width: 2; opacity: .95; pointer-events: none; }
+.dependency-arrow-head { fill: #57606a; }
+.task-node.dependency-target { filter: drop-shadow(0 0 5px rgba(9, 105, 218, .9)); }
 
 /* 同天多事务聚合节点 */
 .cluster-node { cursor: pointer; }
@@ -286,6 +294,11 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   font-size: 13px; margin-right: 8px;
 }
 .row-del { color: #cf222e; cursor: pointer; border: none; background: none; font-size: 13px; }
+.dependency-config-button {
+  min-width: 54px; padding: 4px 9px; border: 1px solid #d0d7de;
+  border-radius: 6px; background: #f6f8fa; color: #0969da; cursor: pointer;
+}
+.dependency-config-button:hover { background: #eaeef2; }
 .status-badge { padding: 1px 8px; border-radius: 10px; color: #fff; font-size: 12px; }
 
 /* ---------------- modal & toast ---------------- */
@@ -306,6 +319,20 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   font-size: 13px; font-family: inherit;
 }
 #modal-body textarea { resize: vertical; min-height: 52px; }
+.dependency-picker {
+  max-height: 190px; overflow: auto; border: 1px solid #d8dee4;
+  border-radius: 6px; background: #fff;
+}
+#modal-body .dependency-option {
+  display: grid; grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center; gap: 8px; min-height: 36px; margin: 0; padding: 7px 9px;
+  border-bottom: 1px solid #eaeef2; color: #24292f; cursor: pointer;
+}
+#modal-body .dependency-option:last-child { border-bottom: 0; }
+#modal-body .dependency-option:hover { background: #f6f8fa; }
+#modal-body .dependency-option input { width: 16px; height: 16px; margin: 0; }
+.dependency-status { font-size: 11px; font-weight: 600; }
+.dependency-empty { padding: 12px; color: #8c959f; font-size: 12px; }
 #modal-btns {
   display: flex; align-items: flex-end; justify-content: flex-end;
   gap: 8px; margin-top: 14px;
