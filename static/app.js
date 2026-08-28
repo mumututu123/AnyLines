@@ -436,24 +436,20 @@ function renderCanvas() {
   }
   const lineY = (id) => rowCenter.get(id);
 
-  const BRANCH_CURVE_W = 24;
+  const BRANCH_SLOPE = Math.tan(70 * Math.PI / 180);  // |dy / dx|，统一为 70°。
+  const BRANCH_CORNER_R = 6;
   const lineGeometryCache = new Map();
 
-  const cubicPoint = (curve, t) => {
-    const mt = 1 - t;
-    return {
-      x: mt ** 3 * curve.p0.x + 3 * mt ** 2 * t * curve.p1.x +
-        3 * mt * t ** 2 * curve.p2.x + t ** 3 * curve.p3.x,
-      y: mt ** 3 * curve.p0.y + 3 * mt ** 2 * t * curve.p1.y +
-        3 * mt * t ** 2 * curve.p2.y + t ** 3 * curve.p3.y,
-    };
-  };
-
-  /* 同日创建的嵌套支线从父支线贝塞尔曲线的中点继续分叉。 */
+  /* 同日创建的嵌套支线从父支线可见斜线段的中点继续分叉。 */
   const branchStartPoint = (line, parent) => {
     if (parent.parent_id !== null && line.fork_date === parent.fork_date) {
-      const parentCurve = lineGeometry(parent).curve;
-      if (parentCurve) return cubicPoint(parentCurve, 0.5);
+      const parentGeometry = lineGeometry(parent);
+      if (parentGeometry.diagonalEnd) {
+        return {
+          x: (parentGeometry.start.x + parentGeometry.diagonalEnd.x) / 2,
+          y: (parentGeometry.start.y + parentGeometry.diagonalEnd.y) / 2,
+        };
+      }
     }
     return { x: x(line.fork_date), y: lineY(parent.id) };
   };
@@ -464,24 +460,38 @@ function renderCanvas() {
     const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
     if (!parent) {
       const point = { x: x(line.fork_date), y };
-      const geometry = { start: point, curve: null, horizontalStart: point };
+      const geometry = {
+        start: point, diagonalEnd: null, corner: null, horizontalStart: point,
+      };
       lineGeometryCache.set(line.id, geometry);
       return geometry;
     }
 
     const start = branchStartPoint(line, parent);
-    const curve = {
-      p0: start,
-      p1: { x: start.x + 16, y: start.y },
-      p2: { x: start.x, y },
-      p3: { x: start.x + BRANCH_CURVE_W, y },
+    const verticalDistance = Math.abs(y - start.y);
+    const corner = { x: start.x + verticalDistance / BRANCH_SLOPE, y };
+    const dx = corner.x - start.x;
+    const dy = corner.y - start.y;
+    const diagonalLength = Math.hypot(dx, dy);
+    const trim = Math.min(BRANCH_CORNER_R, diagonalLength / 3);
+    const diagonalEnd = {
+      x: corner.x - dx / diagonalLength * trim,
+      y: corner.y - dy / diagonalLength * trim,
     };
-    const geometry = { start, curve, horizontalStart: curve.p3 };
+    const horizontalStart = { x: corner.x + BRANCH_CORNER_R, y };
+    const geometry = { start, diagonalEnd, corner, horizontalStart };
     lineGeometryCache.set(line.id, geometry);
     return geometry;
   }
 
-  const contentWidth = Math.max(x(stop.toISOString().slice(0, 10)) + CV.padR, 900);
+  const geometryRight = Math.max(
+    ...visibleLines.map((line) => lineGeometry(line).horizontalStart.x)
+  );
+  const contentWidth = Math.max(
+    x(stop.toISOString().slice(0, 10)) + CV.padR,
+    geometryRight + CV.padR,
+    900
+  );
   const contentHeight = cursorY + 60;
   const width = Math.max(contentWidth, wrap.clientWidth);
   const height = Math.max(contentHeight, wrap.clientHeight);
@@ -538,10 +548,10 @@ function renderCanvas() {
 
     let d = "";
     if (parent) {
-      /* 从父线拉出的贝塞尔分叉 */
-      const { p0, p1, p2, p3 } = geometry.curve;
-      d += `M ${p0.x} ${p0.y} C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ` +
-        `${p3.x} ${p3.y} `;
+      /* 从父线斜向拉出，并用二次曲线平滑过渡到水平线。 */
+      const { start, diagonalEnd, corner, horizontalStart } = geometry;
+      d += `M ${start.x} ${start.y} L ${diagonalEnd.x} ${diagonalEnd.y} ` +
+        `Q ${corner.x} ${corner.y}, ${horizontalStart.x} ${horizontalStart.y} `;
       d += `L ${x2} ${y}`;
     } else {
       d = `M ${x1} ${y} L ${x2} ${y}`;
@@ -635,7 +645,7 @@ function renderCanvas() {
   /* ---- 事务节点（同线同天多事务折叠为聚合节点，点击展开/折叠） ---- */
   const gTasks = svgEl("g", {}, root);
 
-  /* 事务日期为分叉当日时，钳制到对应支线贝塞尔曲线后的水平段。 */
+  /* 事务日期为分叉当日时，钳制到对应支线圆角过渡后的水平段。 */
   const nodeX = (t) => {
     const ln = lineById(t.line_id);
     const lineStart = lineGeometry(ln).horizontalStart.x;

@@ -99,7 +99,10 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .month-label { fill: #c3cad1; font-size: 10px; }
 .year-label  { fill: #aeb7bf; font-size: 12px; font-weight: 600; }
 
-.line-path { fill: none; stroke-width: 3; cursor: pointer; }
+.line-path {
+  fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round;
+  cursor: pointer;
+}
 .line-path.selected { stroke-width: 5; filter: drop-shadow(0 0 3px rgba(9,105,218,.6)); }
 .line-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
 .line-label { font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
