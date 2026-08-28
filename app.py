@@ -15,6 +15,16 @@ from werkzeug.exceptions import HTTPException
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "anyline.db")
 DEFAULT_STATUS_ENUM = ["未启动", "进行中", "有风险", "等待中", "已暂停", "已闭环", "已取消"]
+DEFAULT_STATUS_COLORS = {
+    "未启动": "#8c959f",
+    "进行中": "#0969da",
+    "有风险": "#d4a72c",
+    "等待中": "#0e7490",
+    "已暂停": "#8250df",
+    "已闭环": "#1a7f37",
+    "已取消": "#57606a",
+}
+FALLBACK_STATUS_COLOR = "#6e7781"
 PRIORITY_ENUM = ["低", "中", "高", "紧急"]
 TASK_EXPORT_COLUMNS = (
     ("事务ID", "id", 12),
@@ -301,6 +311,31 @@ def get_statuses(db):
     return statuses
 
 
+def get_status_colors(db, statuses=None):
+    statuses = statuses or get_statuses(db)
+    stored = {}
+    raw = get_meta(db, "status_colors")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                for status, color in parsed.items():
+                    try:
+                        normalized = line_color(color)
+                    except ApiError:
+                        continue
+                    if isinstance(status, str) and status and normalized:
+                        stored[status] = normalized
+        except ValueError:
+            pass
+    return {
+        status: stored.get(
+            status, DEFAULT_STATUS_COLORS.get(status, FALLBACK_STATUS_COLOR)
+        )
+        for status in statuses
+    }
+
+
 # ------------------------------------------------------------------- routes
 @app.route("/")
 def index():
@@ -310,6 +345,7 @@ def index():
 @app.route("/api/state")
 def api_state():
     db = get_db()
+    statuses = get_statuses(db)
     lines = [dict(r) for r in db.execute(
         "SELECT id,name,description,color,parent_id,fork_date,merge_date,updated_at "
         "FROM lines "
@@ -324,7 +360,8 @@ def api_state():
         "lines": lines,
         "tasks": tasks,
         "can_undo": get_meta(db, "undo_batch") is not None,
-        "status_enum": get_statuses(db),
+        "status_enum": statuses,
+        "status_colors": get_status_colors(db, statuses),
         "priority_enum": PRIORITY_ENUM,
         "owners": get_owners(db),
         "today": date.today().isoformat(),
@@ -370,7 +407,12 @@ def api_set_owners():
 # ----- statuses (进展状态配置)
 @app.route("/api/statuses", methods=["GET"])
 def api_get_statuses():
-    return jsonify({"statuses": get_statuses(get_db())})
+    db = get_db()
+    statuses = get_statuses(db)
+    return jsonify({
+        "statuses": statuses,
+        "colors": get_status_colors(db, statuses),
+    })
 
 
 @app.route("/api/statuses", methods=["PUT"])
@@ -389,9 +431,40 @@ def api_set_statuses():
     if not cleaned:
         return jsonify({"error": "进展状态不能为空"}), 400
     db = get_db()
+    colors = d.get("colors", {})
+    if not isinstance(colors, dict) or \
+            not all(isinstance(k, str) and isinstance(v, str)
+                    for k, v in colors.items()):
+        return jsonify({"error": "colors 必须是状态名到颜色的对象"}), 400
+    unknown_colors = set(colors) - set(cleaned)
+    if unknown_colors:
+        return jsonify({"error": "颜色配置包含未知状态"}), 400
+    normalized_colors = {}
+    for status, color in colors.items():
+        normalized = line_color(color)
+        if normalized is None:
+            return jsonify({"error": "状态颜色不能为空"}), 400
+        normalized_colors[status] = normalized
+
+    previous_colors = get_status_colors(db)
     set_meta(db, "statuses", json.dumps(cleaned, ensure_ascii=False))
+    effective_statuses = get_statuses(db)
+    effective_colors = {
+        status: normalized_colors.get(
+            status,
+            previous_colors.get(
+                status, DEFAULT_STATUS_COLORS.get(status, FALLBACK_STATUS_COLOR)
+            ),
+        )
+        for status in effective_statuses
+    }
+    set_meta(db, "status_colors", json.dumps(effective_colors, ensure_ascii=False))
     db.commit()
-    return jsonify({"ok": True, "statuses": get_statuses(db)})
+    return jsonify({
+        "ok": True,
+        "statuses": effective_statuses,
+        "colors": effective_colors,
+    })
 
 
 # ----- lines

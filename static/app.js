@@ -5,7 +5,8 @@ const $ = (sel) => document.querySelector(sel);
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = {
-  lines: [], tasks: [], canUndo: false, statusEnum: [], priorityEnum: [], owners: [], today: "",
+  lines: [], tasks: [], canUndo: false, statusEnum: [], statusColors: {},
+  priorityEnum: [], owners: [], today: "",
   selectedLineId: null,
   selectedTaskId: null,
   selectedTaskIds: new Set(),
@@ -26,6 +27,11 @@ const STALE_DAYS = 7;
 const DONE_STATUSES = new Set(["已闭环", "已取消"]);
 const RISK_STATUSES = new Set(["有风险"]);
 const PRIORITY_WEIGHT = { "低": 1, "中": 2, "高": 3, "紧急": 4 };
+const DEFAULT_STATUS_COLORS = {
+  "未启动": "#8c959f", "进行中": "#0969da", "有风险": "#d4a72c",
+  "等待中": "#0e7490", "已暂停": "#8250df", "已闭环": "#1a7f37",
+  "已取消": "#57606a",
+};
 
 /* ---------------------------------------------- 界面偏好记忆 (localStorage) */
 const PREFS_KEY = "anyline.prefs";
@@ -109,6 +115,26 @@ function priorityRank(p) { return PRIORITY_WEIGHT[p] || 0; }
 function statusClass(status) {
   return ["未启动", "进行中", "有风险", "等待中", "已暂停", "已闭环", "已取消"].includes(status)
     ? `st-${status}` : "st-custom";
+}
+function statusColor(status) {
+  return state.statusColors[status] || DEFAULT_STATUS_COLORS[status] || "#6e7781";
+}
+function decorateStatusSelect(select) {
+  select.classList.add("status-select");
+  for (const option of select.options) {
+    if (option.value) option.style.color = statusColor(option.value);
+  }
+  const paint = () => {
+    const hasStatus = Boolean(select.value);
+    select.classList.toggle("has-status", hasStatus);
+    if (hasStatus) {
+      select.style.setProperty("--status-color", statusColor(select.value));
+    } else {
+      select.style.removeProperty("--status-color");
+    }
+  };
+  select.oninput = paint;
+  paint();
 }
 function ownerOptions() {
   const owners = new Set(state.owners);
@@ -197,6 +223,7 @@ async function reload() {
   state.tasks = d.tasks;
   state.canUndo = d.can_undo;
   state.statusEnum = d.status_enum;
+  state.statusColors = d.status_colors || {};
   state.priorityEnum = d.priority_enum || ["低", "中", "高", "紧急"];
   state.owners = d.owners || [];
   state.today = d.today;
@@ -273,6 +300,8 @@ function renderFilterControls() {
   $("#filter-q").value = state.filters.q;
   $("#filter-due").value = state.filters.due;
   $("#sort-tasks").value = state.sort;
+  decorateStatusSelect($("#filter-status"));
+  decorateStatusSelect($("#bulk-status"));
 }
 
 function renderSummary() {
@@ -658,10 +687,11 @@ function renderCanvas() {
     const cx = nodeX(t);
 
     if (t.end_date && t.end_date > t.start_date) {
-      svgEl("rect", {
+      const bar = svgEl("rect", {
         x: cx, y: y - 4, width: Math.max(x(t.end_date) - cx, 2), height: 8,
         rx: 4, class: `task-bar ${statusClass(t.status)}`,
       }, gTasks);
+      bar.style.fill = statusColor(t.status);
     }
 
     const health = taskHealth(t);
@@ -671,6 +701,7 @@ function renderCanvas() {
       "data-task-id": t.id,
       class: `task-node ${statusClass(t.status)} ${health.className}`,
     }, gTasks);
+    node.style.fill = statusColor(t.status);
     state.canvasTaskPositions.set(t.id, { x: cx, y });
     node.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -757,8 +788,10 @@ function renderCanvas() {
           (hs.some((h) => h.stale) ? "health-stale" : ""));
       const g = svgEl("g", { class: "cluster-node" }, gTasks);
       /* 底层双环暗示"这是一叠节点" */
-      svgEl("circle", { cx: cx + 3, cy: baseY + 3, r: 9, class: `task-node ${statusClass(st)} ${clusterHealth}`, opacity: .35 }, g);
+      const backNode = svgEl("circle", { cx: cx + 3, cy: baseY + 3, r: 9, class: `task-node ${statusClass(st)} ${clusterHealth}`, opacity: .35 }, g);
       const node = svgEl("circle", { cx, cy: baseY, r: 9, class: `task-node ${statusClass(st)} ${clusterHealth}` }, g);
+      backNode.style.fill = statusColor(st);
+      node.style.fill = statusColor(st);
       /* 数量徽标 */
       const badge = svgEl("text", {
         x: cx, y: baseY + 3.5, "text-anchor": "middle", class: "cluster-count",
@@ -935,6 +968,7 @@ function renderTable() {
       selSt.appendChild(o);
     }
     selSt.onchange = () => saveTask(t.id, { status: selSt.value });
+    decorateStatusSelect(selSt);
     tdSt.appendChild(selSt);
     tr.appendChild(tdSt);
 
@@ -1213,6 +1247,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         if (task && s === task.status) o.selected = true;
         sel.appendChild(o);
       }
+      decorateStatusSelect(sel);
       body._status = field(body, "进展状态", sel);
       const initialLine = lineById(lineId);
       const initialStart = !task && initialLine && initialLine.fork_date > state.today ?
@@ -1375,20 +1410,66 @@ $("#btn-owners").onclick = () => {
 
 $("#btn-statuses").onclick = () => {
   openModal("配置进展状态", (body) => {
-    const ta = document.createElement("textarea");
-    ta.rows = 8;
-    ta.value = state.statusEnum.join("\n");
-    body._statuses = field(body, "进展状态（每行一个）", ta);
+    const list = document.createElement("div");
+    list.className = "status-config-list";
+    const addRow = (name = "", color = "#6e7781") => {
+      const row = document.createElement("div");
+      row.className = "status-config-row";
+      const colorInput = input("color", color);
+      colorInput.className = "status-color-input";
+      colorInput.title = "状态颜色";
+      const nameInput = input("text", name);
+      nameInput.placeholder = "状态名称";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "status-remove";
+      remove.title = "删除状态";
+      remove.textContent = "×";
+      remove.onclick = () => row.remove();
+      row.appendChild(colorInput);
+      row.appendChild(nameInput);
+      row.appendChild(remove);
+      row._name = nameInput;
+      row._color = colorInput;
+      list.appendChild(row);
+    };
+    state.statusEnum.forEach((status) => addRow(status, statusColor(status)));
+    body.appendChild(list);
+    body._statusList = list;
+    const add = document.createElement("button");
+    add.type = "button";
+    add.className = "status-add";
+    add.textContent = "+ 添加状态";
+    add.onclick = () => {
+      addRow("", LINE_COLORS[list.children.length % LINE_COLORS.length]);
+      list.lastElementChild._name.focus();
+    };
+    body.appendChild(add);
     const hint = document.createElement("div");
     hint.className = "opt-hint";
     hint.textContent = "已有事务使用的历史状态会继续保留，避免数据无法编辑。";
     body.appendChild(hint);
-    ta.focus();
+    list.firstElementChild?._name.focus();
   }, async () => {
-    const statuses = $("#modal-body")._statuses.value
-      .split("\n").map((s) => s.trim()).filter(Boolean);
-    await api("/api/statuses", "PUT", { statuses });
-    toast(`状态已保存（${statuses.length} 项）`);
+    const rows = [...$("#modal-body")._statusList.children];
+    const statuses = [];
+    const colors = {};
+    for (const row of rows) {
+      const status = row._name.value.trim();
+      if (!status) continue;
+      if (statuses.includes(status)) {
+        toast(`状态名称不能重复：${status}`);
+        return false;
+      }
+      statuses.push(status);
+      colors[status] = row._color.value;
+    }
+    if (!statuses.length) {
+      toast("至少保留一个进展状态");
+      return false;
+    }
+    const result = await api("/api/statuses", "PUT", { statuses, colors });
+    toast(`状态已保存（${result.statuses.length} 项）`);
     reload();
   });
 };

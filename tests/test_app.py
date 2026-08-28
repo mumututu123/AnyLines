@@ -101,6 +101,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(state["tasks"], [])
         self.assertFalse(state["can_undo"])
         self.assertEqual(state["priority_enum"], ["低", "中", "高", "紧急"])
+        self.assertEqual(state["status_colors"]["进行中"], "#0969da")
 
     def test_configuration_validation_and_deduplication(self):
         status, data = self.request(
@@ -110,16 +111,30 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(data["owners"], ["张三", "李四"])
 
         status, data = self.request(
-            "PUT", "/api/statuses", {"statuses": ["待办", "处理中", "待办"]}
+            "PUT", "/api/statuses", {
+                "statuses": ["待办", "处理中", "待办"],
+                "colors": {"待办": "#AABBCC", "处理中": "#123456"},
+            }
         )
         self.assertEqual(status, 200)
         self.assertEqual(data["statuses"], ["待办", "处理中"])
+        self.assertEqual(data["colors"], {"待办": "#aabbcc", "处理中": "#123456"})
         self.assertEqual(self.request("GET", "/api/owners")[1]["owners"], ["张三", "李四"])
-        self.assertEqual(self.request("GET", "/api/statuses")[1]["statuses"], ["待办", "处理中"])
+        status_config = self.request("GET", "/api/statuses")[1]
+        self.assertEqual(status_config["statuses"], ["待办", "处理中"])
+        self.assertEqual(status_config["colors"]["待办"], "#aabbcc")
+        state = self.request("GET", "/api/state")[1]
+        self.assertEqual(state["status_colors"]["处理中"], "#123456")
 
         status, data = self.request("PUT", "/api/statuses", {"statuses": []})
         self.assertEqual(status, 400)
         self.assertIn("不能为空", data["error"])
+
+        status, data = self.request("PUT", "/api/statuses", {
+            "statuses": ["待办"], "colors": {"待办": "red"},
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("#RRGGBB", data["error"])
 
         status, data = self.request("PUT", "/api/owners", {"owners": "张三"})
         self.assertEqual(status, 400)
