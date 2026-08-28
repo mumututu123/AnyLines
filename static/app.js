@@ -561,10 +561,7 @@ function renderCanvas() {
       "data-task-id": t.id,
       class: `task-node ${statusClass(t.status)} ${health.className}`,
     }, gTasks);
-    state.canvasTaskPositions.set(t.id, {
-      x: state.pan.x + cx * state.zoom,
-      y: state.pan.y + y * state.zoom,
-    });
+    state.canvasTaskPositions.set(t.id, { x: cx, y });
     node.addEventListener("click", (e) => {
       e.stopPropagation();
       state.selectedLineId = line.id;
@@ -898,9 +895,16 @@ function locateTask(id) {
 function scrollToCanvasTask(id) {
   const pos = state.canvasTaskPositions.get(id);
   if (!pos) return;
+  centerCanvasPoint(pos.x, pos.y);
+}
+
+function centerCanvasPoint(x, y = null) {
   const wrap = $("#canvas-wrap");
-  wrap.scrollLeft = Math.max(0, pos.x - wrap.clientWidth / 2);
-  wrap.scrollTop = Math.max(0, pos.y - wrap.clientHeight / 2);
+  state.pan.x = wrap.scrollLeft + wrap.clientWidth / 2 - x * state.zoom;
+  if (y !== null) {
+    state.pan.y = wrap.scrollTop + wrap.clientHeight / 2 - y * state.zoom;
+  }
+  applyPanTransform();
 }
 
 /* ============================================================== 弹窗 */
@@ -1304,11 +1308,9 @@ $("#btn-bulk-delete").onclick = async () => {
 };
 
 $("#btn-today").onclick = () => {
-  const wrap = $("#canvas-wrap");
   const line = $("#graph .today-line");
   if (!line) return;
-  const x = state.pan.x + parseFloat(line.getAttribute("x1")) * state.zoom;
-  wrap.scrollLeft = Math.max(0, x - wrap.clientWidth / 2);
+  centerCanvasPoint(parseFloat(line.getAttribute("x1")));
 };
 $("#btn-fit").onclick = () => {
   state.zoom = 1;
