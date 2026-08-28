@@ -697,10 +697,28 @@ function renderCanvas() {
   }, svg);
   const defs = svgEl("defs", {}, root);
   const dependencyArrow = svgEl("marker", {
-    id: "dependency-arrow", viewBox: "0 0 8 8", refX: 7, refY: 4,
+    id: "dependency-preview-arrow", viewBox: "0 0 8 8", refX: 7, refY: 4,
     markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse",
   }, defs);
-  svgEl("path", { d: "M 0 0 L 8 4 L 0 8 z", class: "dependency-arrow-head" }, dependencyArrow);
+  const previewArrowHead = svgEl("path", {
+    d: "M 0 0 L 8 4 L 0 8 z", class: "dependency-arrow-head",
+  }, dependencyArrow);
+  previewArrowHead.style.fill = "#0969da";
+  const dependencyMarkerIds = new Map();
+  const dependencyMarkerFor = (task) => {
+    if (dependencyMarkerIds.has(task.id)) return dependencyMarkerIds.get(task.id);
+    const markerId = `dependency-arrow-${task.id}`;
+    const marker = svgEl("marker", {
+      id: markerId, viewBox: "0 0 8 8", refX: 7, refY: 4,
+      markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse",
+    }, defs);
+    const arrowHead = svgEl("path", {
+      d: "M 0 0 L 8 4 L 0 8 z", class: "dependency-arrow-head",
+    }, marker);
+    arrowHead.style.fill = statusColor(task.status);
+    dependencyMarkerIds.set(task.id, markerId);
+    return markerId;
+  };
 
   /* ---- 年月时间轴（淡淡显示） ---- */
   const gGrid = svgEl("g", {}, root);
@@ -881,7 +899,7 @@ function renderCanvas() {
     const preview = svgEl("line", {
       x1: start.x, y1: start.y, x2: start.x, y2: start.y,
       class: "dependency-line dependency-preview",
-      "marker-end": "url(#dependency-arrow)",
+      "marker-end": "url(#dependency-preview-arrow)",
     }, gDependencies);
     for (const candidate of svg.querySelectorAll(".task-node[data-task-id]")) {
       if (Number(candidate.dataset.taskId) !== sourceTask.id) {
@@ -1134,8 +1152,9 @@ function renderCanvas() {
     const prerequisite = taskById(dependency.prerequisite_task_id);
     const path = svgEl("line", {
       ...segment, class: "dependency-line",
-      "marker-end": "url(#dependency-arrow)",
+      "marker-end": `url(#${dependencyMarkerFor(prerequisite)})`,
     }, gDependencies);
+    path.style.stroke = statusColor(prerequisite.status);
     const title = svgEl("title", {}, path);
     title.textContent = `${dependent?.name || "事务"} 依赖 ${prerequisite?.name || "事务"}`;
   }
