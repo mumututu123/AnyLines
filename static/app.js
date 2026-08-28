@@ -1268,7 +1268,7 @@ function renderTable() {
 
     /* 责任人：配置了名单则下拉选择，否则文本输入 */
     const tdOwner = document.createElement("td");
-    const ownerEl = ownerInput(t.owner);
+    const ownerEl = ownerInput(t.owner, true);
     ownerEl.onchange = () => saveTask(t.id, { owner: ownerEl.value });
     tdOwner.appendChild(ownerEl);
     tr.appendChild(tdOwner);
@@ -1292,7 +1292,7 @@ function renderTable() {
     const dependencyButton = document.createElement("button");
     dependencyButton.type = "button";
     dependencyButton.className = "dependency-config-button";
-    dependencyButton.textContent = dependencyIds.length ? `${dependencyIds.length} 项` : "配置";
+    dependencyButton.textContent = dependencyIds.length ? `${dependencyIds.length} 项` : "+";
     dependencyButton.title = dependencyIds.length
       ? dependencyIds.map((id) => taskById(id)?.name).filter(Boolean).join("、")
       : "配置依赖事务";
@@ -1392,6 +1392,7 @@ function openModal(title, bodyBuilder, onOk) {
   $("#modal-ok").textContent = "确定";
   const body = $("#modal-body");
   body.innerHTML = "";
+  $("#modal-header-tools").innerHTML = "";
   $("#modal-tools").innerHTML = "";
   bodyBuilder(body);
   $("#modal-mask").classList.remove("hidden");
@@ -1411,11 +1412,20 @@ function openModal(title, bodyBuilder, onOk) {
   };
 }
 
-function field(parent, labelText, el) {
+function field(parent, labelText, el, required = false) {
   const div = document.createElement("div");
   div.className = "field";
   const lb = document.createElement("label");
-  lb.textContent = labelText;
+  if (required) {
+    const mark = document.createElement("span");
+    mark.className = "required-mark";
+    mark.textContent = "*";
+    mark.setAttribute("aria-hidden", "true");
+    lb.appendChild(mark);
+    el.required = true;
+    el.setAttribute("aria-required", "true");
+  }
+  lb.appendChild(document.createTextNode(labelText));
   div.appendChild(lb);
   div.appendChild(el);
   parent.appendChild(div);
@@ -1429,15 +1439,16 @@ function input(type = "text", value = "") {
 
 /*
  * 责任人输入控件：
- * - 配置了名单 -> 下拉选择（含"（不指定）"；当前值不在名单时保留为一项以免丢数据）
+ * - 配置了名单 -> 下拉选择；当前值不在名单时保留为一项以免丢数据
  * - 未配置名单 -> 普通文本框
  */
-function ownerInput(value = "") {
+function ownerInput(value = "", required = false) {
   if (!state.owners.length) return input("text", value);
   const sel = document.createElement("select");
   const empty = document.createElement("option");
   empty.value = "";
-  empty.textContent = "（不指定）";
+  empty.textContent = required ? "请选择责任人" : "（不指定）";
+  empty.disabled = required;
   sel.appendChild(empty);
   const names = [...state.owners];
   if (value && !names.includes(value)) names.unshift(value);  // 保留历史值
@@ -1509,20 +1520,33 @@ function lineOptionLabel(line) {
   return `${line.parent_id === null ? "主线" : "支线"} · ${names.join(" / ")}`;
 }
 
-function createDependencyPicker(body, task, selectedIds = []) {
+function createDependencyPicker(body, task, selectedIds = [], parent = body) {
   const selected = new Set(selectedIds);
   const candidates = state.tasks
     .filter((candidate) => !task || candidate.id !== task.id)
     .sort((a, b) => a.start_date.localeCompare(b.start_date) || a.id - b.id);
+  const wrapper = document.createElement("div");
+  wrapper.className = "dependency-picker-wrap";
+  const toolbar = document.createElement("div");
+  toolbar.className = "dependency-picker-toolbar";
+  const search = input("search");
+  search.className = "dependency-search-input";
+  search.placeholder = "搜索事务名、内容、责任人或所属线";
+  search.autocomplete = "off";
+  search.setAttribute("aria-label", "搜索依赖事务");
+  const count = document.createElement("span");
+  count.className = "dependency-selected-count";
+  toolbar.appendChild(search);
+  toolbar.appendChild(count);
+  wrapper.appendChild(toolbar);
   const picker = document.createElement("div");
   picker.className = "dependency-picker";
   body._dependencyChecks = [];
-  if (!candidates.length) {
-    const empty = document.createElement("div");
-    empty.className = "dependency-empty";
-    empty.textContent = "暂无其他事务";
-    picker.appendChild(empty);
-  }
+  const empty = document.createElement("div");
+  empty.className = "dependency-empty";
+  empty.textContent = candidates.length ? "未找到匹配事务" : "暂无其他事务";
+  empty.hidden = Boolean(candidates.length);
+  picker.appendChild(empty);
   for (const candidate of candidates) {
     const option = document.createElement("label");
     option.className = "dependency-option";
@@ -1540,9 +1564,34 @@ function createDependencyPicker(body, task, selectedIds = []) {
     option.appendChild(text);
     option.appendChild(status);
     picker.appendChild(option);
-    body._dependencyChecks.push({ checkbox, taskId: candidate.id });
+    body._dependencyChecks.push({
+      checkbox,
+      option,
+      taskId: candidate.id,
+      searchText: [candidate.name, candidate.content, candidate.owner,
+        candidate.goal, candidate.next_action, candidate.status, line?.name]
+        .filter(Boolean).join(" ").toLocaleLowerCase(),
+    });
   }
-  field(body, "依赖事务", picker);
+  wrapper.appendChild(picker);
+  const refresh = () => {
+    const keyword = search.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const item of body._dependencyChecks) {
+      const matches = !keyword || item.searchText.includes(keyword);
+      item.option.hidden = !matches;
+      if (matches) visible += 1;
+    }
+    empty.hidden = visible > 0;
+    empty.textContent = candidates.length ? "未找到匹配事务" : "暂无其他事务";
+    const selectedCount = body._dependencyChecks
+      .filter(({ checkbox: item }) => item.checked).length;
+    count.textContent = `已选 ${selectedCount} 项`;
+  };
+  search.oninput = refresh;
+  for (const { checkbox } of body._dependencyChecks) checkbox.onchange = refresh;
+  refresh();
+  field(parent, "依赖事务（可多选）", wrapper);
 }
 
 function selectedDependencyIds(body) {
@@ -1604,26 +1653,15 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         pickerWrap.className = "line-search-picker";
         pickerWrap.appendChild(picker);
         pickerWrap.appendChild(optionList);
-        field(body, "所属主线 / 支线", pickerWrap);
+        field(body, "所属主线 / 支线", pickerWrap, true);
         body._line = picker;
         body._lineChoices = lineChoices;
       }
-      body._name = field(body, "事务名", input("text", task ? task.name : ""));
+      body._name = field(body, "事务名", input("text", task ? task.name : ""), true);
       const ta = document.createElement("textarea");
       ta.value = task ? task.content : "";
-      body._content = field(body, "事务内容", ta);
-      body._goal = field(body, "闭环目标", input("text", task ? task.goal : ""));
-      body._next = field(body, "下一步动作", input("text", task ? task.next_action : ""));
-      body._risk = field(body, "风险原因", input("text", task ? task.risk_reason : ""));
-      const priority = document.createElement("select");
-      for (const p of state.priorityEnum) {
-        const o = document.createElement("option");
-        o.value = p; o.textContent = p;
-        if ((task ? task.priority : "中") === p) o.selected = true;
-        priority.appendChild(o);
-      }
-      body._priority = field(body, "优先级", priority);
-      body._owner = field(body, "责任人", ownerInput(task ? task.owner : ""));
+      body._content = field(body, "事务内容", ta, true);
+      body._owner = field(body, "责任人", ownerInput(task ? task.owner : "", true), true);
       const sel = document.createElement("select");
       for (const s of state.statusEnum) {
         const o = document.createElement("option");
@@ -1632,14 +1670,43 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         sel.appendChild(o);
       }
       decorateStatusSelect(sel);
-      body._status = field(body, "进展状态", sel);
+      body._status = field(body, "进展状态", sel, true);
       const initialLine = lineById(lineId);
       const initialStart = !task && initialLine && initialLine.fork_date > state.today ?
         initialLine.fork_date : state.today;
       body._start = field(body, "起始日期",
-        input("date", task ? task.start_date : initialStart));
-      body._end = field(body, "结束日期", input("date", task && task.end_date || ""));
-      createDependencyPicker(body, task, task ? prerequisiteIds(task.id) : []);
+        input("date", task ? task.start_date : initialStart), true);
+      body._end = field(body, "结束日期",
+        input("date", task ? (task.end_date || "") : initialStart), true);
+
+      const more = document.createElement("details");
+      more.className = "task-more-details";
+      const moreSummary = document.createElement("summary");
+      moreSummary.textContent = "更多描述";
+      more.appendChild(moreSummary);
+      const priority = document.createElement("select");
+      for (const p of state.priorityEnum) {
+        const o = document.createElement("option");
+        o.value = p; o.textContent = p;
+        if ((task ? task.priority : "中") === p) o.selected = true;
+        priority.appendChild(o);
+      }
+      body._priority = field(more, "优先级", priority);
+      createDependencyPicker(body, task, task ? prerequisiteIds(task.id) : [], more);
+      body._goal = field(more, "闭环目标", input("text", task ? task.goal : ""));
+      body._next = field(more, "下一步动作", input("text", task ? task.next_action : ""));
+      body._risk = field(more, "风险原因", input("text", task ? task.risk_reason : ""));
+      body.appendChild(more);
+
+      const syncEndDate = () => {
+        body._end.min = body._start.value;
+        if (body._end.value && body._end.value < body._start.value) {
+          body._end.value = body._start.value;
+        }
+      };
+      body._start.oninput = syncEndDate;
+      body._start.onchange = syncEndDate;
+      syncEndDate();
 
       if (body._line) {
         const syncStartDate = () => {
@@ -1650,6 +1717,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
           if (body._start.value < selectedLine.fork_date) {
             body._start.value = selectedLine.fork_date;
           }
+          syncEndDate();
         };
         body._line.oninput = syncStartDate;
         body._line.onchange = syncStartDate;
@@ -1658,16 +1726,16 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
 
       if (!isNew) {
         const del = document.createElement("button");
+        del.type = "button";
         del.textContent = "删除此事务";
-        del.className = "row-del";
-        del.style.marginTop = "4px";
+        del.className = "modal-delete-button";
         del.onclick = async () => {
           await api(`/api/tasks/${task.id}`, "DELETE");
           $("#modal-mask").classList.add("hidden");
           toast("已删除事务，可按 Ctrl+Z 撤销");
           reload();
         };
-        body.appendChild(del);
+        $("#modal-header-tools").appendChild(del);
       }
       body._name.focus();
     },
@@ -1682,11 +1750,22 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         priority: body._priority.value,
         owner: body._owner.value.trim(),
         status: body._status.value,
-        start_date: body._start.value || state.today,
-        end_date: body._end.value || null,
+        start_date: body._start.value,
+        end_date: body._end.value,
         prerequisite_ids: selectedDependencyIds(body),
       };
-      if (!payload.name) { toast("事务名不能为空"); return false; }
+      const requiredFields = [
+        ["事务名", body._name], ["事务内容", body._content],
+        ["责任人", body._owner], ["进展状态", body._status],
+        ["起始日期", body._start], ["结束日期", body._end],
+      ];
+      for (const [label, element] of requiredFields) {
+        if (!element.value.trim()) {
+          toast(`${label}不能为空`);
+          element.focus();
+          return false;
+        }
+      }
       if (isNew) {
         const targetLineId = body._line ?
           body._lineChoices.get(body._line.value) : lineId;

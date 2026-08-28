@@ -365,13 +365,20 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(task["next_action"], "下一步")
 
         status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
-            "name": "更新事务", "status": "已闭环", "end_date": None,
+            "end_date": None,
+        })
+        self.assertEqual(status, 400, data)
+        self.assertIn("结束日期不能为空", data["error"])
+
+        updated_end = (self.today + timedelta(days=10)).isoformat()
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "name": "更新事务", "status": "已闭环", "end_date": updated_end,
         })
         self.assertEqual(status, 200, data)
         _, state = self.request("GET", "/api/state")
         self.assertEqual(state["tasks"][0]["name"], "更新事务")
         self.assertEqual(state["tasks"][0]["status"], "已闭环")
-        self.assertIsNone(state["tasks"][0]["end_date"])
+        self.assertEqual(state["tasks"][0]["end_date"], updated_end)
 
         status, data = self.request("DELETE", f"/api/tasks/{task_id}")
         self.assertEqual(status, 200, data)
@@ -461,6 +468,27 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 400, data)
 
+        cycle_three = self.create_task(line_id, "环路三")
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{cycle_two}",
+            {"prerequisite_ids": [cycle_three]},
+        )
+        self.assertEqual(status, 200, data)
+        status, data = self.request(
+            "POST", f"/api/tasks/{cycle_three}/dependencies",
+            {"prerequisite_task_id": cycle_one},
+        )
+        self.assertEqual(status, 400, data)
+        self.assertIn("循环", data["error"])
+        _, state = self.request("GET", "/api/state")
+        self.assertNotIn(
+            (cycle_three, cycle_one),
+            {
+                (row["dependent_task_id"], row["prerequisite_task_id"])
+                for row in state["dependencies"]
+            },
+        )
+
         undo_source = self.create_task(line_id, "撤销来源")
         undo_target = self.create_task(line_id, "撤销目标")
         status, data = self.request(
@@ -548,6 +576,45 @@ class AnyLineHttpTests(unittest.TestCase):
         status, data = self.request("POST", "/api/tasks", raw_body=b"[]")
         self.assertEqual(status, 400)
         self.assertIn("JSON", data["error"])
+
+    def test_task_required_fields_and_modal_controls(self):
+        line_id = self.create_line()
+        valid = {
+            "line_id": line_id,
+            "name": "必填校验事务",
+            "content": "内容",
+            "owner": "张三",
+            "status": "进行中",
+            "start_date": self.today.isoformat(),
+            "end_date": (self.today + timedelta(days=1)).isoformat(),
+        }
+        labels = {
+            "name": "事务名", "content": "事务内容", "owner": "责任人",
+            "status": "进展状态", "start_date": "起始日期", "end_date": "结束日期",
+        }
+        for key, label in labels.items():
+            payload = dict(valid)
+            payload[key] = ""
+            status, data = self.request("POST", "/api/tasks", payload)
+            self.assertEqual(status, 400, (key, data))
+            self.assertIn(f"{label}不能为空", data["error"])
+
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn('search.placeholder = "搜索事务名、内容、责任人或所属线"', source)
+        self.assertIn('field(parent, "依赖事务（可多选）", wrapper)', source)
+        self.assertIn('moreSummary.textContent = "更多描述"', source)
+        self.assertIn('mark.className = "required-mark"', source)
+        self.assertIn('$("#modal-header-tools").appendChild(del)', source)
+
+        task_id = self.create_task(line_id)
+        status, data = self.request(
+            "PATCH", "/api/tasks/bulk",
+            {"ids": [task_id], "patch": {"owner": " "}},
+        )
+        self.assertEqual(status, 400, data)
+        self.assertIn("责任人不能为空", data["error"])
 
     def test_bulk_update_delete_and_undo(self):
         first_line = self.create_line("第一条线")

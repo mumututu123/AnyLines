@@ -1316,20 +1316,26 @@ def create_task():
     ).fetchone()
     if not line:
         return jsonify({"error": "所属线不存在"}), 404
-    status = text_field(d, "status", "进展状态", "未启动") or "未启动"
+    status = text_field(d, "status", "进展状态").strip()
+    if not status:
+        raise ApiError("进展状态不能为空")
     if status not in get_statuses(db):
         return jsonify({"error": "非法的进展状态"}), 400
     priority = text_field(d, "priority", "优先级", "中") or "中"
     if priority not in PRIORITY_ENUM:
         return jsonify({"error": "非法的优先级"}), 400
     today = date.today().isoformat()
-    start_date = text_field(d, "start_date", "起始日期", today) or today
-    end_date = text_field(d, "end_date", "结束日期", None, nullable=True) or None
+    start_date = text_field(d, "start_date", "起始日期").strip()
+    end_date = text_field(d, "end_date", "结束日期").strip()
     content = text_field(d, "content", "事务内容")
     goal = text_field(d, "goal", "闭环目标")
     owner = text_field(d, "owner", "责任人")
     next_action = text_field(d, "next_action", "下一步动作")
     risk_reason = text_field(d, "risk_reason", "风险原因")
+    for label, value in (("事务内容", content), ("责任人", owner),
+                         ("起始日期", start_date), ("结束日期", end_date)):
+        if not value.strip():
+            raise ApiError(f"{label}不能为空")
     prerequisite_ids = validate_dependencies(
         db, workspace_id, None, d.get("prerequisite_ids", [])
     )
@@ -1363,8 +1369,11 @@ def create_task():
 @app.route("/api/tasks/<int:tid>", methods=["PATCH"])
 def update_task(tid):
     d = json_object()
-    if d.get("end_date") == "":
-        d["end_date"] = None
+    if "end_date" in d and (
+        d["end_date"] is None or
+        isinstance(d["end_date"], str) and not d["end_date"].strip()
+    ):
+        raise ApiError("结束日期不能为空")
     db = get_db()
     workspace_id = current_workspace_id()
     row = db.execute(
@@ -1418,6 +1427,12 @@ def update_task(tid):
             )
         if k == "name" and not (d[k] or "").strip():
             return jsonify({"error": "事务名不能为空"}), 400
+        if k in ("content", "owner", "status", "start_date", "end_date") and \
+                not (d[k] or "").strip():
+            label = {"content": "事务内容", "owner": "责任人",
+                     "status": "进展状态", "start_date": "起始日期",
+                     "end_date": "结束日期"}[k]
+            raise ApiError(f"{label}不能为空")
         if k == "name":
             d[k] = d[k].strip()
         if k == "priority" and d[k] not in PRIORITY_ENUM:
@@ -1618,8 +1633,11 @@ def bulk_tasks():
                 db, workspace_id,
                 current_dependency_ids(db, workspace_id, task_id),
             )
-    if "owner" in patch and not isinstance(patch["owner"], str):
-        return jsonify({"error": "责任人必须是字符串"}), 400
+    if "owner" in patch:
+        if not isinstance(patch["owner"], str):
+            return jsonify({"error": "责任人必须是字符串"}), 400
+        if not patch["owner"].strip():
+            return jsonify({"error": "责任人不能为空"}), 400
     if "line_id" in patch:
         required_id(patch["line_id"], "line_id")
         ln = db.execute(
