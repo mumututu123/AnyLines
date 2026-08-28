@@ -114,6 +114,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(b"AnyLine", body)
         self.assertIn(b'id="workspace-select"', body)
         self.assertNotIn(b'id="btn-workspace-create"', body)
+        self.assertNotIn(b'id="btn-delete-line"', body)
+        self.assertNotIn(b'id="btn-undo"', body)
 
         status, state = self.request("GET", "/api/state")
         self.assertEqual(status, 200)
@@ -138,6 +140,8 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertIn("cx: merge.end.x, cy: merge.end.y", source)
         self.assertNotIn("d += ` C ${mx + 24}", source)
+        self.assertIn('e.key === "Delete"', source)
+        self.assertIn('e.key.toLowerCase() === "z"', source)
 
     def test_authentication_is_required(self):
         self.cookie = None
@@ -379,6 +383,54 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200, data)
         _, state = self.request("GET", "/api/state")
         self.assertEqual([task["id"] for task in state["tasks"]], [task_id])
+
+    def test_general_undo_for_canvas_edits(self):
+        main_id = self.create_line("初始主线")
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"], [])
+        self.assertFalse(state["can_undo"])
+
+        main_id = self.create_line("初始主线")
+        status, data = self.request(
+            "PATCH", f"/api/lines/{main_id}", {"name": "修改后的主线"}
+        )
+        self.assertEqual(status, 200, data)
+        self.request("POST", "/api/undo")
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"][0]["name"], "初始主线")
+
+        task_id = self.create_task(main_id, "初始事务")
+        self.request("POST", "/api/undo")
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["tasks"], [])
+
+        task_id = self.create_task(main_id, "初始事务")
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{task_id}",
+            {"name": "修改后的事务", "status": "已闭环"},
+        )
+        self.assertEqual(status, 200, data)
+        self.request("POST", "/api/undo")
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["tasks"][0]["name"], "初始事务")
+        self.assertEqual(state["tasks"][0]["status"], "进行中")
+
+        branch_id = self.create_line("待反合支线", parent_id=main_id)
+        merge_date = (self.today + timedelta(days=2)).isoformat()
+        status, data = self.request(
+            "PATCH", f"/api/lines/{branch_id}", {"merge_date": merge_date}
+        )
+        self.assertEqual(status, 200, data)
+        self.request("POST", "/api/undo")
+        _, state = self.request("GET", "/api/state")
+        branch = next(line for line in state["lines"] if line["id"] == branch_id)
+        self.assertIsNone(branch["merge_date"])
+
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 400, data)
+        self.assertIn("没有可撤销", data["error"])
 
     def test_task_validation_never_returns_500(self):
         line_id = self.create_line()

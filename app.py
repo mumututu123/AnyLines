@@ -147,6 +147,11 @@ def init_db(db_path=None):
             value        TEXT,
             PRIMARY KEY(workspace_id,key)
         );
+        CREATE TABLE IF NOT EXISTS undo_snapshots (
+            workspace_id INTEGER PRIMARY KEY,
+            snapshot     TEXT NOT NULL,
+            created_at   TEXT NOT NULL
+        );
         """
     )
     ensure_column(db, "lines", "description", "TEXT DEFAULT ''")
@@ -429,7 +434,7 @@ def set_meta(db, key, value):
 
 
 def purge_deleted(db):
-    """物理删除所有软删除的行, 并清空撤销批次。"""
+    """物理删除所有软删除的行, 并清空相关撤销状态。"""
     workspace_id = current_workspace_id()
     db.execute(
         "DELETE FROM tasks WHERE deleted=1 AND workspace_id=?", (workspace_id,)
@@ -437,12 +442,62 @@ def purge_deleted(db):
     db.execute(
         "DELETE FROM lines WHERE deleted=1 AND workspace_id=?", (workspace_id,)
     )
+    db.execute("DELETE FROM undo_snapshots WHERE workspace_id=?", (workspace_id,))
     set_meta(db, "undo_batch", None)
 
 
 def on_edit(db):
-    """编辑操作不再清空回收站，仅保留最近删除批次的快捷撤销能力。"""
-    return None
+    """保存当前空间的线与事务，作为最近一次编辑的单步撤销点。"""
+    workspace_id = current_workspace_id()
+    snapshot = {
+        "lines": [dict(row) for row in db.execute(
+            "SELECT * FROM lines WHERE workspace_id=? ORDER BY id", (workspace_id,)
+        )],
+        "tasks": [dict(row) for row in db.execute(
+            "SELECT * FROM tasks WHERE workspace_id=? ORDER BY id", (workspace_id,)
+        )],
+    }
+    db.execute(
+        "INSERT INTO undo_snapshots(workspace_id,snapshot,created_at) VALUES(?,?,?) "
+        "ON CONFLICT(workspace_id) DO UPDATE SET "
+        "snapshot=excluded.snapshot,created_at=excluded.created_at",
+        (
+            workspace_id,
+            json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
+            date.today().isoformat(),
+        ),
+    )
+
+
+def has_undo(db):
+    workspace_id = current_workspace_id()
+    snapshot = db.execute(
+        "SELECT 1 FROM undo_snapshots WHERE workspace_id=?", (workspace_id,)
+    ).fetchone()
+    return snapshot is not None or get_meta(db, "undo_batch") is not None
+
+
+def restore_snapshot(db, snapshot):
+    workspace_id = current_workspace_id()
+    db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
+    for table in ("lines", "tasks"):
+        rows = snapshot.get(table, [])
+        if not isinstance(rows, list):
+            raise ApiError("撤销数据已损坏", 500)
+        valid_columns = {
+            row["name"] for row in db.execute(f"PRAGMA table_info({table})")
+        }
+        for row in rows:
+            if not isinstance(row, dict) or not set(row).issubset(valid_columns):
+                raise ApiError("撤销数据已损坏", 500)
+            row["workspace_id"] = workspace_id
+            columns = list(row)
+            marks = ",".join("?" for _ in columns)
+            db.execute(
+                f"INSERT INTO {table}({','.join(columns)}) VALUES({marks})",
+                [row[column] for column in columns],
+            )
 
 
 def new_batch(db):
@@ -808,7 +863,7 @@ def api_state():
     return jsonify({
         "lines": lines,
         "tasks": tasks,
-        "can_undo": get_meta(db, "undo_batch") is not None,
+        "can_undo": has_undo(db),
         "status_enum": statuses,
         "status_colors": get_status_colors(db, statuses),
         "priority_enum": PRIORITY_ENUM,
@@ -1063,6 +1118,7 @@ def delete_line(lid):
     ).fetchone()
     if not row:
         return jsonify({"error": "线不存在"}), 404
+    on_edit(db)
     batch = new_batch(db)
     ids = collect_descendants(db, lid, workspace_id)
     marks = ",".join("?" * len(ids))
@@ -1220,6 +1276,7 @@ def delete_task(tid):
     ).fetchone()
     if not row:
         return jsonify({"error": "事务不存在"}), 404
+    on_edit(db)
     batch = new_batch(db)
     db.execute(
         "UPDATE tasks SET deleted=1, del_batch=?, deleted_at=? "
@@ -1300,6 +1357,7 @@ def bulk_tasks():
         return jsonify({"error": "部分事务不存在或已删除"}), 404
 
     if request.method == "DELETE":
+        on_edit(db)
         batch = new_batch(db)
         db.execute(
             f"UPDATE tasks SET deleted=1, del_batch=?, deleted_at=? "
@@ -1347,6 +1405,7 @@ def bulk_tasks():
             vals.append(date.today().isoformat())
     fields.append("updated_at=?")
     vals.append(date.today().isoformat())
+    on_edit(db)
     db.execute(
         f"UPDATE tasks SET {','.join(fields)} WHERE workspace_id=? "
         f"AND id IN ({marks})",
@@ -1361,9 +1420,26 @@ def bulk_tasks():
 def undo():
     db = get_db()
     workspace_id = current_workspace_id()
+    saved = db.execute(
+        "SELECT snapshot FROM undo_snapshots WHERE workspace_id=?", (workspace_id,)
+    ).fetchone()
+    if saved:
+        try:
+            snapshot = json.loads(saved["snapshot"])
+        except (TypeError, ValueError):
+            raise ApiError("撤销数据已损坏", 500)
+        if not isinstance(snapshot, dict):
+            raise ApiError("撤销数据已损坏", 500)
+        restore_snapshot(db, snapshot)
+        db.execute("DELETE FROM undo_snapshots WHERE workspace_id=?", (workspace_id,))
+        set_meta(db, "undo_batch", None)
+        db.commit()
+        return jsonify({"ok": True})
+
+    # 兼容升级前已产生、尚未使用的最近删除批次。
     batch = get_meta(db, "undo_batch")
     if batch is None:
-        return jsonify({"error": "没有可撤销的删除"}), 400
+        return jsonify({"error": "没有可撤销的操作"}), 400
     db.execute(
         "UPDATE lines SET deleted=0, del_batch=NULL, deleted_at=NULL "
         "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
@@ -1452,6 +1528,7 @@ def restore_trash():
     ).fetchone()
     if blocked_line or blocked_task:
         return jsonify({"error": "请先恢复该批次所依赖的所属线"}), 409
+    on_edit(db)
     db.execute(
         "UPDATE lines SET deleted=0, del_batch=NULL, deleted_at=NULL "
         "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)

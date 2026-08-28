@@ -345,9 +345,7 @@ function renderToolbar() {
     children.every((line) => state.hiddenBranchIds.has(line.id));
   $("#btn-add-branch").disabled = !sel;
   $("#btn-add-task").disabled = !sel;
-  $("#btn-delete-line").disabled = !sel;
   $("#btn-merge").disabled = !sel || sel.parent_id === null || sel.merge_date;
-  $("#btn-undo").disabled = !state.canUndo;
   $("#btn-toggle-children").disabled = !children.length;
   $("#btn-toggle-children").textContent =
     allChildrenHidden ? "展开子支线" : "折叠子支线";
@@ -1124,7 +1122,7 @@ function renderTable() {
     btn.textContent = "删除";
     btn.onclick = async () => {
       await api(`/api/tasks/${t.id}`, "DELETE");
-      toast("已删除事务，可点「撤销删除」恢复");
+      toast("已删除事务，可从回收站恢复");
       reload();
     };
     tdDel.appendChild(locate);
@@ -1404,7 +1402,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         del.onclick = async () => {
           await api(`/api/tasks/${task.id}`, "DELETE");
           $("#modal-mask").classList.add("hidden");
-          toast("已删除事务，可点「撤销删除」恢复");
+          toast("已删除事务，可按 Ctrl+Z 撤销");
           reload();
         };
         body.appendChild(del);
@@ -1678,7 +1676,7 @@ $("#btn-merge").onclick = () => {
   });
 };
 
-$("#btn-delete-line").onclick = async () => {
+async function deleteSelectedLine() {
   const line = lineById(state.selectedLineId);
   if (!line) return;
   const ids = [line.id, ...descendantIds(line.id)];
@@ -1689,15 +1687,10 @@ $("#btn-delete-line").onclick = async () => {
     `（全部子支线 ${subs} 条、全部事务 ${n} 个）。\n删除后会进入回收站，可恢复。`)) return;
   await api(`/api/lines/${line.id}`, "DELETE");
   state.selectedLineId = null;
-  toast("已移入回收站，可撤销或从回收站恢复");
+  state.selectedTaskId = null;
+  toast("已移入回收站，可按 Ctrl+Z 撤销");
   reload();
-};
-
-$("#btn-undo").onclick = async () => {
-  await api("/api/undo", "POST");
-  toast("已撤销上一次删除");
-  reload();
-};
+}
 
 $("#btn-table-add").onclick = () => {
   if (!state.lines.length) { toast("请先创建一条主线"); return; }
@@ -2125,9 +2118,41 @@ wrap.addEventListener("click", (e) => {
   }
 }, true);   // 捕获阶段拦截
 
-/* Esc 关闭弹窗 */
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") $("#modal-mask").classList.add("hidden");
+/* 画布快捷键：输入控件内保留浏览器原生的删除与撤销行为。 */
+document.addEventListener("keydown", async (e) => {
+  if (e.key === "Escape") {
+    $("#modal-mask").classList.add("hidden");
+    return;
+  }
+  if (!document.body.classList.contains("authenticated") || state.view !== "canvas") return;
+  if (!$("#modal-mask").classList.contains("hidden") ||
+      !$("#account-menu").classList.contains("hidden")) return;
+  const target = e.target;
+  if (target instanceof HTMLElement &&
+      (target.matches("input, textarea, select") || target.isContentEditable)) return;
+
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    if (e.repeat) return;
+    try {
+      await api("/api/undo", "POST");
+      toast("已撤销上一次编辑");
+      await reload();
+    } catch (_error) {
+      // api() 已显示没有可撤销操作或服务端错误。
+    }
+    return;
+  }
+
+  if (e.key === "Delete" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (!state.selectedLineId) {
+      toast("请先选择一条线");
+      return;
+    }
+    await deleteSelectedLine();
+  }
 });
 
 /* ---- 启动：恢复界面偏好，登录后加载当前项目空间 ---- */
