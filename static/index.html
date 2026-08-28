@@ -35,7 +35,6 @@
     <button id="btn-trash" title="查看和恢复已删除的线或事务">回收站</button>
   </div>
 
-  <div id="sel-info">未选中任何线</div>
   <div id="account-bar">
     <button id="account-trigger" type="button" aria-haspopup="menu"
             aria-expanded="false" aria-controls="account-menu">
@@ -114,6 +113,7 @@
     <div class="opt-hint">单击线选中，双击节点编辑事务；同天多事务默认折叠，点击带数字的节点展开/折叠</div>
     <div class="opt-hint">Ctrl+滚轮：缩放画布<br>左键长按拖动：平移画布</div>
   </aside>
+  <div id="sel-info" role="status" aria-live="polite">未选中任何线</div>
   <div id="canvas-wrap">
     <svg id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>

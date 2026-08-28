@@ -27,7 +27,7 @@ body.authenticated #login-view { display: none; }
 }
 #login-form button { width: 100%; padding: 9px; border-radius: 6px; cursor: pointer; }
 #login-error { min-height: 20px; margin-bottom: 8px; color: #cf222e; font-size: 12px; }
-#account-bar { position: relative; flex: 0 0 auto; }
+#account-bar { position: relative; flex: 0 0 auto; margin-left: auto; }
 #account-trigger {
   display: grid; place-items: center; width: 34px; height: 34px;
   padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer;
@@ -124,8 +124,6 @@ body.authenticated #login-view { display: none; }
 #toolbar button.danger:hover:not(:disabled), #table-bar button.danger:hover:not(:disabled) { background: #ffebe9; }
 button.primary { background: #0969da !important; color: #fff; border-color: #0969da !important; }
 
-#sel-info { margin-left: auto; font-size: 12px; color: #57606a; }
-
 /* ---------------- workbench ---------------- */
 #workbench {
   background: #fff; border-bottom: 1px solid #d8dee4;
@@ -161,7 +159,16 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .priority-紧急 { color: #cf222e; font-weight: 700; }
 
 /* ---------------- canvas view ---------------- */
-#canvas-view { flex: 1; display: flex; min-height: 0; }
+#canvas-view { position: relative; flex: 1; display: flex; min-height: 0; }
+#sel-info {
+  position: absolute; left: 184px; bottom: 16px; z-index: 10;
+  max-width: calc(100% - 200px); padding: 9px 13px;
+  overflow: hidden; border: 1px solid #fbfdff; border-radius: 6px;
+  background: #e7f2ff; color: #fff;
+  box-shadow: 0 4px 12px rgba(31, 35, 40, .24);
+  font-size: 14px; font-weight: 600; line-height: 1.4;
+  text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+}
 #canvas-opts {
   width: 168px; background: #fff; border-right: 1px solid #d8dee4;
   padding: 14px 14px; display: flex; flex-direction: column; gap: 10px;
