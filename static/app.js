@@ -468,6 +468,7 @@ function renderCanvas() {
   const BRANCH_SLOPE = Math.tan(70 * Math.PI / 180);  // |dy / dx|，统一为 70°。
   const BRANCH_CORNER_R = 6;
   const lineGeometryCache = new Map();
+  const mergeGeometryCache = new Map();
 
   /* 同日创建的嵌套支线从父支线可见斜线段的中点继续分叉。 */
   const branchStartPoint = (line, parent) => {
@@ -513,8 +514,43 @@ function renderCanvas() {
     return geometry;
   }
 
+  function mergeGeometry(line) {
+    if (mergeGeometryCache.has(line.id)) return mergeGeometryCache.get(line.id);
+    const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+    if (!parent || !line.merge_date) {
+      mergeGeometryCache.set(line.id, null);
+      return null;
+    }
+
+    const y = lineY(line.id);
+    const parentY = lineY(parent.id);
+    const lineStartX = lineGeometry(line).horizontalStart.x;
+    const horizontalEnd = {
+      x: Math.max(x(lineEnd(line)), lineStartX + 6),
+      y,
+    };
+    const corner = { x: horizontalEnd.x + BRANCH_CORNER_R, y };
+    const verticalDistance = Math.abs(parentY - y);
+    const horizontalDistance = verticalDistance / BRANCH_SLOPE;
+    const end = { x: corner.x + horizontalDistance, y: parentY };
+    const dx = end.x - corner.x;
+    const dy = end.y - corner.y;
+    const diagonalLength = Math.hypot(dx, dy);
+    const trim = Math.min(BRANCH_CORNER_R, diagonalLength / 3);
+    const diagonalStart = {
+      x: corner.x + dx / diagonalLength * trim,
+      y: corner.y + dy / diagonalLength * trim,
+    };
+    const geometry = { horizontalEnd, corner, diagonalStart, end };
+    mergeGeometryCache.set(line.id, geometry);
+    return geometry;
+  }
+
   const geometryRight = Math.max(
-    ...visibleLines.map((line) => lineGeometry(line).horizontalStart.x)
+    ...visibleLines.map((line) => {
+      const merge = mergeGeometry(line);
+      return merge ? merge.end.x : lineGeometry(line).horizontalStart.x;
+    })
   );
   const contentWidth = Math.max(
     x(stop.toISOString().slice(0, 10)) + CV.padR,
@@ -571,8 +607,10 @@ function renderCanvas() {
     const endDate = lineEnd(line);
     const selected = line.id === state.selectedLineId;
     const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const merge = mergeGeometry(line);
     const x2 = Math.max(
-      x(endDate), parent ? geometry.horizontalStart.x + 6 : x1 + 30
+      merge ? merge.horizontalEnd.x : x(endDate),
+      parent ? geometry.horizontalStart.x + 6 : x1 + 30
     );
 
     let d = "";
@@ -585,11 +623,11 @@ function renderCanvas() {
     } else {
       d = `M ${x1} ${y} L ${x2} ${y}`;
     }
-    /* 反合回父线 */
-    if (parent && line.merge_date) {
-      const py = lineY(parent.id);
-      const mx = x(line.merge_date);
-      d += ` C ${mx + 24} ${y}, ${mx + 8} ${py}, ${mx + 32} ${py}`;
+    /* 反合使用与分叉一致的圆角斜向折线。 */
+    if (merge) {
+      const { corner, diagonalStart, end } = merge;
+      d += ` Q ${corner.x} ${corner.y}, ${diagonalStart.x} ${diagonalStart.y} ` +
+        `L ${end.x} ${end.y}`;
     }
 
     const path = svgEl("path", {
@@ -611,9 +649,9 @@ function renderCanvas() {
     hit.addEventListener("dblclick", () => openLineModal(line));
 
     /* 反合点 */
-    if (parent && line.merge_date) {
+    if (merge) {
       svgEl("circle", {
-        cx: x(line.merge_date) + 32, cy: lineY(parent.id),
+        cx: merge.end.x, cy: merge.end.y,
         r: 4.5, fill: color, class: "merge-dot",
       }, gLines);
     }
@@ -623,10 +661,11 @@ function renderCanvas() {
       (child) => child.parent_id === line.id && state.hiddenBranchIds.has(child.id)
     ).length;
     const lbl = svgEl("text", {
-      x: x2 + 10, y: y + 4, fill: color, class: "line-label",
+      x: (merge ? merge.end.x : x2) + 10,
+      y: (merge ? merge.end.y : y) + 4,
+      fill: color, class: "line-label",
     }, gLines);
-    lbl.textContent = line.name +
-      (line.merge_date ? " ✓已反合" : "") +
+    lbl.textContent = 
       (hiddenChildCount ? `（已折叠 ${hiddenChildCount}支线）` : "");
     lbl.addEventListener("click", select);
   }

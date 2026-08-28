@@ -103,6 +103,22 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(state["priority_enum"], ["低", "中", "高", "紧急"])
         self.assertEqual(state["status_colors"]["进行中"], "#0969da")
 
+    def test_canvas_merge_uses_rounded_polyline(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn(
+            "const horizontalDistance = verticalDistance / BRANCH_SLOPE;",
+            source,
+        )
+        self.assertIn(
+            "` Q ${corner.x} ${corner.y}, ${diagonalStart.x} ${diagonalStart.y} `",
+            source,
+        )
+        self.assertIn("cx: merge.end.x, cy: merge.end.y", source)
+        self.assertNotIn("d += ` C ${mx + 24}", source)
+
     def test_configuration_validation_and_deduplication(self):
         status, data = self.request(
             "PUT", "/api/owners", {"owners": [" 张三 ", "李四", "张三", ""]}
