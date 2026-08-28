@@ -112,6 +112,8 @@ class AnyLineHttpTests(unittest.TestCase):
         status, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn(b"AnyLine", body)
+        self.assertIn(b'id="workspace-select"', body)
+        self.assertNotIn(b'id="btn-workspace-create"', body)
 
         status, state = self.request("GET", "/api/state")
         self.assertEqual(status, 200)

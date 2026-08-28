@@ -28,7 +28,7 @@ body.authenticated #login-view { display: none; }
 #login-form button { width: 100%; padding: 9px; border-radius: 6px; cursor: pointer; }
 #login-error { min-height: 20px; margin-bottom: 8px; color: #cf222e; font-size: 12px; }
 #account-bar { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
-#account-bar select, #account-bar button {
+#account-bar button {
   border: 1px solid #d0d7de; background: #fff; border-radius: 6px;
   padding: 5px 8px; font-size: 12px; min-height: 30px;
 }
@@ -50,7 +50,6 @@ body.authenticated #login-view { display: none; }
 
 @media (max-width: 900px) {
   #account-bar { width: 100%; }
-  #workspace-select { flex: 1; }
   .member-row { grid-template-columns: 1fr 100px; }
   .member-actions { grid-column: 1 / -1; }
 }
@@ -62,6 +61,13 @@ body.authenticated #login-view { display: none; }
 }
 #brand { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
 #brand span { color: #0969da; }
+#workspace-select {
+  width: 180px; max-width: 24vw; min-height: 30px; padding: 5px 8px;
+  border: 1px solid #d0d7de; border-radius: 6px; background: #fff; font-size: 13px;
+}
+@media (max-width: 900px) {
+  #workspace-select { width: min(180px, 42vw); max-width: none; }
+}
 
 #view-switch { display: flex; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; }
 .view-btn {

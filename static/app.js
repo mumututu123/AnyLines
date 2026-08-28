@@ -25,6 +25,7 @@ const state = {
 
 const SOON_DAYS = 7;
 const STALE_DAYS = 7;
+const CREATE_WORKSPACE_OPTION = "__create_workspace__";
 const DONE_STATUSES = new Set(["已闭环", "已取消"]);
 const RISK_STATUSES = new Set(["有风险"]);
 const PRIORITY_WEIGHT = { "低": 1, "中": 2, "高": 3, "紧急": 4 };
@@ -130,7 +131,12 @@ function applySession(data) {
   }
   const isCurrentAdmin = state.currentWorkspace?.role === "admin";
   const canCreateWorkspace = state.workspaces.some((workspace) => workspace.role === "admin");
-  $("#btn-workspace-create").classList.toggle("hidden", !canCreateWorkspace);
+  if (canCreateWorkspace) {
+    const createOption = document.createElement("option");
+    createOption.value = CREATE_WORKSPACE_OPTION;
+    createOption.textContent = "+";
+    select.appendChild(createOption);
+  }
   $("#btn-members").classList.toggle("hidden", !isCurrentAdmin);
   $("#current-user").textContent =
     `${state.user.display_name} · ${isCurrentAdmin ? "管理员" : "普通用户"}`;
@@ -1574,6 +1580,11 @@ $("#login-form").onsubmit = async (event) => {
 };
 
 $("#workspace-select").onchange = async (event) => {
+  if (event.target.value === CREATE_WORKSPACE_OPTION) {
+    event.target.value = state.currentWorkspace.id;
+    openWorkspaceModal();
+    return;
+  }
   const workspaceId = Number(event.target.value);
   try {
     await api(`/api/workspaces/${workspaceId}/select`, "POST");
@@ -1584,7 +1595,6 @@ $("#workspace-select").onchange = async (event) => {
     if (state.currentWorkspace) event.target.value = state.currentWorkspace.id;
   }
 };
-$("#btn-workspace-create").onclick = openWorkspaceModal;
 $("#btn-members").onclick = openMembersModal;
 $("#btn-password").onclick = openPasswordModal;
 $("#btn-logout").onclick = async () => {
