@@ -330,6 +330,24 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   font-size: 13px; font-family: inherit;
 }
 #modal-body textarea { resize: vertical; min-height: 52px; }
+.task-content-editor { display: flex; flex-direction: column; gap: 6px; }
+.task-content-hint { color: #6e7781; font-size: 11px; line-height: 1.4; }
+.task-image-gallery {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px;
+}
+.task-image-gallery[hidden] { display: none; }
+.task-image-item {
+  position: relative; min-width: 0; height: 96px; overflow: hidden;
+  border: 1px solid #d8dee4; border-radius: 7px; background: #fff;
+}
+.task-image-item img { width: 100%; height: 100%; object-fit: contain; display: block; }
+#modal-body .task-image-remove {
+  position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; padding: 0;
+  border: 1px solid rgba(207,34,46,.35); border-radius: 50%;
+  background: rgba(255,255,255,.94); color: #cf222e; font-size: 18px;
+  line-height: 20px; cursor: pointer;
+}
+#modal-body .task-image-remove:hover { background: #ffebe9; }
 .dependency-picker-wrap { display: flex; flex-direction: column; gap: 7px; }
 .dependency-picker-toolbar { display: flex; align-items: center; gap: 8px; }
 #modal-body .dependency-picker-toolbar .dependency-search-input { min-width: 0; flex: 1; }

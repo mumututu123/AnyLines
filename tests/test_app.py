@@ -2,6 +2,7 @@ import http.client
 import io
 import json
 import os
+import base64
 import sqlite3
 import tempfile
 import threading
@@ -616,6 +617,53 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 400, data)
         self.assertIn("责任人不能为空", data["error"])
 
+    def test_task_content_images_are_persisted_served_and_undoable(self):
+        line_id = self.create_line()
+        png_base64 = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+            "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        data_url = f"data:image/png;base64,{png_base64}"
+        task_id = self.create_task(line_id, images=[{"data_url": data_url}])
+
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_images"]), 1)
+        image_id = state["task_images"][0]["id"]
+        self.assertEqual(state["task_images"][0]["task_id"], task_id)
+        status, content = self.request("GET", f"/api/task-images/{image_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(content, base64.b64decode(png_base64))
+
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "images": [{"id": image_id}, {"data_url": data_url}],
+        })
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_images"]), 2)
+
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "images": [{"id": image_id}],
+        })
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_images"]), 1)
+        self.request("POST", "/api/undo")
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_images"]), 2)
+
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "images": [{"data_url": "data:image/svg+xml;base64,PHN2Zy8+"}],
+        })
+        self.assertEqual(status, 400, data)
+        self.assertIn("仅支持", data["error"])
+
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn('textarea.addEventListener("paste"', source)
+        self.assertIn('reader.readAsDataURL(file)', source)
+        self.assertIn('preview.src = image.src || image.data_url', source)
+
     def test_bulk_update_delete_and_undo(self):
         first_line = self.create_line("第一条线")
         second_line = self.create_line("第二条线")
@@ -769,6 +817,11 @@ class DatabaseMigrationTests(unittest.TestCase):
             db = sqlite3.connect(db_path)
             line_columns = {row[1] for row in db.execute("PRAGMA table_info(lines)")}
             task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
+            table_names = {
+                row[0] for row in db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
             workspace_id = db.execute("SELECT workspace_id FROM lines WHERE id=1").fetchone()[0]
             task_workspace_id = db.execute(
                 "SELECT workspace_id FROM tasks WHERE id=1"
@@ -792,6 +845,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 }
                 .issubset(task_columns)
             )
+            self.assertIn("task_images", table_names)
             self.assertEqual(task_workspace_id, workspace_id)
             self.assertEqual(admin_count, 1)
             self.assertEqual(json.loads(migrated_owners), ["历史责任人"])

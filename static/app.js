@@ -5,7 +5,8 @@ const $ = (sel) => document.querySelector(sel);
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = {
-  lines: [], tasks: [], dependencies: [], canUndo: false, statusEnum: [], statusColors: {},
+  lines: [], tasks: [], dependencies: [], taskImages: [], canUndo: false,
+  statusEnum: [], statusColors: {},
   priorityEnum: [], owners: [], today: "",
   user: null, workspaces: [], currentWorkspace: null,
   selectedLineId: null,
@@ -34,6 +35,9 @@ const DEFAULT_STATUS_COLORS = {
   "等待中": "#0e7490", "已暂停": "#8250df", "已闭环": "#1a7f37",
   "已取消": "#57606a",
 };
+const TASK_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const MAX_TASK_IMAGES = 8;
+const MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024;
 
 /* ---------------------------------------------- 界面偏好记忆 (localStorage) */
 const PREFS_KEY = "anyline.prefs";
@@ -173,6 +177,7 @@ function resetWorkspaceState() {
   state.expandedClusters.clear();
   state.hiddenBranchIds.clear();
   state.dependencies = [];
+  state.taskImages = [];
   state.pan = { x: 0, y: 0 };
   state.filters = { q: "", line: "", owner: "", status: "", priority: "", due: "" };
   state.quickFilter = "";
@@ -314,6 +319,7 @@ async function reload() {
   state.lines = d.lines;
   state.tasks = d.tasks;
   state.dependencies = d.dependencies || [];
+  state.taskImages = d.task_images || [];
   state.canUndo = d.can_undo;
   state.statusEnum = d.status_enum;
   state.statusColors = d.status_colors || {};
@@ -1422,8 +1428,12 @@ function field(parent, labelText, el, required = false) {
     mark.textContent = "*";
     mark.setAttribute("aria-hidden", "true");
     lb.appendChild(mark);
-    el.required = true;
-    el.setAttribute("aria-required", "true");
+    const requiredControl = el.matches("input, select, textarea") ?
+      el : el.querySelector("input, select, textarea");
+    if (requiredControl) {
+      requiredControl.required = true;
+      requiredControl.setAttribute("aria-required", "true");
+    }
   }
   lb.appendChild(document.createTextNode(labelText));
   div.appendChild(lb);
@@ -1612,6 +1622,110 @@ function openTaskDependenciesModal(task) {
   });
 }
 
+function createTaskContentEditor(body, task) {
+  const editor = document.createElement("div");
+  editor.className = "task-content-editor";
+  const textarea = document.createElement("textarea");
+  textarea.value = task ? task.content : "";
+  textarea.placeholder = "填写事务内容；可在此直接粘贴图片";
+  const hint = document.createElement("div");
+  hint.className = "task-content-hint";
+  hint.textContent = `支持粘贴 PNG、JPEG、GIF、WebP 图片，单张不超过 5MB，最多 ${MAX_TASK_IMAGES} 张`;
+  const gallery = document.createElement("div");
+  gallery.className = "task-image-gallery";
+  gallery.setAttribute("aria-live", "polite");
+  body._content = textarea;
+  body._contentImages = task ? state.taskImages
+    .filter((image) => image.task_id === task.id)
+    .map((image) => ({ id: image.id, src: `/api/task-images/${image.id}` })) : [];
+  body._imageReadPromises = [];
+  body._pendingImageCount = 0;
+
+  const renderImages = () => {
+    gallery.innerHTML = "";
+    gallery.hidden = body._contentImages.length === 0;
+    body._contentImages.forEach((image, index) => {
+      const item = document.createElement("div");
+      item.className = "task-image-item";
+      const preview = document.createElement("img");
+      preview.src = image.src || image.data_url;
+      preview.alt = `事务内容图片 ${index + 1}`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "task-image-remove";
+      remove.textContent = "×";
+      remove.title = "移除图片";
+      remove.setAttribute("aria-label", `移除事务内容图片 ${index + 1}`);
+      remove.onclick = () => {
+        body._contentImages.splice(index, 1);
+        renderImages();
+      };
+      item.appendChild(preview);
+      item.appendChild(remove);
+      gallery.appendChild(item);
+    });
+  };
+
+  const addImage = (file) => {
+    if (!TASK_IMAGE_TYPES.has(file.type)) {
+      toast("仅支持 PNG、JPEG、GIF 或 WebP 图片");
+      return;
+    }
+    if (file.size > MAX_TASK_IMAGE_BYTES) {
+      toast("单张事务图片不能超过 5MB");
+      return;
+    }
+    if (body._contentImages.length + body._pendingImageCount >= MAX_TASK_IMAGES) {
+      toast(`每个事务最多可添加 ${MAX_TASK_IMAGES} 张图片`);
+      return;
+    }
+    body._pendingImageCount += 1;
+    const pending = new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        body._pendingImageCount -= 1;
+        body._contentImages.push({ data_url: reader.result });
+        renderImages();
+        resolve();
+      };
+      reader.onerror = () => {
+        body._pendingImageCount -= 1;
+        toast("图片读取失败，请重试");
+        resolve();
+      };
+      reader.readAsDataURL(file);
+    });
+    body._imageReadPromises.push(pending);
+  };
+
+  textarea.addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData?.items || [])]
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile()).filter(Boolean);
+    if (!files.length) return;
+    event.preventDefault();
+    const pastedText = event.clipboardData.getData("text/plain");
+    if (pastedText) {
+      textarea.setRangeText(
+        pastedText, textarea.selectionStart, textarea.selectionEnd, "end"
+      );
+    }
+    const capacity = Math.max(
+      0, MAX_TASK_IMAGES - body._contentImages.length - body._pendingImageCount
+    );
+    files.slice(0, capacity).forEach(addImage);
+    if (files.length > capacity) {
+      toast(`每个事务最多可添加 ${MAX_TASK_IMAGES} 张图片`);
+    }
+  });
+
+  editor.appendChild(textarea);
+  editor.appendChild(hint);
+  editor.appendChild(gallery);
+  renderImages();
+  return editor;
+}
+
 /* 新建/编辑事务 */
 function openTaskModal(task, lineId = null, allowLineSelection = false) {
   const isNew = !task;
@@ -1658,9 +1772,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         body._lineChoices = lineChoices;
       }
       body._name = field(body, "事务名", input("text", task ? task.name : ""), true);
-      const ta = document.createElement("textarea");
-      ta.value = task ? task.content : "";
-      body._content = field(body, "事务内容", ta, true);
+      field(body, "事务内容", createTaskContentEditor(body, task), true);
       body._owner = field(body, "责任人", ownerInput(task ? task.owner : "", true), true);
       const sel = document.createElement("select");
       for (const s of state.statusEnum) {
@@ -1741,6 +1853,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
     },
     async () => {
       const body = $("#modal-body");
+      await Promise.all(body._imageReadPromises || []);
       const payload = {
         name: body._name.value.trim(),
         content: body._content.value,
@@ -1753,6 +1866,8 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         start_date: body._start.value,
         end_date: body._end.value,
         prerequisite_ids: selectedDependencyIds(body),
+        images: body._contentImages.map((image) => image.id ?
+          { id: image.id } : { data_url: image.data_url }),
       };
       const requiredFields = [
         ["事务名", body._name], ["事务内容", body._content],
