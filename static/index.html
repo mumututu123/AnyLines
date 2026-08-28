@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnyLine · 在线事务管理</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<section id="login-view">
+  <form id="login-form">
+    <div class="login-brand">Any<span>Line</span></div>
+    <h1>登录事务空间</h1>
+    <label>账号<input id="login-username" type="text" autocomplete="username" required></label>
+    <label>密码<input id="login-password" type="password" autocomplete="current-password" required></label>
+    <div id="login-error" role="alert"></div>
+    <button type="submit" class="primary">登录</button>
+  </form>
+</section>
+
+<header id="topbar" class="app-surface">
+  <div id="brand">Any<span>Line</span></div>
+  <select id="workspace-select" title="切换项目空间或新建空间" aria-label="项目空间"></select>
+
+  <nav id="view-switch">
+    <button id="btn-view-canvas" class="view-btn active">画布视图</button>
+    <button id="btn-view-table" class="view-btn">表格视图</button>
+  </nav>
+
+  <div id="toolbar">
+    <button id="btn-add-mainline" title="新建一条主线">+ 主线</button>
+    <button id="btn-add-branch" disabled title="从选中的线拉出支线">+ 支线</button>
+    <button id="btn-add-task" disabled title="在选中的线上添加事务节点">+ 事务</button>
+    <button id="btn-merge" disabled title="将选中的支线反合回父线">反合</button>
+    <button id="btn-trash" title="查看和恢复已删除的线或事务">回收站</button>
+  </div>
+
+  <div id="account-bar">
+    <button id="account-trigger" type="button" aria-haspopup="menu"
+            aria-expanded="false" aria-controls="account-menu">
+      <span id="account-avatar" aria-hidden="true"></span>
+    </button>
+    <div id="account-menu" class="hidden" role="menu">
+      <div class="account-summary">
+        <strong id="current-user"></strong>
+        <span id="current-username"></span>
+      </div>
+      <button id="btn-members" class="admin-only" type="button" role="menuitem">成员管理</button>
+      <button id="btn-owners" type="button" role="menuitem">责任人名单</button>
+      <button id="btn-statuses" type="button" role="menuitem">状态设置</button>
+      <button id="btn-password" type="button" role="menuitem">修改密码</button>
+      <div class="account-role" role="menuitem" aria-disabled="true">
+        <span>账号角色</span>
+        <strong id="current-user-role"></strong>
+      </div>
+      <button id="btn-logout" type="button" role="menuitem">退出</button>
+    </div>
+  </div>
+</header>
+
+<section id="workbench" class="app-surface">
+  <div id="summary-strip">
+    <button class="summary-card" data-quick="active">
+      <span class="summary-num" id="sum-active">0</span><span>未闭环</span>
+    </button>
+    <button class="summary-card" data-quick="risk">
+      <span class="summary-num" id="sum-risk">0</span><span>风险</span>
+    </button>
+    <button class="summary-card" data-quick="overdue">
+      <span class="summary-num" id="sum-overdue">0</span><span>超期</span>
+    </button>
+    <button class="summary-card" data-quick="soon">
+      <span class="summary-num" id="sum-soon">0</span><span>即将到期</span>
+    </button>
+    <button class="summary-card" data-quick="stale">
+      <span class="summary-num" id="sum-stale">0</span><span>停留过久</span>
+    </button>
+  </div>
+  <div id="filters">
+    <input id="filter-q" type="search" placeholder="搜索事务、内容、目标、下一步">
+    <select id="filter-line"><option value="">全部线</option></select>
+    <select id="filter-owner"><option value="">全部责任人</option></select>
+    <select id="filter-status"><option value="">全部状态</option></select>
+    <select id="filter-priority"><option value="">全部优先级</option></select>
+    <select id="filter-due">
+      <option value="">全部日期</option>
+      <option value="overdue">已超期</option>
+      <option value="soon">7 天内到期</option>
+      <option value="none">无结束日期</option>
+    </select>
+    <select id="sort-tasks">
+      <option value="start_asc">起始日期升序</option>
+      <option value="due_asc">结束日期升序</option>
+      <option value="priority_desc">优先级优先</option>
+      <option value="updated_desc">最近更新</option>
+    </select>
+    <button id="btn-clear-filters">清空</button>
+  </div>
+</section>
+
+<!-- 画布视图 -->
+<main id="canvas-view" class="app-surface hidden">
+  <aside id="canvas-opts">
+    <div class="opt-title">节点标签显示</div>
+    <button id="btn-toggle-labels" title="一键显示/隐藏所有节点文字信息">隐藏全部标签</button>
+    <button id="btn-today" title="滚动到今天所在位置">回到今天</button>
+    <button id="btn-fit" title="重置缩放并回到画布左上">适应画布</button>
+    <button id="btn-toggle-children" disabled title="折叠或展开选中线的子支线">折叠子支线</button>
+    <label><input type="checkbox" id="opt-name" checked> 事务名</label>
+    <label><input type="checkbox" id="opt-status" checked> 进展状态</label>
+    <label><input type="checkbox" id="opt-dur" checked> 状态停留时长</label>
+    <label><input type="checkbox" id="opt-owner" checked> 责任人</label>
+    <div class="opt-hint">单击线选中，双击节点编辑事务；同天多事务默认折叠，点击带数字的节点展开/折叠</div>
+    <div class="opt-hint">Ctrl+滚轮：缩放画布<br>左键长按拖动：平移画布</div>
+  </aside>
+  <div id="sel-info" role="status" aria-live="polite">未选中任何线</div>
+  <div id="canvas-wrap">
+    <svg id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</main>
+
+<!-- 表格视图 -->
+<main id="table-view" class="app-surface hidden">
+  <div id="table-bar">
+    <button id="btn-table-add">+ 新增事务</button>
+    <button id="btn-export-all">导出全部</button>
+    <button id="btn-export-selected" disabled>导出选中</button>
+    <select id="bulk-status"><option value="">批量改状态</option></select>
+    <select id="bulk-owner"><option value="">批量改责任人</option></select>
+    <select id="bulk-priority"><option value="">批量改优先级</option></select>
+    <button id="btn-bulk-delete" class="danger">批量删除</button>
+    <span class="opt-hint">单元格可直接编辑，修改后自动保存</span>
+  </div>
+  <div id="table-wrap">
+    <table id="task-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="check-all-tasks" title="全选当前列表"></th>
+          <th>提示</th><th>线名</th><th>事务名</th><th>事务内容</th><th>闭环目标</th>
+          <th>下一步</th><th>风险原因</th><th>优先级</th><th>责任人</th>
+          <th>进展状态</th><th>依赖事务</th><th>起始日期</th><th>结束日期</th><th>更新于</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="task-tbody"></tbody>
+    </table>
+  </div>
+</main>
+
+<!-- 通用弹窗 -->
+<div id="modal-mask" class="hidden">
+  <div id="modal">
+    <div id="modal-header">
+      <h3 id="modal-title"></h3>
+      <div id="modal-header-tools"></div>
+    </div>
+    <div id="modal-body"></div>
+    <div id="modal-btns">
+      <div id="modal-tools"></div>
+      <button id="modal-cancel">取消</button>
+      <button id="modal-ok" class="primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
