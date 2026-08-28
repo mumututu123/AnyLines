@@ -41,6 +41,7 @@ def init_db(db_path=None):
         CREATE TABLE IF NOT EXISTS lines (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             name       TEXT NOT NULL,
+            description TEXT DEFAULT '',
             parent_id  INTEGER,                 -- NULL = 主线
             fork_date  TEXT NOT NULL,           -- 线的起点(支线=分叉日)
             merge_date TEXT,                    -- 反合回父线的日期, NULL=未反合
@@ -74,6 +75,7 @@ def init_db(db_path=None):
         );
         """
     )
+    ensure_column(db, "lines", "description", "TEXT DEFAULT ''")
     ensure_column(db, "lines", "deleted_at", "TEXT")
     ensure_column(db, "lines", "updated_at", "TEXT")
     ensure_column(db, "tasks", "priority", "TEXT NOT NULL DEFAULT '中'")
@@ -231,7 +233,8 @@ def index():
 def api_state():
     db = get_db()
     lines = [dict(r) for r in db.execute(
-        "SELECT id,name,parent_id,fork_date,merge_date,updated_at FROM lines "
+        "SELECT id,name,description,parent_id,fork_date,merge_date,updated_at "
+        "FROM lines "
         "WHERE deleted=0 ORDER BY id")]
     tasks = [dict(r) for r in db.execute(
         "SELECT t.id,t.line_id,t.name,t.content,t.goal,t.owner,t.priority,"
@@ -318,6 +321,7 @@ def api_set_statuses():
 def create_line():
     d = json_object()
     name = text_field(d, "name", "线名").strip()
+    description = text_field(d, "description", "描述").strip()
     if not name:
         return jsonify({"error": "线名不能为空"}), 400
     parent_id = d.get("parent_id")
@@ -343,8 +347,9 @@ def create_line():
             return jsonify({"error": "支线起始日期不能早于父线起始日期"}), 400
     on_edit(db)
     cur = db.execute(
-        "INSERT INTO lines(name,parent_id,fork_date,updated_at) VALUES(?,?,?,?)",
-        (name, parent_id, fork_date, date.today().isoformat()),
+        "INSERT INTO lines(name,description,parent_id,fork_date,updated_at) "
+        "VALUES(?,?,?,?,?)",
+        (name, description, parent_id, fork_date, date.today().isoformat()),
     )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
@@ -362,6 +367,9 @@ def update_line(lid):
     if not row:
         return jsonify({"error": "线不存在"}), 404
     new_name = text_field(d, "name", "线名", row["name"])
+    new_description = text_field(
+        d, "description", "描述", row["description"] or ""
+    )
     new_fork = text_field(d, "fork_date", "起始日期", row["fork_date"])
     new_merge = text_field(
         d, "merge_date", "反合日期", row["merge_date"], nullable=True
@@ -370,6 +378,8 @@ def update_line(lid):
         return jsonify({"error": "线名不能为空"}), 400
     if "name" in d:
         d["name"] = new_name.strip()
+    if "description" in d:
+        d["description"] = new_description.strip()
     if not new_fork:
         return jsonify({"error": "起始日期不能为空"}), 400
     try:
@@ -402,7 +412,7 @@ def update_line(lid):
         return jsonify({"error": "起始日期不能晚于线上已有事务的起始日期"}), 400
 
     fields, vals = [], []
-    for k in ("name", "fork_date", "merge_date"):
+    for k in ("name", "description", "fork_date", "merge_date"):
         if k in d:
             fields.append(f"{k}=?")
             vals.append(d[k])

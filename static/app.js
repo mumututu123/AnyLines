@@ -494,6 +494,8 @@ function renderCanvas() {
     }, gLines);
     /* 加宽的透明命中区域 */
     const hit = svgEl("path", { d, class: "line-hit" }, gLines);
+    const lineTip = svgEl("title", {}, hit);
+    lineTip.textContent = `${line.name}\n${line.description || "暂无描述"}`;
     const select = () => {
       state.selectedLineId = line.id;
       state.selectedTaskId = null;
@@ -977,6 +979,10 @@ function openLineModal(line, parentId = null) {
     isNew ? (parentId ? "新建支线" : "新建主线") : "编辑线",
     (body) => {
       body._name = field(body, "线名", input("text", line ? line.name : ""));
+      const description = document.createElement("textarea");
+      description.rows = 3;
+      description.value = line ? (line.description || "") : "";
+      body._description = field(body, "描述", description);
       body._date = field(body, isNew ? "起始日期（支线即分叉日）" : "起始日期",
         input("date", line ? line.fork_date : state.today));
       if (parentId) {
@@ -990,15 +996,17 @@ function openLineModal(line, parentId = null) {
     async () => {
       const body = $("#modal-body");
       const name = body._name.value.trim();
+      const description = body._description.value.trim();
       if (!name) { toast("线名不能为空"); return false; }
       if (isNew) {
         const r = await api("/api/lines", "POST", {
-          name, parent_id: parentId, fork_date: body._date.value || state.today,
+          name, description, parent_id: parentId,
+          fork_date: body._date.value || state.today,
         });
         state.selectedLineId = r.id;
       } else {
         await api(`/api/lines/${line.id}`, "PATCH", {
-          name, fork_date: body._date.value,
+          name, description, fork_date: body._date.value,
         });
       }
       reload();

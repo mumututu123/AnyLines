@@ -54,9 +54,10 @@ class AnyLineHttpTests(unittest.TestCase):
         data = json.loads(raw.decode("utf-8")) if "application/json" in content_type else raw
         return response.status, data
 
-    def create_line(self, name="主线", fork_date=None, parent_id=None):
+    def create_line(self, name="主线", fork_date=None, parent_id=None, description=""):
         payload = {
             "name": name,
+            "description": description,
             "fork_date": fork_date or self.today.isoformat(),
             "parent_id": parent_id,
         }
@@ -121,7 +122,16 @@ class AnyLineHttpTests(unittest.TestCase):
     def test_line_crud_and_date_rules(self):
         yesterday = (self.today - timedelta(days=1)).isoformat()
         tomorrow = (self.today + timedelta(days=1)).isoformat()
-        main_id = self.create_line()
+        main_id = self.create_line(description="主线描述")
+
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"][0]["description"], "主线描述")
+        status, data = self.request(
+            "PATCH", f"/api/lines/{main_id}", {"description": "更新后的描述"}
+        )
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"][0]["description"], "更新后的描述")
 
         status, data = self.request("POST", "/api/lines", {
             "name": "非法支线", "parent_id": main_id, "fork_date": yesterday,
@@ -308,7 +318,9 @@ class DatabaseMigrationTests(unittest.TestCase):
             line_columns = {row[1] for row in db.execute("PRAGMA table_info(lines)")}
             task_columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
             db.close()
-            self.assertTrue({"deleted_at", "updated_at"}.issubset(line_columns))
+            self.assertTrue(
+                {"description", "deleted_at", "updated_at"}.issubset(line_columns)
+            )
             self.assertTrue(
                 {"priority", "next_action", "risk_reason", "deleted_at", "updated_at"}
                 .issubset(task_columns)
