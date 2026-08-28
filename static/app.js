@@ -1402,20 +1402,28 @@ function applyPanTransform() {
   }
 }
 
+function activateDrag() {
+  if (!drag || drag.active) return;
+  drag.active = true;
+  wrap.classList.add("grabbing");
+  try {
+    wrap.setPointerCapture(drag.pointerId);
+  } catch (_error) {
+    // 指针已释放时由 pointerup/pointercancel 完成清理。
+  }
+}
+
 wrap.addEventListener("pointerdown", (e) => {
   if (e.pointerType === "mouse" && e.button !== 0) return;
   if (!$("#canvas-root")) return;
   if (drag) return;
-  wrap.setPointerCapture(e.pointerId);
   drag = {
     pointerId: e.pointerId,
     startX: e.clientX, startY: e.clientY,
     panX: state.pan.x, panY: state.pan.y,
     active: false, downAt: Date.now(),
   };
-  drag.timer = setTimeout(() => {
-    if (drag) { drag.active = true; wrap.classList.add("grabbing"); }
-  }, DRAG_HOLD_MS);
+  drag.timer = setTimeout(activateDrag, DRAG_HOLD_MS);
 });
 
 wrap.addEventListener("pointermove", (e) => {
@@ -1423,8 +1431,7 @@ wrap.addEventListener("pointermove", (e) => {
   const dx = e.clientX - drag.startX, dy = e.clientY - drag.startY;
   if (!drag.active && Math.hypot(dx, dy) > DRAG_MOVE_PX &&
       Date.now() - drag.downAt >= DRAG_HOLD_MS) {
-    drag.active = true;
-    wrap.classList.add("grabbing");
+    activateDrag();
   }
   if (drag.active) {
     e.preventDefault();
@@ -1443,11 +1450,14 @@ function finishDrag(e) {
     suppressNextClick = true;
     setTimeout(() => { suppressNextClick = false; }, 0);
   }
+  if (wrap.hasPointerCapture(e.pointerId)) {
+    wrap.releasePointerCapture(e.pointerId);
+  }
   drag = null;
 }
 
-wrap.addEventListener("pointerup", finishDrag);
-wrap.addEventListener("pointercancel", finishDrag);
+window.addEventListener("pointerup", finishDrag);
+window.addEventListener("pointercancel", finishDrag);
 
 let suppressNextClick = false;
 wrap.addEventListener("click", (e) => {
