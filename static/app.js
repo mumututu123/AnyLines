@@ -436,6 +436,51 @@ function renderCanvas() {
   }
   const lineY = (id) => rowCenter.get(id);
 
+  const BRANCH_CURVE_W = 24;
+  const lineGeometryCache = new Map();
+
+  const cubicPoint = (curve, t) => {
+    const mt = 1 - t;
+    return {
+      x: mt ** 3 * curve.p0.x + 3 * mt ** 2 * t * curve.p1.x +
+        3 * mt * t ** 2 * curve.p2.x + t ** 3 * curve.p3.x,
+      y: mt ** 3 * curve.p0.y + 3 * mt ** 2 * t * curve.p1.y +
+        3 * mt * t ** 2 * curve.p2.y + t ** 3 * curve.p3.y,
+    };
+  };
+
+  /* 同日创建的嵌套支线从父支线贝塞尔曲线的中点继续分叉。 */
+  const branchStartPoint = (line, parent) => {
+    if (parent.parent_id !== null && line.fork_date === parent.fork_date) {
+      const parentCurve = lineGeometry(parent).curve;
+      if (parentCurve) return cubicPoint(parentCurve, 0.5);
+    }
+    return { x: x(line.fork_date), y: lineY(parent.id) };
+  };
+
+  function lineGeometry(line) {
+    if (lineGeometryCache.has(line.id)) return lineGeometryCache.get(line.id);
+    const y = lineY(line.id);
+    const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+    if (!parent) {
+      const point = { x: x(line.fork_date), y };
+      const geometry = { start: point, curve: null, horizontalStart: point };
+      lineGeometryCache.set(line.id, geometry);
+      return geometry;
+    }
+
+    const start = branchStartPoint(line, parent);
+    const curve = {
+      p0: start,
+      p1: { x: start.x + 16, y: start.y },
+      p2: { x: start.x, y },
+      p3: { x: start.x + BRANCH_CURVE_W, y },
+    };
+    const geometry = { start, curve, horizontalStart: curve.p3 };
+    lineGeometryCache.set(line.id, geometry);
+    return geometry;
+  }
+
   const contentWidth = Math.max(x(stop.toISOString().slice(0, 10)) + CV.padR, 900);
   const contentHeight = cursorY + 60;
   const width = Math.max(contentWidth, wrap.clientWidth);
@@ -483,16 +528,20 @@ function renderCanvas() {
     const y = lineY(line.id);
     const color = colorOf(line);
     const x1 = x(line.fork_date);
+    const geometry = lineGeometry(line);
     const endDate = lineEnd(line);
-    const x2 = Math.max(x(endDate), x1 + 30);
     const selected = line.id === state.selectedLineId;
     const parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+    const x2 = Math.max(
+      x(endDate), parent ? geometry.horizontalStart.x + 6 : x1 + 30
+    );
 
     let d = "";
     if (parent) {
       /* 从父线拉出的贝塞尔分叉 */
-      const py = lineY(parent.id);
-      d += `M ${x1} ${py} C ${x1 + 16} ${py}, ${x1} ${y}, ${x1 + 24} ${y} `;
+      const { p0, p1, p2, p3 } = geometry.curve;
+      d += `M ${p0.x} ${p0.y} C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ` +
+        `${p3.x} ${p3.y} `;
       d += `L ${x2} ${y}`;
     } else {
       d = `M ${x1} ${y} L ${x2} ${y}`;
@@ -549,8 +598,7 @@ function renderCanvas() {
     const parent = lineById(branch.parent_id);
     if (!parent || !rows.has(parent.id)) continue;
     const hidden = state.hiddenBranchIds.has(branch.id);
-    const cx = x(branch.fork_date);
-    const cy = lineY(parent.id);
+    const { x: cx, y: cy } = branchStartPoint(branch, parent);
     const color = colorOf(branch);
     const control = svgEl("g", {
       class: `fork-control${hidden ? " collapsed" : ""}`,
@@ -587,15 +635,10 @@ function renderCanvas() {
   /* ---- 事务节点（同线同天多事务折叠为聚合节点，点击展开/折叠） ---- */
   const gTasks = svgEl("g", {}, root);
 
-  /*
-   * 节点横坐标：支线的水平段从 x(fork_date)+24 才开始（前 24px 是从父线
-   * 拉下来的贝塞尔曲线），事务日期为分叉当日时需向右钳制，确保节点落在线上。
-   */
-  const BRANCH_CURVE_W = 24;
+  /* 事务日期为分叉当日时，钳制到对应支线贝塞尔曲线后的水平段。 */
   const nodeX = (t) => {
     const ln = lineById(t.line_id);
-    const lineStart = x(ln.fork_date) +
-      (ln.parent_id !== null ? BRANCH_CURVE_W : 0);
+    const lineStart = lineGeometry(ln).horizontalStart.x;
     return Math.max(x(t.start_date), lineStart);
   };
 
