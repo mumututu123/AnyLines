@@ -802,6 +802,12 @@ function renderCanvas() {
     return Math.max(x(t.start_date), lineStart);
   };
 
+  const trianglePoints = (cx, cy, size) => {
+    const halfWidth = Math.sqrt(3) * size / 2;
+    return `${cx},${cy - size} ${cx + halfWidth},${cy + size / 2} ` +
+      `${cx - halfWidth},${cy + size / 2}`;
+  };
+
   /* 单个事务节点 + 标签 */
   const drawTask = (t, y, labelRight) => {
     const line = lineById(t.line_id);
@@ -817,8 +823,8 @@ function renderCanvas() {
 
     const health = taskHealth(t);
     const selectedTask = state.selectedTaskId === t.id;
-    const node = svgEl("circle", {
-      cx, cy: y, r: selectedTask ? 10 : 7,
+    const node = svgEl("polygon", {
+      points: trianglePoints(cx, y, selectedTask ? 12 : 9),
       "data-task-id": t.id,
       class: `task-node ${statusClass(t.status)} ${health.className}`,
     }, gTasks);
@@ -908,9 +914,15 @@ function renderCanvas() {
         (hs.some((h) => h.soon) ? "health-soon" :
           (hs.some((h) => h.stale) ? "health-stale" : ""));
       const g = svgEl("g", { class: "cluster-node" }, gTasks);
-      /* 底层双环暗示"这是一叠节点" */
-      const backNode = svgEl("circle", { cx: cx + 3, cy: baseY + 3, r: 9, class: `task-node ${statusClass(st)} ${clusterHealth}`, opacity: .35 }, g);
-      const node = svgEl("circle", { cx, cy: baseY, r: 9, class: `task-node ${statusClass(st)} ${clusterHealth}` }, g);
+      /* 底层错位三角形暗示"这是一叠节点" */
+      const backNode = svgEl("polygon", {
+        points: trianglePoints(cx + 3, baseY + 3, 13),
+        class: `task-node ${statusClass(st)} ${clusterHealth}`, opacity: .35,
+      }, g);
+      const node = svgEl("polygon", {
+        points: trianglePoints(cx, baseY, 13),
+        class: `task-node ${statusClass(st)} ${clusterHealth}`,
+      }, g);
       backNode.style.fill = statusColor(st);
       node.style.fill = statusColor(st);
       /* 数量徽标 */
