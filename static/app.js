@@ -1133,12 +1133,63 @@ function openLineModal(line, parentId = null) {
   );
 }
 
+function lineOptionLabel(line) {
+  const names = [line.name];
+  let parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+  const visited = new Set([line.id]);
+  while (parent && !visited.has(parent.id)) {
+    names.unshift(parent.name);
+    visited.add(parent.id);
+    parent = parent.parent_id !== null ? lineById(parent.parent_id) : null;
+  }
+  return `${line.parent_id === null ? "主线" : "支线"} · ${names.join(" / ")}`;
+}
+
 /* 新建/编辑事务 */
-function openTaskModal(task, lineId = null) {
+function openTaskModal(task, lineId = null, allowLineSelection = false) {
   const isNew = !task;
   openModal(
-    isNew ? `新建事务（${lineById(lineId).name}）` : "编辑事务",
+    isNew && allowLineSelection ? "新建事务" :
+      (isNew ? `新建事务（${lineById(lineId).name}）` : "编辑事务"),
     (body) => {
+      if (isNew && allowLineSelection) {
+        const rows = assignRows(true);
+        const lines = [...state.lines].sort(
+          (a, b) => (rows.get(a.id) ?? 0) - (rows.get(b.id) ?? 0)
+        );
+        const baseLabels = lines.map(lineOptionLabel);
+        const labelCounts = new Map();
+        for (const label of baseLabels) {
+          labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
+        }
+        const lineChoices = new Map();
+        const picker = input("search");
+        picker.className = "line-search-input";
+        picker.placeholder = "输入名称或路径搜索";
+        picker.autocomplete = "off";
+        picker.setAttribute("list", "task-line-options");
+        picker.setAttribute("role", "combobox");
+        picker.setAttribute("aria-autocomplete", "list");
+        const optionList = document.createElement("datalist");
+        optionList.id = "task-line-options";
+        for (const candidate of lines) {
+          const option = document.createElement("option");
+          const baseLabel = lineOptionLabel(candidate);
+          const label = labelCounts.get(baseLabel) > 1 ?
+            `${baseLabel}（ID ${candidate.id}）` : baseLabel;
+          option.value = label;
+          lineChoices.set(label, candidate.id);
+          optionList.appendChild(option);
+          if (candidate.id === lineId) picker.value = label;
+        }
+        const pickerWrap = document.createElement("div");
+        pickerWrap.className = "line-search-picker";
+        pickerWrap.appendChild(picker);
+        pickerWrap.appendChild(optionList);
+        field(body, "所属主线 / 支线", pickerWrap);
+        body._line = picker;
+        body._lineChoices = lineChoices;
+      }
       body._name = field(body, "事务名", input("text", task ? task.name : ""));
       const ta = document.createElement("textarea");
       ta.value = task ? task.content : "";
@@ -1163,9 +1214,27 @@ function openTaskModal(task, lineId = null) {
         sel.appendChild(o);
       }
       body._status = field(body, "进展状态", sel);
+      const initialLine = lineById(lineId);
+      const initialStart = !task && initialLine && initialLine.fork_date > state.today ?
+        initialLine.fork_date : state.today;
       body._start = field(body, "起始日期",
-        input("date", task ? task.start_date : state.today)); // 默认当天
+        input("date", task ? task.start_date : initialStart));
       body._end = field(body, "结束日期", input("date", task && task.end_date || ""));
+
+      if (body._line) {
+        const syncStartDate = () => {
+          const selectedLineId = body._lineChoices.get(body._line.value);
+          const selectedLine = lineById(selectedLineId);
+          if (!selectedLine) return;
+          body._start.min = selectedLine.fork_date;
+          if (body._start.value < selectedLine.fork_date) {
+            body._start.value = selectedLine.fork_date;
+          }
+        };
+        body._line.oninput = syncStartDate;
+        body._line.onchange = syncStartDate;
+        syncStartDate();
+      }
 
       if (!isNew) {
         const del = document.createElement("button");
@@ -1198,7 +1267,13 @@ function openTaskModal(task, lineId = null) {
       };
       if (!payload.name) { toast("事务名不能为空"); return false; }
       if (isNew) {
-        await api("/api/tasks", "POST", { ...payload, line_id: lineId });
+        const targetLineId = body._line ?
+          body._lineChoices.get(body._line.value) : lineId;
+        if (!targetLineId) {
+          toast("请从下拉列表选择所属线");
+          return false;
+        }
+        await api("/api/tasks", "POST", { ...payload, line_id: targetLineId });
       } else {
         await api(`/api/tasks/${task.id}`, "PATCH", payload);
       }
@@ -1271,7 +1346,7 @@ $("#btn-undo").onclick = async () => {
 $("#btn-table-add").onclick = () => {
   if (!state.lines.length) { toast("请先创建一条主线"); return; }
   const lineId = state.selectedLineId || state.lines[0].id;
-  openTaskModal(null, lineId);
+  openTaskModal(null, lineId, true);
 };
 
 /* 责任人名单配置 */
