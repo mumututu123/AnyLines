@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnyLine · 在线事务管理</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="topbar">
+  <div id="brand">Any<span>Line</span></div>
+
+  <nav id="view-switch">
+    <button id="btn-view-canvas" class="view-btn active">画布视图</button>
+    <button id="btn-view-table" class="view-btn">表格视图</button>
+  </nav>
+
+  <div id="toolbar">
+    <button id="btn-add-mainline" title="新建一条主线">+ 主线</button>
+    <button id="btn-add-branch" disabled title="从选中的线拉出支线">+ 支线</button>
+    <button id="btn-add-task" disabled title="在选中的线上添加事务节点">+ 事务</button>
+    <button id="btn-merge" disabled title="将选中的支线反合回父线">反合</button>
+    <button id="btn-rename" disabled title="重命名选中的线">重命名</button>
+    <button id="btn-delete-line" class="danger" disabled title="递归删除选中的线及其子支线、事务">删除线</button>
+    <button id="btn-undo" disabled title="撤销上一次删除">撤销删除</button>
+    <button id="btn-owners" title="配置责任人名单，配置后事务责任人可下拉选择">责任人名单</button>
+  </div>
+
+  <div id="sel-info">未选中任何线</div>
+</header>
+
+<!-- 画布视图 -->
+<main id="canvas-view">
+  <aside id="canvas-opts">
+    <div class="opt-title">节点标签显示</div>
+    <button id="btn-toggle-labels" title="一键显示/隐藏所有节点文字信息">隐藏全部标签</button>
+    <label><input type="checkbox" id="opt-name" checked> 事务名</label>
+    <label><input type="checkbox" id="opt-status" checked> 进展状态</label>
+    <label><input type="checkbox" id="opt-dur" checked> 状态停留时长</label>
+    <label><input type="checkbox" id="opt-owner" checked> 责任人</label>
+    <div class="opt-hint">单击线选中，双击节点编辑事务；同天多事务默认折叠，点击带数字的节点展开/折叠</div>
+    <div class="opt-hint">Ctrl+滚轮：缩放画布<br>左键长按拖动：平移画布</div>
+  </aside>
+  <div id="canvas-wrap">
+    <svg id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</main>
+
+<!-- 表格视图 -->
+<main id="table-view" class="hidden">
+  <div id="table-bar">
+    <button id="btn-table-add">+ 新增事务</button>
+    <span class="opt-hint">单元格可直接编辑，修改后自动保存</span>
+  </div>
+  <div id="table-wrap">
+    <table id="task-table">
+      <thead>
+        <tr>
+          <th>线名</th><th>事务名</th><th>事务内容</th><th>闭环目标</th>
+          <th>责任人</th><th>进展状态</th><th>起始日期</th><th>结束日期</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="task-tbody"></tbody>
+    </table>
+  </div>
+</main>
+
+<!-- 通用弹窗 -->
+<div id="modal-mask" class="hidden">
+  <div id="modal">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div id="modal-btns">
+      <button id="modal-cancel">取消</button>
+      <button id="modal-ok" class="primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,139 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #f6f8fa; color: #24292f; display: flex; flex-direction: column;
+}
+.hidden { display: none !important; }
+
+/* ---------------- top bar ---------------- */
+#topbar {
+  display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+  background: #fff; border-bottom: 1px solid #d8dee4; flex-wrap: wrap;
+}
+#brand { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+#brand span { color: #0969da; }
+
+#view-switch { display: flex; border: 1px solid #d0d7de; border-radius: 6px; overflow: hidden; }
+.view-btn {
+  border: none; background: #fff; padding: 6px 14px; cursor: pointer; font-size: 13px;
+}
+.view-btn.active { background: #0969da; color: #fff; }
+
+#toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
+#toolbar button, #table-bar button, #modal-btns button {
+  border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px;
+  padding: 5px 12px; font-size: 13px; cursor: pointer;
+}
+#toolbar button:hover:not(:disabled), #table-bar button:hover { background: #eaeef2; }
+#toolbar button:disabled { opacity: .4; cursor: not-allowed; }
+#toolbar button.danger { color: #cf222e; border-color: #f0b3b8; }
+#toolbar button.danger:hover:not(:disabled) { background: #ffebe9; }
+button.primary { background: #0969da !important; color: #fff; border-color: #0969da !important; }
+
+#sel-info { margin-left: auto; font-size: 12px; color: #57606a; }
+
+/* ---------------- canvas view ---------------- */
+#canvas-view { flex: 1; display: flex; min-height: 0; }
+#canvas-opts {
+  width: 168px; background: #fff; border-right: 1px solid #d8dee4;
+  padding: 14px 14px; display: flex; flex-direction: column; gap: 10px;
+  font-size: 13px; flex-shrink: 0;
+}
+.opt-title { font-weight: 600; font-size: 13px; color: #57606a; }
+#canvas-opts label { cursor: pointer; user-select: none; }
+.opt-hint { font-size: 11px; color: #8c959f; margin-top: 6px; line-height: 1.6; }
+
+#canvas-wrap { flex: 1; overflow: auto; position: relative; }
+#canvas-wrap.grabbing { cursor: grabbing; user-select: none; }
+#canvas-wrap.grabbing * { cursor: grabbing !important; }
+#graph { display: block; background: #fdfdfe; }
+
+#btn-toggle-labels {
+  border: 1px solid #d0d7de; background: #f6f8fa; border-radius: 6px;
+  padding: 5px 10px; font-size: 12px; cursor: pointer;
+}
+#btn-toggle-labels:hover { background: #eaeef2; }
+
+/* svg elements */
+.month-line { stroke: #e7ebef; stroke-width: 1; }
+.year-line  { stroke: #d5dbe1; stroke-width: 1.2; }
+.month-label { fill: #c3cad1; font-size: 10px; }
+.year-label  { fill: #aeb7bf; font-size: 12px; font-weight: 600; }
+
+.line-path { fill: none; stroke-width: 3; cursor: pointer; }
+.line-path.selected { stroke-width: 5; filter: drop-shadow(0 0 3px rgba(9,105,218,.6)); }
+.line-hit { fill: none; stroke: transparent; stroke-width: 14; cursor: pointer; }
+.line-label { font-size: 12px; font-weight: 600; cursor: pointer; user-select: none; }
+.merge-dot, .fork-dot { stroke: #fff; stroke-width: 1.5; }
+
+.task-node { stroke: #fff; stroke-width: 2; cursor: pointer; }
+.task-bar { opacity: .25; }
+.task-label { font-size: 11px; pointer-events: none; user-select: none; }
+.task-label.t-name { font-weight: 600; fill: #24292f; }
+.task-label.t-meta { fill: #57606a; }
+
+/* 同天多事务聚合节点 */
+.cluster-node { cursor: pointer; }
+.cluster-node:hover .task-node { stroke: #24292f; }
+.cluster-count {
+  fill: #fff; font-size: 10px; font-weight: 700; pointer-events: none; user-select: none;
+}
+.cluster-hint {
+  fill: #8c959f; font-size: 10px; user-select: none; pointer-events: none;
+}
+.cluster-node:hover .cluster-hint { fill: #0969da; }
+.cluster-collapse-btn { fill: #fff; stroke: #8c959f; stroke-width: 1.2; }
+.cluster-node:hover .cluster-collapse-btn { stroke: #0969da; }
+.cluster-collapse-x {
+  fill: #57606a; font-size: 10px; pointer-events: none; user-select: none;
+}
+
+.st-未启动 { fill: #8c959f; }
+.st-进行中 { fill: #0969da; }
+.st-有风险 { fill: #d4a72c; }
+.st-已闭环 { fill: #1a7f37; }
+
+/* ---------------- table view ---------------- */
+#table-view { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 12px 16px; gap: 10px; }
+#table-bar { display: flex; align-items: center; gap: 12px; }
+#table-wrap { flex: 1; overflow: auto; background: #fff; border: 1px solid #d8dee4; border-radius: 6px; }
+#task-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+#task-table th, #task-table td {
+  border-bottom: 1px solid #eaeef2; padding: 6px 10px; text-align: left; white-space: nowrap;
+}
+#task-table th { background: #f6f8fa; position: sticky; top: 0; font-weight: 600; color: #57606a; }
+#task-table td input, #task-table td select {
+  border: 1px solid transparent; background: transparent; font-size: 13px;
+  padding: 3px 5px; border-radius: 4px; width: 100%; min-width: 80px; font-family: inherit;
+}
+#task-table td input:hover, #task-table td select:hover { border-color: #d0d7de; }
+#task-table td input:focus, #task-table td select:focus { border-color: #0969da; outline: none; background: #fff; }
+.row-del { color: #cf222e; cursor: pointer; border: none; background: none; font-size: 13px; }
+.status-badge { padding: 1px 8px; border-radius: 10px; color: #fff; font-size: 12px; }
+
+/* ---------------- modal & toast ---------------- */
+#modal-mask {
+  position: fixed; inset: 0; background: rgba(31,35,40,.45);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+#modal {
+  background: #fff; border-radius: 10px; padding: 20px 22px; width: 420px;
+  max-height: 84vh; overflow: auto; box-shadow: 0 8px 24px rgba(66,74,83,.25);
+}
+#modal h3 { margin-bottom: 14px; font-size: 16px; }
+#modal-body .field { margin-bottom: 10px; }
+#modal-body label { display: block; font-size: 12px; color: #57606a; margin-bottom: 3px; }
+#modal-body input, #modal-body select, #modal-body textarea {
+  width: 100%; padding: 6px 8px; border: 1px solid #d0d7de; border-radius: 6px;
+  font-size: 13px; font-family: inherit;
+}
+#modal-body textarea { resize: vertical; min-height: 52px; }
+#modal-btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+#modal-btns .left { margin-right: auto; }
+
+#toast {
+  position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+  background: #24292f; color: #fff; padding: 8px 18px; border-radius: 6px;
+  font-size: 13px; z-index: 200; box-shadow: 0 4px 12px rgba(0,0,0,.3);
+}
