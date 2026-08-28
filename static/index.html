@@ -32,20 +32,32 @@
     <button id="btn-add-branch" disabled title="从选中的线拉出支线">+ 支线</button>
     <button id="btn-add-task" disabled title="在选中的线上添加事务节点">+ 事务</button>
     <button id="btn-merge" disabled title="将选中的支线反合回父线">反合</button>
-    <button id="btn-rename" disabled title="重命名选中的线">重命名</button>
     <button id="btn-delete-line" class="danger" disabled title="递归删除选中的线及其子支线、事务">删除线</button>
     <button id="btn-undo" disabled title="撤销上一次删除">撤销删除</button>
-    <button id="btn-owners" title="配置责任人名单，配置后事务责任人可下拉选择">责任人名单</button>
-    <button id="btn-statuses" title="配置进展状态选项">状态设置</button>
     <button id="btn-trash" title="查看和恢复已删除的线或事务">回收站</button>
   </div>
 
   <div id="sel-info">未选中任何线</div>
   <div id="account-bar">
-    <button id="btn-members" class="admin-only" title="管理当前空间成员">成员管理</button>
-    <button id="btn-password" title="修改当前账号密码">修改密码</button>
-    <span id="current-user"></span>
-    <button id="btn-logout">退出</button>
+    <button id="account-trigger" type="button" aria-haspopup="menu"
+            aria-expanded="false" aria-controls="account-menu">
+      <span id="account-avatar" aria-hidden="true"></span>
+    </button>
+    <div id="account-menu" class="hidden" role="menu">
+      <div class="account-summary">
+        <strong id="current-user"></strong>
+        <span id="current-username"></span>
+      </div>
+      <button id="btn-members" class="admin-only" type="button" role="menuitem">成员管理</button>
+      <button id="btn-owners" type="button" role="menuitem">责任人名单</button>
+      <button id="btn-statuses" type="button" role="menuitem">状态设置</button>
+      <button id="btn-password" type="button" role="menuitem">修改密码</button>
+      <div class="account-role" role="menuitem" aria-disabled="true">
+        <span>账号角色</span>
+        <strong id="current-user-role"></strong>
+      </div>
+      <button id="btn-logout" type="button" role="menuitem">退出</button>
+    </div>
   </div>
 </header>
 

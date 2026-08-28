@@ -106,6 +106,7 @@ async function api(url, method = "GET", body = null) {
 }
 
 function showLoggedOut() {
+  closeAccountMenu();
   document.body.classList.remove("authenticated");
   state.user = null;
   state.workspaces = [];
@@ -138,8 +139,31 @@ function applySession(data) {
     select.appendChild(createOption);
   }
   $("#btn-members").classList.toggle("hidden", !isCurrentAdmin);
-  $("#current-user").textContent =
-    `${state.user.display_name} · ${isCurrentAdmin ? "管理员" : "普通用户"}`;
+  const displayName = (state.user.display_name || state.user.username || "").trim();
+  const accountName = state.user.username || displayName;
+  $("#account-avatar").textContent = Array.from(displayName)[0]?.toLocaleUpperCase() || "用";
+  $("#account-trigger").setAttribute("aria-label", `${displayName}，打开账号菜单`);
+  $("#current-user").textContent = displayName;
+  $("#current-username").textContent = accountName === displayName ? "" : accountName;
+  $("#current-username").classList.toggle("hidden", accountName === displayName);
+  $("#current-user-role").textContent = isCurrentAdmin ? "管理员" : "普通用户";
+}
+
+function closeAccountMenu({ restoreFocus = false } = {}) {
+  const menu = $("#account-menu");
+  const trigger = $("#account-trigger");
+  if (!menu || !trigger) return;
+  menu.classList.add("hidden");
+  trigger.setAttribute("aria-expanded", "false");
+  if (restoreFocus) trigger.focus();
+}
+
+function toggleAccountMenu() {
+  const menu = $("#account-menu");
+  const willOpen = menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !willOpen);
+  $("#account-trigger").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) menu.querySelector('[role="menuitem"]:not(.hidden)')?.focus();
 }
 
 function resetWorkspaceState() {
@@ -321,7 +345,6 @@ function renderToolbar() {
     children.every((line) => state.hiddenBranchIds.has(line.id));
   $("#btn-add-branch").disabled = !sel;
   $("#btn-add-task").disabled = !sel;
-  $("#btn-rename").disabled = !sel;
   $("#btn-delete-line").disabled = !sel;
   $("#btn-merge").disabled = !sel || sel.parent_id === null || sel.merge_date;
   $("#btn-undo").disabled = !state.canUndo;
@@ -1595,9 +1618,25 @@ $("#workspace-select").onchange = async (event) => {
     if (state.currentWorkspace) event.target.value = state.currentWorkspace.id;
   }
 };
-$("#btn-members").onclick = openMembersModal;
-$("#btn-password").onclick = openPasswordModal;
+$("#account-trigger").onclick = toggleAccountMenu;
+document.addEventListener("click", (event) => {
+  if (!$("#account-bar").contains(event.target)) closeAccountMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !$("#account-menu").classList.contains("hidden")) {
+    closeAccountMenu({ restoreFocus: true });
+  }
+});
+$("#btn-members").onclick = () => {
+  closeAccountMenu();
+  openMembersModal();
+};
+$("#btn-password").onclick = () => {
+  closeAccountMenu();
+  openPasswordModal();
+};
 $("#btn-logout").onclick = async () => {
+  closeAccountMenu();
   await api("/api/auth/logout", "POST");
   showLoggedOut();
 };
@@ -1620,8 +1659,6 @@ $("#btn-add-branch").onclick = () =>
   state.selectedLineId && openLineModal(null, state.selectedLineId);
 $("#btn-add-task").onclick = () =>
   state.selectedLineId && openTaskModal(null, state.selectedLineId);
-$("#btn-rename").onclick = () =>
-  state.selectedLineId && openLineModal(lineById(state.selectedLineId));
 
 $("#btn-merge").onclick = () => {
   const line = lineById(state.selectedLineId);
@@ -1670,6 +1707,7 @@ $("#btn-table-add").onclick = () => {
 
 /* 责任人名单配置 */
 $("#btn-owners").onclick = () => {
+  closeAccountMenu();
   openModal("配置责任人名单", (body) => {
     const ta = document.createElement("textarea");
     ta.rows = 8;
@@ -1693,6 +1731,7 @@ $("#btn-owners").onclick = () => {
 };
 
 $("#btn-statuses").onclick = () => {
+  closeAccountMenu();
   openModal("配置进展状态", (body) => {
     const list = document.createElement("div");
     list.className = "status-config-list";
