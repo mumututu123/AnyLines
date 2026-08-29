@@ -812,6 +812,8 @@ function lineEnd(line) {
  * 簇 key = `${line_id}|${start_date}`；展开状态记录在 state.expandedClusters。
  */
 const FAN_STEP = 30;   // 展开时相邻节点的垂直间距
+const SAME_DAY_AUTO_SPREAD_ZOOM = 2;
+const SAME_DAY_SPREAD_STEP = 8;
 
 function clusterKey(t) { return `${t.line_id}|${t.start_date}`; }
 
@@ -846,6 +848,7 @@ function renderCanvas() {
   const svg = $("#graph");
   const wrap = $("#canvas-wrap");
   const z = state.zoom;
+  const autoSpreadSameDay = z >= SAME_DAY_AUTO_SPREAD_ZOOM;
   svg.innerHTML = "";
   state.canvasTaskPositions = new Map();
   const layoutRows = assignRows();
@@ -920,10 +923,11 @@ function renderCanvas() {
     }
   }
 
-  /* 每条线的泳道高度按其已展开簇的最大扇出量自适应 */
+  /* 每条线的泳道高度按已展开节点或高倍率标签的最大分层量自适应。 */
   const lineMaxFan = new Map();
   for (const [k, arr] of clusters) {
-    if (arr.length < 2 || !state.expandedClusters.has(k)) continue;
+    if (arr.length < 2 ||
+        (!autoSpreadSameDay && !state.expandedClusters.has(k))) continue;
     const lid = arr[0].line_id;
     const fan = Math.abs(fanDy(arr.length - 1));
     lineMaxFan.set(lid, Math.max(lineMaxFan.get(lid) || 0, fan));
@@ -1305,9 +1309,9 @@ function renderCanvas() {
   };
 
   /* 单个事务节点 + 标签 */
-  const drawTask = (t, y, labelRight) => {
+  const drawTask = (t, y, labelRight, xOverride = null, labelLane = null) => {
     const line = lineById(t.line_id);
-    const cx = nodeX(t);
+    const cx = xOverride ?? nodeX(t);
 
     if (t.end_date && t.end_date > t.start_date) {
       const bar = svgEl("rect", {
@@ -1363,9 +1367,11 @@ function renderCanvas() {
         e.textContent = text;
       }
     } else {
-      const above = (state.tasks.filter((o) => o.line_id === t.line_id)
+      const defaultAbove = (state.tasks.filter((o) => o.line_id === t.line_id)
         .indexOf(t) % 2) === 0;
-      let ty = above ? y - 26 : y + 22;
+      const above = labelLane === null ? defaultAbove : labelLane % 2 === 0;
+      const laneOffset = labelLane === null ? 0 : Math.floor(labelLane / 2) * FAN_STEP;
+      let ty = above ? y - 26 - laneOffset : y + 22 + laneOffset;
       if (parts1.length) {
         const e = svgEl("text", {
           x: cx, y: ty, "text-anchor": "middle", class: "task-label t-name",
@@ -1375,7 +1381,8 @@ function renderCanvas() {
       }
       if (parts2.length) {
         const e = svgEl("text", {
-          x: cx, y: parts1.length ? ty : (above ? y - 13 : y + 22),
+          x: cx, y: parts1.length ? ty :
+            (above ? y - 13 - laneOffset : y + 22 + laneOffset),
           "text-anchor": "middle", class: "task-label t-meta",
         }, gTasks);
         e.textContent = parts2.join(" · ");
@@ -1396,7 +1403,8 @@ function renderCanvas() {
       continue;
     }
 
-    const expanded = state.expandedClusters.has(key);
+    const manuallyExpanded = state.expandedClusters.has(key);
+    const expanded = manuallyExpanded || autoSpreadSameDay;
     const toggle = (e) => {
       e.stopPropagation();
       if (expanded) state.expandedClusters.delete(key);
@@ -1458,25 +1466,33 @@ function renderCanvas() {
         e.textContent = parts.join(" · ");
       }
     } else {
-      /* ---- 展开态：垂直扇出所有节点 + 折叠按钮 ---- */
-      const ys = arr.map((_, i) => baseY + fanDy(i));
-      /* 竖向主干连接所有扇出节点 */
-      svgEl("line", {
-        x1: cx, y1: Math.min(...ys), x2: cx, y2: Math.max(...ys),
-        stroke: color, "stroke-width": 1.2, "stroke-dasharray": "2 2", opacity: .55,
-      }, gTasks);
-      arr.forEach((t, i) => drawTask(t, ys[i], true));
-
-      /* 折叠按钮：置于簇顶部 */
-      const topY = Math.min(...ys) - 16;
-      const g = svgEl("g", { class: "cluster-node" }, gTasks);
-      const tx = svgEl("text", {
-        x: cx, y: topY + 3.5, "text-anchor": "middle", class: "cluster-hint",
-      }, g);
-      tx.textContent = "▾ 折叠";
-      const title = svgEl("title", {}, g);
-      title.textContent = "折叠同天事务";
-      g.addEventListener("click", toggle);
+      if (autoSpreadSameDay) {
+        /* 高倍率自动展开：所有节点保持在线的横轴上，只改变横向位置。 */
+        const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;
+        const firstX = Math.max(
+          cx - totalSpread / 2,
+          lineGeometry(line).horizontalStart.x
+        );
+        const xs = arr.map((_, i) => firstX + i * SAME_DAY_SPREAD_STEP);
+        arr.forEach((t, i) => drawTask(t, baseY, false, xs[i], i));
+      } else {
+        /* 低倍率手动展开：沿用垂直扇出，并保留折叠按钮。 */
+        const ys = arr.map((_, i) => baseY + fanDy(i));
+        svgEl("line", {
+          x1: cx, y1: Math.min(...ys), x2: cx, y2: Math.max(...ys),
+          stroke: color, "stroke-width": 1.2, "stroke-dasharray": "2 2", opacity: .55,
+        }, gTasks);
+        arr.forEach((t, i) => drawTask(t, ys[i], true));
+        const topY = Math.min(...ys) - 16;
+        const g = svgEl("g", { class: "cluster-node" }, gTasks);
+        const tx = svgEl("text", {
+          x: cx, y: topY + 3.5, "text-anchor": "middle", class: "cluster-hint",
+        }, g);
+        tx.textContent = "▾ 折叠";
+        const title = svgEl("title", {}, g);
+        title.textContent = "折叠同天事务";
+        g.addEventListener("click", toggle);
+      }
     }
   }
 

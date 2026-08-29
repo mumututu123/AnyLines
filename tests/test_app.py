@@ -217,6 +217,24 @@ class AnyLineHttpTests(unittest.TestCase):
             with self.subTest(shortcut_hint=key):
                 self.assertIn(f"<kbd>{key}</kbd>", markup)
 
+    def test_same_day_tasks_spread_horizontally_at_high_zoom(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn("const SAME_DAY_AUTO_SPREAD_ZOOM = 2;", source)
+        self.assertIn("const SAME_DAY_SPREAD_STEP = 8;", source)
+        self.assertIn(
+            "const autoSpreadSameDay = z >= SAME_DAY_AUTO_SPREAD_ZOOM;", source
+        )
+        self.assertIn(
+            "const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;", source
+        )
+        self.assertIn("lineGeometry(line).horizontalStart.x", source)
+        self.assertIn("drawTask(t, baseY, false, xs[i], i)", source)
+        self.assertIn("所有节点保持在线的横轴上，只改变横向位置", source)
+        self.assertIn("state.canvasTaskPositions.set(t.id, { x: cx, y });", source)
+
     def test_authentication_is_required(self):
         self.cookie = None
         status, data = self.request("GET", "/api/state")
