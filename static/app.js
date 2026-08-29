@@ -1784,7 +1784,7 @@ function renderCanvas() {
   const healthBadgeItems = (health) => {
     const badges = [];
     if (health.overdue) badges.push(["!", "overdue", "超期"]);
-    else if (health.soon) badges.push(["期", "soon", "即将到期"]);
+    else if (health.soon) badges.push(["临", "soon", "即将到期"]);
     if (health.risk) badges.push(["险", "risk", "风险"]);
     if (health.stale) badges.push(["久", "stale", "状态停留过久"]);
     return badges;
