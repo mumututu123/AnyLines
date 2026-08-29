@@ -1142,12 +1142,14 @@ function renderCanvas() {
     const hiddenChildCount = hasActiveCanvasFilter ? 0 : state.lines.filter(
       (child) => child.parent_id === line.id && state.hiddenBranchIds.has(child.id)
     ).length;
+    const lineHeadX = parent ? geometry.horizontalStart.x : x1;
     const lbl = svgEl("text", {
-      x: (merge ? merge.end.x : x2) + 10,
-      y: (merge ? merge.end.y : y) + 4,
+      x: lineHeadX - 12,
+      y: y + 4,
+      "text-anchor": "end",
       fill: color, class: "line-label",
     }, gLines);
-    lbl.textContent = 
+    lbl.textContent = line.name +
       (hiddenChildCount ? `（已折叠 ${hiddenChildCount}支线）` : "");
     lbl.addEventListener("click", select);
   }

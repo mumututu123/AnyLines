@@ -179,6 +179,12 @@ class AnyLineHttpTests(unittest.TestCase):
             "` Q ${corner.x} ${corner.y}, ${diagonalStart.x} ${diagonalStart.y} `",
             source,
         )
+        self.assertIn(
+            "const lineHeadX = parent ? geometry.horizontalStart.x : x1;",
+            source,
+        )
+        self.assertIn('"text-anchor": "end"', source)
+        self.assertIn("lbl.textContent = line.name", source)
         self.assertIn("cx: merge.end.x, cy: merge.end.y", source)
         self.assertNotIn("d += ` C ${mx + 24}", source)
         self.assertIn('e.key === "Delete"', source)
