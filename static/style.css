@@ -521,7 +521,11 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .legend-focus-downstream {
   width: 13px; height: 13px; border-radius: 4px; background: #8c959f;
 }
-.legend-focus-selected { border: 3px solid #24292f; background: #fff; }
+.legend-focus-selected {
+  border: 1.5px solid #79aee8;
+  background: #f5f9ff;
+  box-shadow: 0 0 0 3px rgba(121, 174, 232, .14);
+}
 .legend-focus-upstream { border: 2px solid #cf222e; background: #fff; }
 .legend-focus-downstream { border: 2px solid #0969da; background: #fff; }
 .legend-alert {
@@ -605,6 +609,29 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 
 .task-node { stroke: none; cursor: pointer; }
+.task-node.locate-emphasis {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: task-locate-pulse .9s cubic-bezier(.2, .75, .35, 1);
+}
+@keyframes task-locate-pulse {
+  0%, 100% { transform: scale(1); }
+  24% {
+    transform: scale(1.18);
+    filter: drop-shadow(0 0 4px rgba(9, 105, 218, .55));
+  }
+  48% { transform: scale(.96); }
+  72% {
+    transform: scale(1.1);
+    filter: drop-shadow(0 0 2px rgba(9, 105, 218, .35));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .task-node.locate-emphasis {
+    animation: none;
+    filter: drop-shadow(0 0 4px rgba(9, 105, 218, .55));
+  }
+}
 .task-node.filter-match {
   filter: drop-shadow(0 2px 3px rgba(31, 35, 40, .55))
     drop-shadow(0 0 5px rgba(9, 105, 218, .85));
@@ -617,7 +644,10 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .task-item.is-focus-dimmed, .cluster-node.is-focus-dimmed { opacity: .12; }
 .task-item.is-focus-selected .task-node,
 .cluster-node.is-focus-selected > .task-node:not([opacity]) {
-  stroke: #24292f; stroke-width: 3;
+  stroke: #79aee8;
+  stroke-width: 1.5;
+  filter: drop-shadow(0 0 2px rgba(121, 174, 232, .3))
+    drop-shadow(0 2px 4px rgba(60, 110, 165, .16));
 }
 .task-item.is-focus-upstream .task-node,
 .cluster-node.is-focus-upstream > .task-node:not([opacity]) {

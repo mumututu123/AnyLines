@@ -269,11 +269,28 @@ class AnyLineHttpTests(unittest.TestCase):
         styles = body.decode("utf-8")
         self.assertIn(".task-node { stroke: none;", styles)
         self.assertIn(".task-item.is-focus-selected .task-node", styles)
+        self.assertIn("stroke: #79aee8", styles)
+        self.assertIn("drop-shadow(0 0 2px rgba(121, 174, 232, .3))", styles)
         self.assertIn(".task-item.is-focus-upstream .task-node", styles)
         self.assertIn(".task-item.is-focus-downstream .task-node", styles)
         self.assertIn(".task-alert-overdue circle", styles)
         self.assertIn(".task-layer.semantic-overview", styles)
         self.assertNotIn(".task-node.health-overdue", styles)
+
+    def test_located_canvas_task_uses_transient_pulse_emphasis(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn("requestAnimationFrame(() => emphasizeCanvasTask(id))", source)
+        self.assertIn('node.classList.add("locate-emphasis")', source)
+        self.assertIn('node.addEventListener("animationend"', source)
+
+        status, body = self.request("GET", "/static/style.css")
+        self.assertEqual(status, 200)
+        styles = body.decode("utf-8")
+        self.assertIn("@keyframes task-locate-pulse", styles)
+        self.assertIn("transform: scale(1.18)", styles)
+        self.assertIn("@media (prefers-reduced-motion: reduce)", styles)
 
     def test_authentication_is_required(self):
         self.cookie = None

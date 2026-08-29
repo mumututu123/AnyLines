@@ -2490,6 +2490,21 @@ function scrollToCanvasTask(id) {
   const pos = state.canvasTaskPositions.get(id);
   if (!pos) return;
   centerCanvasPoint(pos.x, pos.y);
+  requestAnimationFrame(() => emphasizeCanvasTask(id));
+}
+
+function emphasizeCanvasTask(id) {
+  const node = document.querySelector(`.task-node[data-task-id="${id}"]`);
+  if (!node) return;
+  node.classList.remove("locate-emphasis");
+  // 强制刷新动画状态，连续从不同入口定位同一事务时也能重新获得视觉反馈。
+  void node.getBoundingClientRect();
+  node.classList.add("locate-emphasis");
+  node.addEventListener("animationend", () => {
+    node.classList.remove("locate-emphasis");
+  }, { once: true });
+  // 减少动态效果偏好下不会触发 animationend，用兜底计时保持强调仍是短暂的。
+  setTimeout(() => node.classList.remove("locate-emphasis"), 1000);
 }
 
 function centerCanvasPoint(x, y = null) {
