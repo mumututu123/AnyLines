@@ -183,7 +183,7 @@
     <select id="bulk-owner"><option value="">批量改责任人</option></select>
     <select id="bulk-priority"><option value="">批量改优先级</option></select>
     <button id="btn-bulk-delete" class="danger">批量删除</button>
-    <span id="table-edit-hint" class="opt-hint">单元格可直接编辑，修改后自动保存</span>
+    <span id="table-edit-hint" class="opt-hint">单击单元格可查看完整内容，修改后自动保存</span>
   </div>
   <div id="table-wrap">
     <table id="task-table">
@@ -199,6 +199,12 @@
     </table>
   </div>
 </main>
+
+<!-- 表格单元格完整内容预览 -->
+<div id="cell-preview" class="hidden" role="dialog" aria-label="单元格完整内容">
+  <button id="cell-preview-close" type="button" aria-label="关闭">×</button>
+  <div id="cell-preview-content"></div>
+</div>
 
 <!-- 通用弹窗 -->
 <div id="modal-mask" class="hidden">

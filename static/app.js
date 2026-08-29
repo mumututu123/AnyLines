@@ -164,6 +164,7 @@ async function api(url, method = "GET", body = null) {
 
 function showLoggedOut() {
   closeAccountMenu();
+  closeTableCellPreview();
   closeTaskImageViewer({ restoreFocus: false });
   document.body.classList.remove("authenticated");
   document.body.classList.remove("auth-pending");
@@ -1516,7 +1517,59 @@ function renderCanvas() {
 }
 
 /* ============================================================== 表格视图 */
+let tableCellPreviewAnchor = null;
+
+function closeTableCellPreview() {
+  $("#cell-preview").classList.add("hidden");
+  tableCellPreviewAnchor = null;
+}
+
+function showTableCellPreview(cell, value) {
+  const preview = $("#cell-preview");
+  $("#cell-preview-content").textContent = value || "（空）";
+  tableCellPreviewAnchor = cell;
+  preview.classList.remove("hidden");
+  preview.style.left = "0px";
+  preview.style.top = "0px";
+
+  const cellRect = cell.getBoundingClientRect();
+  const previewRect = preview.getBoundingClientRect();
+  const margin = 12;
+  const left = Math.min(
+    Math.max(margin, cellRect.left), window.innerWidth - previewRect.width - margin
+  );
+  let top = cellRect.bottom + 6;
+  if (top + previewRect.height > window.innerHeight - margin) {
+    top = Math.max(margin, cellRect.top - previewRect.height - 6);
+  }
+  preview.style.left = `${left}px`;
+  preview.style.top = `${top}px`;
+}
+
+function makeInspectableCell(cell, control) {
+  cell.classList.add("inspectable-cell");
+  cell.title = "单击查看完整内容";
+  const value = () => control.value || "";
+  cell.addEventListener("click", () => showTableCellPreview(cell, value()));
+  control.addEventListener("input", () => {
+    if (tableCellPreviewAnchor === cell) {
+      $("#cell-preview-content").textContent = value() || "（空）";
+    }
+  });
+}
+
+$("#cell-preview-close").onclick = closeTableCellPreview;
+$("#table-wrap").addEventListener("scroll", closeTableCellPreview);
+window.addEventListener("resize", closeTableCellPreview);
+document.addEventListener("click", (event) => {
+  if (!tableCellPreviewAnchor) return;
+  if ($("#cell-preview").contains(event.target) ||
+      tableCellPreviewAnchor.contains(event.target)) return;
+  closeTableCellPreview();
+});
+
 function renderTable() {
+  closeTableCellPreview();
   const archived = isWorkspaceArchived();
   const tbody = $("#task-tbody");
   tbody.innerHTML = "";
@@ -1541,7 +1594,8 @@ function renderTable() {
   $("#bulk-priority").disabled = archived;
   $("#btn-bulk-delete").disabled = archived;
   $("#table-edit-hint").textContent = archived ?
-    "已归档项目仅可浏览和导出" : "单元格可直接编辑，修改后自动保存";
+    "已归档项目仅可浏览和导出；单击单元格可查看完整内容" :
+    "单击单元格可查看完整内容，修改后自动保存";
   checkAll.onchange = () => {
     if (checkAll.checked) sorted.forEach((t) => state.selectedTaskIds.add(t.id));
     else sorted.forEach((t) => state.selectedTaskIds.delete(t.id));
@@ -1598,9 +1652,10 @@ function renderTable() {
       const td = document.createElement("td");
       const inp = document.createElement("input");
       inp.value = val || "";
-      inp.disabled = archived;
+      inp.readOnly = archived;
       inp.onchange = () => saveTask(t.id, { [key]: inp.value });
       td.appendChild(inp);
+      makeInspectableCell(td, inp);
       return td;
     };
     tr.appendChild(textField("name", t.name));
@@ -2622,6 +2677,7 @@ document.addEventListener("click", (event) => {
   if (!$("#account-bar").contains(event.target)) closeAccountMenu();
 });
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeTableCellPreview();
   if (event.key === "Escape" && !$("#account-menu").classList.contains("hidden")) {
     closeAccountMenu({ restoreFocus: true });
   }
@@ -2645,6 +2701,7 @@ $("#btn-logout").onclick = async () => {
 };
 
 function switchView(v) {
+  closeTableCellPreview();
   state.view = v;
   $("#btn-view-dashboard").classList.toggle("active", v === "dashboard");
   $("#btn-view-dashboard").setAttribute("aria-pressed", String(v === "dashboard"));

@@ -496,6 +496,21 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 .dependency-config-button:hover { background: #eaeef2; }
 .status-badge { padding: 1px 8px; border-radius: 10px; color: #fff; font-size: 12px; }
+.inspectable-cell { cursor: pointer; }
+#cell-preview {
+  position: fixed; z-index: 90; width: min(420px, calc(100vw - 24px));
+  max-height: min(280px, calc(100vh - 24px)); overflow: auto;
+  border: 1px solid #8c959f; border-radius: 7px; background: #fff;
+  box-shadow: 0 8px 24px rgba(66, 74, 83, .2); padding: 12px 36px 12px 14px;
+}
+#cell-preview-content {
+  color: #24292f; font-size: 13px; line-height: 1.6;
+  overflow-wrap: anywhere; white-space: pre-wrap;
+}
+#cell-preview-close {
+  position: absolute; top: 5px; right: 7px; border: 0; background: transparent;
+  color: #57606a; font-size: 18px; line-height: 1; cursor: pointer;
+}
 
 /* ---------------- modal & toast ---------------- */
 #modal-mask {
