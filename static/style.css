@@ -405,7 +405,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   fill: #fff; font-size: 10px; font-weight: 700; pointer-events: none; user-select: none;
 }
 .cluster-hint {
-  fill: #8c959f; font-size: 10px; user-select: none; pointer-events: none;
+  fill: #8c959f; font-size: 10px; user-select: none; pointer-events: auto;
 }
 .cluster-node:hover .cluster-hint { fill: #0969da; }
 .cluster-collapse-btn { fill: #fff; stroke: #8c959f; stroke-width: 1.2; }
