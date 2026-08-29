@@ -758,6 +758,47 @@ class AnyLineHttpTests(unittest.TestCase):
             },
         )
 
+    def test_dashboard_snapshot_metrics_and_same_day_update(self):
+        line_id = self.create_line(
+            fork_date=(self.today - timedelta(days=2)).isoformat()
+        )
+        prerequisite = self.create_task(
+            line_id, "风险前置",
+            status="有风险",
+            start_date=(self.today - timedelta(days=2)).isoformat(),
+            end_date=(self.today - timedelta(days=1)).isoformat(),
+        )
+        self.create_task(
+            line_id, "被阻塞事务", prerequisite_ids=[prerequisite]
+        )
+        self.create_task(line_id, "已完成事务", status="已闭环")
+        self.create_task(line_id, "已取消事务", status="已取消")
+
+        status, state = self.request("GET", "/api/state")
+        self.assertEqual(status, 200, state)
+        self.assertEqual(len(state["dashboard_snapshots"]), 1)
+        snapshot = state["dashboard_snapshots"][0]
+        self.assertEqual(snapshot["snapshot_date"], self.today.isoformat())
+        self.assertEqual(
+            {key: snapshot[key] for key in ("total", "done", "overdue", "risk", "blocked")},
+            {"total": 4, "done": 2, "overdue": 1, "risk": 1, "blocked": 1},
+        )
+        self.assertEqual(snapshot["status_counts"]["有风险"], 1)
+        self.assertEqual(snapshot["status_counts"]["已闭环"], 1)
+        self.assertEqual(snapshot["status_counts"]["已取消"], 1)
+
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{prerequisite}", {"status": "已闭环"}
+        )
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["dashboard_snapshots"]), 1)
+        snapshot = state["dashboard_snapshots"][0]
+        self.assertEqual(snapshot["done"], 3)
+        self.assertEqual(snapshot["overdue"], 0)
+        self.assertEqual(snapshot["risk"], 0)
+        self.assertEqual(snapshot["blocked"], 0)
+
     def test_general_undo_for_canvas_edits(self):
         main_id = self.create_line("初始主线")
         status, data = self.request("POST", "/api/undo")
@@ -1495,6 +1536,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 .issubset(task_columns)
             )
             self.assertIn("task_images", table_names)
+            self.assertIn("dashboard_snapshots", table_names)
             self.assertEqual(task_workspace_id, workspace_id)
             self.assertEqual(admin_count, 1)
             self.assertEqual(json.loads(migrated_owners), ["历史责任人"])

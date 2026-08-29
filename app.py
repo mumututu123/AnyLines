@@ -241,6 +241,17 @@ def init_db(db_path=None):
             snapshot     TEXT NOT NULL,
             created_at   TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS dashboard_snapshots (
+            workspace_id  INTEGER NOT NULL,
+            snapshot_date TEXT NOT NULL,
+            total         INTEGER NOT NULL,
+            done          INTEGER NOT NULL,
+            overdue       INTEGER NOT NULL,
+            risk          INTEGER NOT NULL,
+            blocked       INTEGER NOT NULL,
+            status_counts TEXT NOT NULL,
+            PRIMARY KEY(workspace_id,snapshot_date)
+        );
         """
     )
     ensure_column(db, "lines", "description", "TEXT DEFAULT ''")
@@ -323,6 +334,10 @@ def init_db(db_path=None):
     )
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_date "
+        "ON dashboard_snapshots(workspace_id,snapshot_date)"
     )
     db.execute("UPDATE lines SET updated_at=? WHERE updated_at IS NULL", (today,))
     db.execute("UPDATE tasks SET updated_at=? WHERE updated_at IS NULL", (today,))
@@ -1743,6 +1758,8 @@ def delete_workspace(workspace_id):
     db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM workspace_meta WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM undo_snapshots WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM redo_snapshots WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM dashboard_snapshots WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM workspace_members WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM workspaces WHERE id=?", (workspace_id,))
     db.commit()
@@ -1885,6 +1902,69 @@ def workspace_member(workspace_id, user_id):
     return jsonify({"ok": True})
 
 
+def update_dashboard_snapshot(db, workspace_id, tasks, dependencies):
+    today = date.today().isoformat()
+    done_statuses = {"已闭环", "已取消"}
+    task_by_id = {task["id"]: task for task in tasks}
+    unfinished_ids = {
+        task["id"] for task in tasks if task["status"] not in done_statuses
+    }
+    blocked_ids = {
+        dependency["dependent_task_id"]
+        for dependency in dependencies
+        if dependency["dependent_task_id"] in unfinished_ids
+        and dependency["prerequisite_task_id"] in unfinished_ids
+        and dependency["prerequisite_task_id"] in task_by_id
+    }
+    status_counts = {}
+    for task in tasks:
+        status = task["status"] or "未设置"
+        status_counts[status] = status_counts.get(status, 0) + 1
+
+    metrics = {
+        "total": len(tasks),
+        "done": sum(task["status"] in done_statuses for task in tasks),
+        "overdue": sum(
+            task["id"] in unfinished_ids
+            and bool(task["end_date"])
+            and task["end_date"] < today
+            for task in tasks
+        ),
+        "risk": sum(task["status"] == "有风险" for task in tasks),
+        "blocked": len(blocked_ids),
+    }
+    db.execute(
+        "INSERT INTO dashboard_snapshots("
+        "workspace_id,snapshot_date,total,done,overdue,risk,blocked,status_counts"
+        ") VALUES(?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(workspace_id,snapshot_date) DO UPDATE SET "
+        "total=excluded.total,done=excluded.done,overdue=excluded.overdue,"
+        "risk=excluded.risk,blocked=excluded.blocked,"
+        "status_counts=excluded.status_counts",
+        (
+            workspace_id, today, metrics["total"], metrics["done"],
+            metrics["overdue"], metrics["risk"], metrics["blocked"],
+            json.dumps(status_counts, ensure_ascii=False, sort_keys=True),
+        ),
+    )
+    db.commit()
+    rows = db.execute(
+        "SELECT snapshot_date,total,done,overdue,risk,blocked,status_counts "
+        "FROM dashboard_snapshots WHERE workspace_id=? "
+        "ORDER BY snapshot_date DESC LIMIT 90",
+        (workspace_id,),
+    ).fetchall()
+    snapshots = []
+    for row in reversed(rows):
+        snapshot = dict(row)
+        try:
+            snapshot["status_counts"] = json.loads(snapshot["status_counts"])
+        except (TypeError, json.JSONDecodeError):
+            snapshot["status_counts"] = {}
+        snapshots.append(snapshot)
+    return snapshots
+
+
 @app.route("/api/state")
 def api_state():
     db = get_db()
@@ -1923,6 +2003,9 @@ def api_state():
         "ORDER BY image.id",
         (workspace_id, workspace_id, workspace_id),
     )]
+    dashboard_snapshots = update_dashboard_snapshot(
+        db, workspace_id, tasks, dependencies
+    )
     return jsonify({
         "lines": lines,
         "tasks": tasks,
@@ -1935,6 +2018,7 @@ def api_state():
         "priority_enum": PRIORITY_ENUM,
         "owners": get_workspace_member_names(db, workspace_id),
         "today": date.today().isoformat(),
+        "dashboard_snapshots": dashboard_snapshots,
     })
 
 

@@ -7,7 +7,7 @@ const SVGNS = "http://www.w3.org/2000/svg";
 const state = {
   lines: [], tasks: [], dependencies: [], taskImages: [], canUndo: false, canRedo: false,
   statusEnum: [], statusColors: {},
-  priorityEnum: [], owners: [], today: "",
+  priorityEnum: [], owners: [], today: "", dashboardSnapshots: [],
   user: null, workspaces: [], currentWorkspace: null,
   selectedLineId: null,
   selectedTaskId: null,
@@ -22,6 +22,8 @@ const state = {
   filters: { q: "", line: "", owner: "", status: "", priority: "", due: "" },
   quickFilter: "",
   sort: "start_asc",
+  dashboardRange: "30",
+  dashboardExceptionSort: "severity",
   taskCreateDrafts: new Map(),
 };
 
@@ -251,6 +253,7 @@ function resetWorkspaceState() {
   state.hiddenBranchIds.clear();
   state.dependencies = [];
   state.taskImages = [];
+  state.dashboardSnapshots = [];
   state.pan = { x: 0, y: 0 };
   state.filters = { q: "", line: "", owner: "", status: "", priority: "", due: "" };
   state.quickFilter = "";
@@ -437,6 +440,7 @@ async function reload() {
   state.priorityEnum = d.priority_enum || ["低", "中", "高", "紧急"];
   state.owners = d.owners || [];
   state.today = d.today;
+  state.dashboardSnapshots = d.dashboard_snapshots || [];
   for (const id of [...state.hiddenBranchIds]) {
     if (!state.lines.some((line) => line.id === id && line.parent_id !== null)) {
       state.hiddenBranchIds.delete(id);
@@ -595,192 +599,575 @@ function renderSummary() {
 }
 
 /* ============================================================== 项目看板 */
-function dashboardStatuses() {
-  const statuses = [...state.statusEnum];
-  for (const task of state.tasks) {
-    if (task.status && !statuses.includes(task.status)) statuses.push(task.status);
-  }
-  return statuses;
+function dashboardDateIso(value) {
+  const d = value instanceof Date ? value : parseDate(value);
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function dashboardStatButton(label, value, tasks, className = "") {
+function dashboardAddDays(value, amount) {
+  const d = value instanceof Date ? new Date(value) : parseDate(value);
+  d.setDate(d.getDate() + amount);
+  return d;
+}
+
+function dashboardSvg(tag, attrs, parent) {
+  const element = document.createElementNS(SVGNS, tag);
+  for (const [key, value] of Object.entries(attrs || {})) {
+    element.setAttribute(key, value);
+  }
+  if (parent) parent.appendChild(element);
+  return element;
+}
+
+function dashboardEmpty(container, text) {
+  const empty = document.createElement("div");
+  empty.className = "dashboard-empty";
+  empty.textContent = text;
+  container.appendChild(empty);
+}
+
+function dashboardMetric(label, value, detail, tasks, tone = "") {
   const button = document.createElement("button");
   button.type = "button";
-  button.className = `dashboard-stat-button ${className}`.trim();
-  button.setAttribute("aria-label", `${label}，${value} 个事务，查看详情`);
-
+  button.className = `dashboard-kpi ${tone}`.trim();
+  button.setAttribute("aria-label", `${label} ${value}，查看事务`);
+  const name = document.createElement("span");
+  name.textContent = label;
   const number = document.createElement("strong");
   number.textContent = value;
-  const text = document.createElement("span");
-  text.textContent = label;
-  button.appendChild(number);
-  button.appendChild(text);
+  const note = document.createElement("small");
+  note.textContent = detail;
+  button.append(name, number, note);
   button.onclick = () => openTaskListModal(label, tasks);
   return button;
 }
 
-function renderDashboard() {
-  const mainLines = state.lines.filter((line) => line.parent_id === null);
-  const branchLines = state.lines.filter((line) => line.parent_id !== null);
-  const statuses = dashboardStatuses();
-  const owners = ownerOptions();
-
-  $("#dashboard-workspace-name").textContent = state.currentWorkspace?.name || "当前项目空间";
-  $("#dashboard-updated").textContent = state.today ? `数据截至 ${state.today}` : "";
-
-  const overview = $("#dashboard-overview");
-  overview.innerHTML = "";
-  const overviewItems = [
-    ["主线", mainLines.length, "项目一级推进路径"],
-    ["支线", branchLines.length, "从主线或支线分出的路径"],
-  ];
-  for (const [label, value, description] of overviewItems) {
-    const item = document.createElement("div");
-    item.className = "dashboard-overview-item";
-    const number = document.createElement("strong");
-    number.textContent = value;
-    const name = document.createElement("span");
-    name.textContent = label;
-    const detail = document.createElement("small");
-    detail.textContent = description;
-    item.append(number, name, detail);
-    overview.appendChild(item);
-  }
-  const taskOverview = document.createElement("div");
-  taskOverview.className = "dashboard-overview-item dashboard-overview-action";
-  taskOverview.appendChild(dashboardStatButton("全部事务", state.tasks.length, state.tasks));
-  const taskDetail = document.createElement("small");
-  taskDetail.textContent = "单击查看当前空间全部事务";
-  taskOverview.appendChild(taskDetail);
-  overview.appendChild(taskOverview);
-
-  const ownerOverview = document.createElement("div");
-  ownerOverview.className = "dashboard-overview-item";
-  const ownerNumber = document.createElement("strong");
-  ownerNumber.textContent = owners.length;
-  const ownerLabel = document.createElement("span");
-  ownerLabel.textContent = "责任人";
-  const ownerDetail = document.createElement("small");
-  ownerDetail.textContent = "当前项目空间成员";
-  ownerOverview.append(ownerNumber, ownerLabel, ownerDetail);
-  overview.appendChild(ownerOverview);
-
-  $("#dashboard-status-total").textContent = `共 ${state.tasks.length} 个事务`;
-  const statusList = $("#dashboard-statuses");
-  statusList.innerHTML = "";
-  for (const status of statuses) {
-    const tasks = state.tasks.filter((task) => task.status === status);
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "dashboard-status-row";
-    button.setAttribute("aria-label", `${status}，${tasks.length} 个事务，查看详情`);
-    button.onclick = () => openTaskListModal(status, tasks);
-
-    const label = document.createElement("span");
-    label.className = "dashboard-status-label";
-    const dot = document.createElement("i");
-    dot.style.backgroundColor = statusColor(status);
-    const name = document.createElement("span");
-    name.textContent = status;
-    label.append(dot, name);
-
-    const track = document.createElement("span");
-    track.className = "dashboard-status-track";
-    const fill = document.createElement("span");
-    fill.style.backgroundColor = statusColor(status);
-    fill.style.width = `${state.tasks.length ? (tasks.length / state.tasks.length) * 100 : 0}%`;
-    track.appendChild(fill);
-
-    const count = document.createElement("strong");
-    count.textContent = tasks.length;
-    button.append(label, track, count);
-    statusList.appendChild(button);
-  }
-  if (!statuses.length) {
-    const empty = document.createElement("div");
-    empty.className = "dashboard-empty";
-    empty.textContent = "暂无状态配置";
-    statusList.appendChild(empty);
+function dashboardDependencyAnalysis(visibleTasks) {
+  const allById = new Map(state.tasks.map((task) => [task.id, task]));
+  const visibleIds = new Set(visibleTasks.map((task) => task.id));
+  const prerequisites = new Map();
+  const dependents = new Map();
+  for (const edge of state.dependencies) {
+    if (!allById.has(edge.dependent_task_id) || !allById.has(edge.prerequisite_task_id)) continue;
+    if (!prerequisites.has(edge.dependent_task_id)) prerequisites.set(edge.dependent_task_id, []);
+    if (!dependents.has(edge.prerequisite_task_id)) dependents.set(edge.prerequisite_task_id, []);
+    prerequisites.get(edge.dependent_task_id).push(edge.prerequisite_task_id);
+    dependents.get(edge.prerequisite_task_id).push(edge.dependent_task_id);
   }
 
-  const unownedTasks = state.tasks.filter((task) => !task.owner || !task.owner.trim());
-  const riskTasks = state.tasks.filter((task) => taskHealth(task).risk);
-  const overdueTasks = state.tasks.filter((task) => taskHealth(task).overdue);
-  const alerts = $("#dashboard-alerts");
-  alerts.innerHTML = "";
-  alerts.append(
-    dashboardStatButton("无主事务", unownedTasks.length, unownedTasks, "dashboard-alert-stat"),
-    dashboardStatButton("风险事务", riskTasks.length, riskTasks, "dashboard-alert-stat"),
-    dashboardStatButton("超期事务", overdueTasks.length, overdueTasks, "dashboard-alert-stat")
-  );
-
-  renderDashboardOwners(statuses, owners, unownedTasks);
+  const blockedIds = new Set(visibleTasks.filter((task) => !isDone(task) &&
+    (prerequisites.get(task.id) || []).some((id) => !isDone(allById.get(id))))
+    .map((task) => task.id));
+  const impacts = new Map();
+  const blockers = [];
+  for (const task of state.tasks) {
+    if (isDone(task)) continue;
+    const found = new Set();
+    const visit = (id) => {
+      for (const nextId of dependents.get(id) || []) {
+        if (found.has(nextId)) continue;
+        found.add(nextId);
+        visit(nextId);
+      }
+    };
+    visit(task.id);
+    const affected = [...found]
+      .filter((id) => visibleIds.has(id) && !isDone(allById.get(id)))
+      .map((id) => allById.get(id));
+    impacts.set(task.id, affected.length);
+    if (affected.length) blockers.push({ task, affected, external: !visibleIds.has(task.id) });
+  }
+  blockers.sort((a, b) => b.affected.length - a.affected.length ||
+    priorityRank(b.task.priority) - priorityRank(a.task.priority) || a.task.id - b.task.id);
+  return { blockedIds, impacts, blockers };
 }
 
-function renderDashboardOwners(statuses, owners, unownedTasks) {
-  const wrap = $("#dashboard-owners");
-  wrap.innerHTML = "";
+function dashboardRangeSnapshots() {
+  if (state.dashboardRange === "all") return state.dashboardSnapshots;
+  const cutoff = dashboardDateIso(
+    dashboardAddDays(state.today, 1 - Number(state.dashboardRange))
+  );
+  return state.dashboardSnapshots.filter((snapshot) => snapshot.snapshot_date >= cutoff);
+}
+
+function dashboardRangeStart() {
+  if (state.dashboardRange !== "all") {
+    return dashboardDateIso(dashboardAddDays(state.today, 1 - Number(state.dashboardRange)));
+  }
+  const candidates = [
+    ...state.dashboardSnapshots.map((snapshot) => snapshot.snapshot_date),
+    ...state.tasks.map((task) => task.start_date).filter(Boolean),
+  ].sort();
+  return candidates[0] || state.today;
+}
+
+function dashboardDateSequence(start, end, maxPoints = 120) {
+  const span = Math.max(0, daysBetween(start, end));
+  const step = Math.max(1, Math.ceil((span + 1) / maxPoints));
+  const dates = [];
+  for (let offset = 0; offset <= span; offset += step) {
+    dates.push(dashboardDateIso(dashboardAddDays(start, offset)));
+  }
+  if (dates[dates.length - 1] !== end) dates.push(end);
+  return dates;
+}
+
+function renderDashboard() {
+  const tasks = filteredTasks();
+  const dependency = dashboardDependencyAnalysis(tasks);
+  const activeFilters = Object.values(state.filters).some(Boolean) || Boolean(state.quickFilter);
+  $("#dashboard-workspace-name").textContent = state.currentWorkspace?.name || "当前项目空间";
+  $("#dashboard-filter-context").textContent = activeFilters ?
+    ` · 筛选后 ${tasks.length} / ${state.tasks.length} 个事务` : ` · ${tasks.length} 个事务`;
+  $("#dashboard-updated").textContent = state.today ? `数据截至 ${state.today}` : "";
+  for (const button of document.querySelectorAll("#dashboard-range button")) {
+    button.classList.toggle("active", button.dataset.range === state.dashboardRange);
+  }
+  renderDashboardKpis(tasks, dependency);
+  renderDashboardProgress();
+  renderDashboardBlockers(dependency);
+  renderDashboardStatusTrend();
+  renderDashboardOwnerLoad(tasks, dependency);
+  renderDashboardDueHeatmap(tasks);
+  renderDashboardRiskMatrix(tasks, dependency);
+  renderDashboardExceptions(tasks, dependency);
+}
+
+function renderDashboardKpis(tasks, dependency) {
+  const container = $("#dashboard-kpis");
+  container.innerHTML = "";
+  const doneTasks = tasks.filter(isDone);
+  const activeTasks = tasks.filter((task) => !isDone(task));
+  const blockedTasks = tasks.filter((task) => dependency.blockedIds.has(task.id));
+  const overdueTasks = tasks.filter((task) => taskHealth(task).overdue);
+  const riskTasks = tasks.filter((task) => taskHealth(task).risk);
+  const soonTasks = tasks.filter((task) => taskHealth(task).soon);
+  const completion = tasks.length ? Math.round(doneTasks.length / tasks.length * 100) : 0;
+  container.append(
+    dashboardMetric("完成率", `${completion}%`, `${doneTasks.length} / ${tasks.length}`, doneTasks, "tone-good"),
+    dashboardMetric("未闭环", activeTasks.length, "仍需推进", activeTasks),
+    dashboardMetric("被阻塞", blockedTasks.length, "存在未完成前置", blockedTasks, "tone-danger"),
+    dashboardMetric("超期", overdueTasks.length, "已超过结束日期", overdueTasks, "tone-danger"),
+    dashboardMetric("风险", riskTasks.length, "当前状态为有风险", riskTasks, "tone-warning"),
+    dashboardMetric("7 天内到期", soonTasks.length, "含今天", soonTasks, "tone-warning")
+  );
+}
+
+function renderDashboardProgress() {
+  const container = $("#dashboard-progress");
+  container.innerHTML = "";
+  const snapshots = dashboardRangeSnapshots();
+  const dates = dashboardDateSequence(dashboardRangeStart(), state.today);
+  const denominator = Math.max(state.tasks.length, 1);
+  const planned = dates.map((snapshotDate) => ({
+    date: snapshotDate,
+    value: state.tasks.filter((task) => task.end_date && task.end_date <= snapshotDate).length /
+      denominator * 100,
+  }));
+  const actual = snapshots.map((snapshot) => ({
+    date: snapshot.snapshot_date,
+    value: snapshot.total ? snapshot.done / snapshot.total * 100 : 0,
+  }));
+  if (!state.tasks.length && !snapshots.length) {
+    dashboardEmpty(container, "暂无事务数据");
+    return;
+  }
+
+  const width = 720, height = 250;
+  const margin = { left: 42, right: 18, top: 16, bottom: 30 };
+  const svg = dashboardSvg("svg", {
+    viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "计划与实际完成率趋势",
+  }, container);
+  const plotW = width - margin.left - margin.right;
+  const plotH = height - margin.top - margin.bottom;
+  const start = dashboardRangeStart();
+  const span = Math.max(1, daysBetween(start, state.today));
+  const x = (dateValue) => margin.left + daysBetween(start, dateValue) / span * plotW;
+  const y = (value) => margin.top + (100 - value) / 100 * plotH;
+  for (const tick of [0, 25, 50, 75, 100]) {
+    dashboardSvg("line", { x1: margin.left, x2: width - margin.right, y1: y(tick), y2: y(tick), class: "dashboard-gridline" }, svg);
+    const label = dashboardSvg("text", { x: margin.left - 8, y: y(tick) + 4, class: "dashboard-axis-label", "text-anchor": "end" }, svg);
+    label.textContent = `${tick}%`;
+  }
+  const linePath = (points) => points.map((point, index) =>
+    `${index ? "L" : "M"}${x(point.date).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ");
+  const plannedPath = dashboardSvg("path", { d: linePath(planned), class: "dashboard-progress-line planned" }, svg);
+  plannedPath.onclick = () => openTaskListModal("计划应完成事务", state.tasks.filter((task) => task.end_date && task.end_date <= state.today));
+  if (actual.length) {
+    const actualPath = dashboardSvg("path", { d: linePath(actual), class: "dashboard-progress-line actual" }, svg);
+    actualPath.onclick = () => openTaskListModal("当前已完成事务", state.tasks.filter(isDone));
+    for (const point of actual) {
+      const dot = dashboardSvg("circle", { cx: x(point.date), cy: y(point.value), r: 4, class: "dashboard-progress-dot" }, svg);
+      const title = dashboardSvg("title", {}, dot);
+      title.textContent = `${point.date} · 实际 ${Math.round(point.value)}%`;
+    }
+  }
+  for (const [dateValue, anchor] of [[start, "start"], [state.today, "end"]]) {
+    const label = dashboardSvg("text", { x: x(dateValue), y: height - 8, class: "dashboard-axis-label", "text-anchor": anchor }, svg);
+    label.textContent = dateValue.slice(5);
+  }
+  const legend = document.createElement("div");
+  legend.className = "dashboard-chart-legend";
+  legend.innerHTML = '<span><i class="legend-plan"></i>计划完成率</span><span><i class="legend-actual"></i>实际完成率</span>';
+  container.appendChild(legend);
+  const note = document.createElement("p");
+  note.className = "dashboard-chart-note";
+  note.textContent = snapshots.length > 1 ? `${snapshots.length} 个真实快照点` : "实际趋势从启用看板快照后开始积累";
+  container.appendChild(note);
+}
+
+function renderDashboardBlockers(dependency) {
+  const container = $("#dashboard-blockers");
+  container.innerHTML = "";
+  $("#dashboard-blocker-total").textContent = `${dependency.blockers.length} 个关键前置事务`;
+  if (!dependency.blockers.length) {
+    dashboardEmpty(container, "当前范围内没有未完成依赖链");
+    return;
+  }
+  for (const item of dependency.blockers.slice(0, 6)) {
+    const row = document.createElement("div");
+    row.className = "dashboard-blocker-row";
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "dashboard-blocker-main";
+    const name = document.createElement("strong");
+    name.textContent = item.task.name;
+    const meta = document.createElement("span");
+    meta.textContent = `${item.task.owner || "无主"} · ${item.task.status}${item.external ? " · 筛选范围外前置" : ""}`;
+    main.append(name, meta);
+    main.onclick = () => openTaskListModal(`${item.task.name} 的影响链`, [item.task, ...item.affected]);
+    const impact = document.createElement("button");
+    impact.type = "button";
+    impact.className = "dashboard-blocker-impact";
+    impact.innerHTML = `<strong>${item.affected.length}</strong><span>受影响</span>`;
+    impact.onclick = () => openTaskListModal(`${item.task.name} 影响的事务`, item.affected);
+    const locate = document.createElement("button");
+    locate.type = "button";
+    locate.className = "dashboard-locate-button";
+    locate.textContent = "定位";
+    locate.onclick = () => locateTask(item.task.id);
+    row.append(main, impact, locate);
+    container.appendChild(row);
+  }
+}
+
+function renderDashboardStatusTrend() {
+  const container = $("#dashboard-status-trend");
+  container.innerHTML = "";
+  const snapshots = dashboardRangeSnapshots();
+  if (!snapshots.length) {
+    dashboardEmpty(container, "快照将在首次读取项目数据后生成");
+    return;
+  }
+  const statuses = [...state.statusEnum];
+  for (const snapshot of snapshots) {
+    for (const status of Object.keys(snapshot.status_counts || {})) {
+      if (!statuses.includes(status)) statuses.push(status);
+    }
+  }
+  const width = 720, height = 250;
+  const margin = { left: 34, right: 14, top: 14, bottom: 30 };
+  const svg = dashboardSvg("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "事务状态堆叠趋势" }, container);
+  const plotW = width - margin.left - margin.right;
+  const plotH = height - margin.top - margin.bottom;
+  const maxTotal = Math.max(1, ...snapshots.map((snapshot) => snapshot.total));
+  const gap = snapshots.length > 20 ? 1 : 4;
+  const barWidth = Math.max(4, Math.min(54, plotW / snapshots.length - gap));
+  snapshots.forEach((snapshot, index) => {
+    const center = snapshots.length === 1 ? margin.left + plotW / 2 :
+      margin.left + index / (snapshots.length - 1) * plotW;
+    let bottom = margin.top + plotH;
+    for (const status of statuses) {
+      const count = snapshot.status_counts?.[status] || 0;
+      if (!count) continue;
+      const segmentHeight = count / maxTotal * plotH;
+      bottom -= segmentHeight;
+      const rect = dashboardSvg("rect", {
+        x: center - barWidth / 2, y: bottom, width: barWidth, height: segmentHeight,
+        fill: statusColor(status), class: "dashboard-status-segment",
+      }, svg);
+      rect.onclick = () => openTaskListModal(status, state.tasks.filter((task) => task.status === status));
+      const title = dashboardSvg("title", {}, rect);
+      title.textContent = `${snapshot.snapshot_date} · ${status} ${count}`;
+    }
+  });
+  for (const [snapshot, anchor, xPos] of [
+    [snapshots[0], "start", margin.left],
+    [snapshots[snapshots.length - 1], "end", width - margin.right],
+  ]) {
+    const label = dashboardSvg("text", { x: xPos, y: height - 8, class: "dashboard-axis-label", "text-anchor": anchor }, svg);
+    label.textContent = snapshot.snapshot_date.slice(5);
+  }
+  const legend = document.createElement("div");
+  legend.className = "dashboard-chart-legend dashboard-status-legend";
+  for (const status of statuses) {
+    const item = document.createElement("span");
+    item.innerHTML = `<i style="background:${statusColor(status)}"></i>${status}`;
+    legend.appendChild(item);
+  }
+  container.appendChild(legend);
+  if (snapshots.length === 1) {
+    const note = document.createElement("p");
+    note.className = "dashboard-chart-note";
+    note.textContent = "已有 1 个真实快照，后续每日访问将形成趋势";
+    container.appendChild(note);
+  }
+}
+
+function renderDashboardOwnerLoad(tasks, dependency) {
+  const container = $("#dashboard-owner-load");
+  container.innerHTML = "";
+  const active = tasks.filter((task) => !isDone(task));
+  const owners = [...new Set(active.map((task) => task.owner || "无主"))]
+    .sort((a, b) => a.localeCompare(b, "zh-CN"));
+  if (!owners.length) {
+    dashboardEmpty(container, "当前范围没有未闭环事务");
+    return;
+  }
+  const categories = [
+    ["超期", "overdue", (task) => taskHealth(task).overdue],
+    ["被阻塞", "blocked", (task) => dependency.blockedIds.has(task.id)],
+    ["有风险", "risk", (task) => taskHealth(task).risk],
+    ["其他", "normal", () => true],
+  ];
+  const rows = owners.map((owner) => {
+    const ownerTasks = active.filter((task) => (task.owner || "无主") === owner);
+    const assigned = new Set();
+    const buckets = categories.map(([label, key, matches]) => {
+      const bucketTasks = ownerTasks.filter((task) => !assigned.has(task.id) && matches(task));
+      bucketTasks.forEach((task) => assigned.add(task.id));
+      return { label, key, tasks: bucketTasks };
+    });
+    return { owner, tasks: ownerTasks, buckets };
+  }).sort((a, b) => b.tasks.length - a.tasks.length || a.owner.localeCompare(b.owner, "zh-CN"));
+  const max = Math.max(...rows.map((row) => row.tasks.length), 1);
+  const legend = document.createElement("div");
+  legend.className = "dashboard-load-legend";
+  for (const [label, key] of categories) {
+    const item = document.createElement("span");
+    item.innerHTML = `<i class="load-${key}"></i>${label}`;
+    legend.appendChild(item);
+  }
+  container.appendChild(legend);
+  for (const rowData of rows) {
+    const row = document.createElement("div");
+    row.className = "dashboard-load-row";
+    const owner = document.createElement("button");
+    owner.type = "button";
+    owner.className = "dashboard-load-owner";
+    owner.textContent = rowData.owner;
+    owner.onclick = () => openTaskListModal(`${rowData.owner}的未闭环事务`, rowData.tasks);
+    const track = document.createElement("div");
+    track.className = "dashboard-load-track";
+    track.style.width = `${Math.max(8, rowData.tasks.length / max * 100)}%`;
+    for (const bucket of rowData.buckets) {
+      if (!bucket.tasks.length) continue;
+      const segment = document.createElement("button");
+      segment.type = "button";
+      segment.className = `dashboard-load-segment load-${bucket.key}`;
+      segment.style.width = `${bucket.tasks.length / rowData.tasks.length * 100}%`;
+      segment.title = `${rowData.owner} · ${bucket.label} ${bucket.tasks.length}`;
+      segment.onclick = () => openTaskListModal(`${rowData.owner} · ${bucket.label}`, bucket.tasks);
+      track.appendChild(segment);
+    }
+    const count = document.createElement("strong");
+    count.textContent = rowData.tasks.length;
+    row.append(owner, track, count);
+    container.appendChild(row);
+  }
+}
+
+function renderDashboardDueHeatmap(tasks) {
+  const container = $("#dashboard-due-heatmap");
+  container.innerHTML = "";
+  const today = parseDate(state.today);
+  const mondayOffset = (today.getDay() + 6) % 7;
+  const start = dashboardAddDays(today, -mondayOffset - 21);
+  const end = dashboardAddDays(start, 83);
+  $("#dashboard-due-range").textContent = `${dashboardDateIso(start)} 至 ${dashboardDateIso(end)}`;
+  const tasksByDate = new Map();
+  for (const task of tasks) {
+    if (!task.end_date) continue;
+    if (!tasksByDate.has(task.end_date)) tasksByDate.set(task.end_date, []);
+    tasksByDate.get(task.end_date).push(task);
+  }
+  const max = Math.max(1, ...[...tasksByDate.values()].map((items) => items.length));
+  const labels = document.createElement("div");
+  labels.className = "dashboard-heatmap-days";
+  for (const day of ["一", "二", "三", "四", "五", "六", "日"]) {
+    const label = document.createElement("span");
+    label.textContent = day;
+    labels.appendChild(label);
+  }
+  const grid = document.createElement("div");
+  grid.className = "dashboard-heatmap-grid";
+  for (let offset = 0; offset < 84; offset++) {
+    const dateValue = dashboardDateIso(dashboardAddDays(start, offset));
+    const dateTasks = tasksByDate.get(dateValue) || [];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `dashboard-heat-cell level-${dateTasks.length ? Math.ceil(dateTasks.length / max * 4) : 0}`;
+    button.disabled = !dateTasks.length;
+    button.title = `${dateValue} · ${dateTasks.length} 个事务到期`;
+    button.setAttribute("aria-label", button.title);
+    if (dateTasks.length) button.textContent = dateTasks.length;
+    button.onclick = () => openTaskListModal(`${dateValue} 到期`, dateTasks);
+    grid.appendChild(button);
+  }
+  const layout = document.createElement("div");
+  layout.className = "dashboard-heatmap-layout";
+  layout.append(labels, grid);
+  container.appendChild(layout);
+  const note = document.createElement("p");
+  note.className = "dashboard-chart-note";
+  note.textContent = "左侧覆盖近期超期，右侧显示未来到期密度";
+  container.appendChild(note);
+}
+
+function renderDashboardRiskMatrix(tasks, dependency) {
+  const container = $("#dashboard-risk-matrix");
+  container.innerHTML = "";
+  const priorities = [...state.priorityEnum].reverse();
+  const columns = [
+    ["已超期", (task) => taskHealth(task).overdue],
+    ["7 天内", (task) => task.end_date && daysBetween(state.today, task.end_date) >= 0 && daysBetween(state.today, task.end_date) <= 7],
+    ["8–30 天", (task) => task.end_date && daysBetween(state.today, task.end_date) >= 8 && daysBetween(state.today, task.end_date) <= 30],
+    ["30 天后 / 无日期", (task) => !task.end_date || daysBetween(state.today, task.end_date) > 30],
+  ];
+  const active = tasks.filter((task) => !isDone(task));
+  const grid = document.createElement("div");
+  grid.className = "dashboard-risk-grid";
+  grid.style.setProperty("--risk-columns", columns.length + 1);
+  grid.appendChild(document.createElement("span"));
+  for (const [title] of columns) {
+    const header = document.createElement("strong");
+    header.className = "dashboard-risk-header";
+    header.textContent = title;
+    grid.appendChild(header);
+  }
+  let maxWeight = 1;
+  const cells = [];
+  for (const priority of priorities) {
+    const rowHeader = document.createElement("strong");
+    rowHeader.className = `dashboard-risk-row priority-${priority}`;
+    rowHeader.textContent = priority;
+    grid.appendChild(rowHeader);
+    for (const [columnTitle, matches] of columns) {
+      const cellTasks = active.filter((task) => task.priority === priority && matches(task));
+      const impact = cellTasks.reduce((sum, task) => sum + (dependency.impacts.get(task.id) || 0), 0);
+      const weight = cellTasks.length + impact;
+      maxWeight = Math.max(maxWeight, weight);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "dashboard-risk-cell";
+      button.disabled = !cellTasks.length;
+      button.dataset.weight = weight;
+      button.title = `${priority}优先级 · ${columnTitle} · ${cellTasks.length} 个事务 · 影响 ${impact} 个后续事务`;
+      const bubble = document.createElement("span");
+      bubble.className = "dashboard-risk-bubble";
+      bubble.textContent = cellTasks.length || "";
+      const impactText = document.createElement("small");
+      impactText.textContent = impact ? `影响 ${impact}` : "";
+      button.append(bubble, impactText);
+      button.onclick = () => openTaskListModal(`${priority}优先级 · ${columnTitle}`, cellTasks);
+      grid.appendChild(button);
+      cells.push(button);
+    }
+  }
+  for (const cell of cells) {
+    const ratio = Number(cell.dataset.weight) / maxWeight;
+    cell.style.setProperty("--bubble-size", `${26 + Math.round(ratio * 28)}px`);
+    cell.style.setProperty("--bubble-opacity", String(.18 + ratio * .55));
+  }
+  container.appendChild(grid);
+  if (!active.length) dashboardEmpty(container, "当前范围没有未闭环事务");
+}
+
+function dashboardExceptionInfo(task, dependency) {
+  const health = taskHealth(task);
+  const labels = [];
+  let severity = 0;
+  if (health.overdue) { labels.push("超期"); severity += 100 + Math.min(30, Math.abs(daysBetween(task.end_date, state.today))); }
+  if (dependency.blockedIds.has(task.id)) { labels.push("被阻塞"); severity += 80; }
+  if (health.risk) { labels.push("风险"); severity += 60; }
+  if (task.priority === "紧急") { labels.push("紧急"); severity += 40; }
+  if (health.stale) { labels.push("停滞"); severity += 20; }
+  const impact = dependency.impacts.get(task.id) || 0;
+  severity += impact * 5;
+  return { labels, severity, impact };
+}
+
+function renderDashboardExceptions(tasks, dependency) {
+  const container = $("#dashboard-exceptions");
+  container.innerHTML = "";
+  const rows = tasks.map((task) => ({ task, ...dashboardExceptionInfo(task, dependency) }))
+    .filter((row) => row.labels.length);
+  const sort = state.dashboardExceptionSort;
+  rows.sort((a, b) => {
+    if (sort === "due") return (a.task.end_date || "9999-12-31").localeCompare(b.task.end_date || "9999-12-31") || b.severity - a.severity;
+    if (sort === "impact") return b.impact - a.impact || b.severity - a.severity;
+    if (sort === "updated") return (b.task.updated_at || "").localeCompare(a.task.updated_at || "") || b.severity - a.severity;
+    return b.severity - a.severity || (a.task.end_date || "9999-12-31").localeCompare(b.task.end_date || "9999-12-31");
+  });
+  $("#dashboard-exception-total").textContent = `${rows.length} 个需关注事务`;
+  $("#dashboard-exception-sort").value = sort;
+  if (!rows.length) {
+    dashboardEmpty(container, "当前范围没有异常事务");
+    return;
+  }
+  const wrap = document.createElement("div");
+  wrap.className = "dashboard-exception-table-wrap";
   const table = document.createElement("table");
-  table.className = "dashboard-owner-table";
+  table.className = "dashboard-exception-table";
   const thead = document.createElement("thead");
   const header = document.createElement("tr");
-  for (const title of ["责任人", "合计", ...statuses]) {
+  for (const title of ["事务", "异常", "责任人", "状态", "结束日期", "影响", "操作"]) {
     const th = document.createElement("th");
     th.textContent = title;
     header.appendChild(th);
   }
   thead.appendChild(header);
   table.appendChild(thead);
-
   const tbody = document.createElement("tbody");
-  const ownerRows = owners.map((owner) => ({
-    owner,
-    tasks: state.tasks.filter((task) => task.owner === owner),
-  }));
-  if (unownedTasks.length) ownerRows.push({ owner: "无主", tasks: unownedTasks, alert: true });
-
-  for (const row of ownerRows) {
-    const tr = document.createElement("tr");
-    if (row.alert) tr.className = "dashboard-owner-alert";
-    const ownerCell = document.createElement("th");
-    ownerCell.scope = "row";
-    ownerCell.textContent = row.owner;
-    tr.appendChild(ownerCell);
-
-    const totalCell = document.createElement("td");
-    totalCell.appendChild(dashboardTableCount(row.tasks.length, `${row.owner}的全部事务`, row.tasks));
-    tr.appendChild(totalCell);
-    for (const status of statuses) {
-      const tasks = row.tasks.filter((task) => task.status === status);
-      const cell = document.createElement("td");
-      const count = dashboardTableCount(tasks.length, `${row.owner} · ${status}`, tasks);
-      count.style.setProperty("--status-color", statusColor(status));
-      count.classList.add("status-count");
-      cell.appendChild(count);
-      tr.appendChild(cell);
+  for (const rowData of rows) {
+    const row = document.createElement("tr");
+    const nameCell = document.createElement("td");
+    const name = document.createElement("button");
+    name.type = "button";
+    name.className = "dashboard-exception-name";
+    name.textContent = rowData.task.name;
+    name.onclick = () => openTaskModal(rowData.task);
+    nameCell.appendChild(name);
+    const alertCell = document.createElement("td");
+    alertCell.className = "dashboard-exception-labels";
+    for (const label of rowData.labels) {
+      const badge = document.createElement("span");
+      badge.textContent = label;
+      alertCell.appendChild(badge);
     }
-    tbody.appendChild(tr);
+    const ownerCell = document.createElement("td");
+    ownerCell.textContent = rowData.task.owner || "无主";
+    const statusCell = document.createElement("td");
+    statusCell.textContent = rowData.task.status;
+    statusCell.style.color = statusColor(rowData.task.status);
+    const dueCell = document.createElement("td");
+    dueCell.textContent = rowData.task.end_date || "—";
+    const impactCell = document.createElement("td");
+    impactCell.textContent = rowData.impact;
+    const actionCell = document.createElement("td");
+    const locate = document.createElement("button");
+    locate.type = "button";
+    locate.className = "dashboard-locate-button";
+    locate.textContent = "定位画布";
+    locate.onclick = () => locateTask(rowData.task.id);
+    actionCell.appendChild(locate);
+    row.append(nameCell, alertCell, ownerCell, statusCell, dueCell, impactCell, actionCell);
+    tbody.appendChild(row);
   }
   table.appendChild(tbody);
   wrap.appendChild(table);
-
-  if (!ownerRows.length) {
-    const empty = document.createElement("div");
-    empty.className = "dashboard-empty dashboard-owner-empty";
-    empty.textContent = "暂无责任人和事务";
-    wrap.appendChild(empty);
-  }
-}
-
-function dashboardTableCount(value, title, tasks) {
-  const button = document.createElement("button");
-  button.type = "button";
-  button.className = "dashboard-table-count";
-  button.textContent = value;
-  button.title = `${title}：${value}`;
-  button.setAttribute("aria-label", `${title}，${value} 个，查看详情`);
-  button.onclick = () => openTaskListModal(title, tasks);
-  return button;
+  container.appendChild(wrap);
 }
 
 function openTaskListModal(title, tasks) {
@@ -804,7 +1191,7 @@ function openTaskListModal(title, tasks) {
     table.className = "dashboard-task-list";
     const thead = document.createElement("thead");
     const header = document.createElement("tr");
-    for (const titleText of ["事务", "所属线", "责任人", "状态", "结束日期", "提示"]) {
+    for (const titleText of ["事务", "所属线", "责任人", "状态", "结束日期", "提示", "操作"]) {
       const th = document.createElement("th");
       th.textContent = titleText;
       header.appendChild(th);
@@ -855,6 +1242,18 @@ function openTaskListModal(title, tasks) {
         }
         row.appendChild(cell);
       });
+      const actionCell = document.createElement("td");
+      const locate = document.createElement("button");
+      locate.type = "button";
+      locate.className = "dashboard-locate-button";
+      locate.textContent = "定位画布";
+      locate.onclick = (event) => {
+        event.stopPropagation();
+        $("#modal-mask").classList.add("hidden");
+        locateTask(task.id);
+      };
+      actionCell.appendChild(locate);
+      row.appendChild(actionCell);
       tbody.appendChild(row);
     }
     table.appendChild(tbody);
@@ -3093,7 +3492,8 @@ function switchView(v) {
   $("#dashboard-view").classList.toggle("hidden", v !== "dashboard");
   $("#canvas-view").classList.toggle("hidden", v !== "canvas");
   $("#table-view").classList.toggle("hidden", v !== "table");
-  $("#workbench").classList.toggle("hidden", v === "dashboard");
+  $("#workbench").classList.remove("hidden");
+  $("#workbench").classList.toggle("dashboard-mode", v === "dashboard");
   savePrefs();
   render();
 }
@@ -3312,6 +3712,16 @@ $("#btn-clear-filters").onclick = () => {
   state.selectedTaskIds.clear();
   renderFilterControls();
   render();
+};
+for (const button of document.querySelectorAll("#dashboard-range button")) {
+  button.onclick = () => {
+    state.dashboardRange = button.dataset.range;
+    if (state.view === "dashboard") renderDashboard();
+  };
+}
+$("#dashboard-exception-sort").onchange = (event) => {
+  state.dashboardExceptionSort = event.target.value;
+  if (state.view === "dashboard") renderDashboard();
 };
 for (const btn of document.querySelectorAll(".summary-card")) {
   btn.onclick = () => {
