@@ -1583,12 +1583,12 @@ function renderTable() {
   checkAll.indeterminate = sorted.some((t) => state.selectedTaskIds.has(t.id)) && !checkAll.checked;
   const exportAll = $("#btn-export-all");
   const exportSelected = $("#btn-export-selected");
-  exportAll.disabled = state.tasks.length === 0;
+  exportAll.disabled = state.tasks.length === 0 && state.lines.length === 0;
   exportSelected.disabled = state.selectedTaskIds.size === 0;
   exportSelected.textContent = state.selectedTaskIds.size ?
-    `导出选中 (${state.selectedTaskIds.size})` : "导出选中";
+    `导出选中事务 (${state.selectedTaskIds.size})` : "导出选中事务";
   $("#btn-table-add").disabled = archived;
-  $("#btn-import-tasks").disabled = archived;
+  $("#btn-import-data").disabled = archived;
   $("#bulk-status").disabled = archived;
   $("#bulk-owner").disabled = archived;
   $("#bulk-priority").disabled = archived;
@@ -2952,21 +2952,21 @@ async function downloadResponse(response, fallbackName) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function showTaskImportErrors(data) {
+function showImportErrors(data, entityName) {
   openModal("导入失败", (body) => {
     $("#modal").classList.add("modal-wide");
     $("#modal-ok").classList.add("hidden");
     $("#modal-cancel").textContent = "关闭";
     const summary = document.createElement("p");
     summary.className = "import-error-summary";
-    summary.textContent = data.error || "导入文件校验失败，未导入任何事务";
+    summary.textContent = data.error || `导入文件校验失败，未导入任何${entityName}`;
     body.appendChild(summary);
     const list = document.createElement("ol");
     list.className = "import-error-list";
     for (const item of data.row_errors || []) {
       const row = document.createElement("li");
       const rowNumber = document.createElement("strong");
-      rowNumber.textContent = `第 ${item.row} 行`;
+      rowNumber.textContent = `${item.sheet ? `${item.sheet} · ` : ""}第 ${item.row} 行`;
       row.append(rowNumber, document.createTextNode(item.message));
       list.appendChild(row);
     }
@@ -2980,18 +2980,18 @@ function showTaskImportErrors(data) {
   }, async () => true);
 }
 
-async function downloadTaskImportTemplate(button) {
+async function downloadDataImportTemplate(button) {
   const originalText = button.textContent;
   button.disabled = true;
   button.textContent = "正在生成...";
   try {
-    const response = await fetch("/api/tasks/import-template");
+    const response = await fetch("/api/data/import-template");
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       if (response.status === 401) showLoggedOut();
       throw new Error(data.error || "模板下载失败");
     }
-    await downloadResponse(response, "AnyLine-事务导入模板.xlsx");
+    await downloadResponse(response, "AnyLine-数据导入模板.xlsx");
     toast("导入模板已下载");
   } catch (error) {
     toast(error.message || "模板下载失败");
@@ -3001,13 +3001,8 @@ async function downloadTaskImportTemplate(button) {
   }
 }
 
-function openTaskImportDialog() {
-  if (!ensureWorkspaceEditable()) return;
-  if (!state.lines.length) {
-    toast("请先创建主线或支线");
-    return;
-  }
-  openModal("导入事务", (body) => {
+function openExcelImportDialog(config) {
+  openModal(config.title, (body) => {
     const intro = document.createElement("p");
     intro.className = "import-dialog-intro";
     intro.textContent = "请选择填写完成的 Excel 文件。首次导入或字段有变化时，可先下载当前项目空间的最新模板。";
@@ -3017,14 +3012,14 @@ function openTaskImportDialog() {
     templatePanel.className = "import-template-panel";
     const templateText = document.createElement("div");
     const templateTitle = document.createElement("strong");
-    templateTitle.textContent = "事务导入模板";
+    templateTitle.textContent = config.templateTitle;
     const templateHint = document.createElement("span");
-    templateHint.textContent = "包含当前项目的线路、状态、成员责任人和优先级选项";
+    templateHint.textContent = config.templateHint;
     templateText.append(templateTitle, templateHint);
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";
     downloadButton.textContent = "下载模板";
-    downloadButton.onclick = () => downloadTaskImportTemplate(downloadButton);
+    downloadButton.onclick = () => config.downloadTemplate(downloadButton);
     templatePanel.append(templateText, downloadButton);
     body.appendChild(templatePanel);
 
@@ -3042,11 +3037,11 @@ function openTaskImportDialog() {
     const dropHint = document.createElement("span");
     dropHint.textContent = "或点击此区域选择文件";
     dropZone.append(dropIcon, dropTitle, dropHint);
-    dropZone.onclick = () => $("#task-import-file").click();
+    dropZone.onclick = () => $(config.inputSelector).click();
     dropZone.onkeydown = (event) => {
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        $("#task-import-file").click();
+        $(config.inputSelector).click();
       }
     };
     dropZone.ondragenter = dropZone.ondragover = (event) => {
@@ -3070,20 +3065,34 @@ function openTaskImportDialog() {
         toast("每次只能导入一个 Excel 文件");
         return;
       }
-      importTasksFromExcel(files[0], $("#btn-import-tasks"), $("#task-import-file"));
+      config.importFile(files[0], $(config.buttonSelector), $(config.inputSelector));
     };
     body.appendChild(dropZone);
 
     const note = document.createElement("p");
     note.className = "import-dialog-note";
-    note.textContent = "仅支持 .xlsx 文件，大小不超过 5 MB，单次最多导入 2,000 条事务。导入前会校验全部数据。";
+    note.textContent = config.note;
     body.appendChild(note);
     $("#modal-ok").classList.add("hidden");
     $("#modal-cancel").textContent = "关闭";
   }, async () => true);
 }
 
-async function importTasksFromExcel(file, button, inputElement) {
+function openDataImportDialog() {
+  if (!ensureWorkspaceEditable()) return;
+  openExcelImportDialog({
+    title: "导入数据",
+    templateTitle: "主线、支线与事务导入模板",
+    templateHint: "一个文件可单独或同时导入线和事务，并自动建立所属线关系",
+    downloadTemplate: downloadDataImportTemplate,
+    inputSelector: "#data-import-file",
+    buttonSelector: "#btn-import-data",
+    importFile: importDataFromExcel,
+    note: "仅支持 .xlsx 文件，大小不超过 5 MB；任一工作表校验失败时，线和事务均不会写入。",
+  });
+}
+
+async function importDataFromExcel(file, button, inputElement) {
   if (!ensureWorkspaceEditable()) return;
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
     toast("仅支持 .xlsx 格式的 Excel 文件");
@@ -3102,16 +3111,16 @@ async function importTasksFromExcel(file, button, inputElement) {
   try {
     const formData = new FormData();
     formData.append("file", file);
-    const response = await fetch("/api/tasks/import", { method: "POST", body: formData });
+    const response = await fetch("/api/data/import", { method: "POST", body: formData });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 401) showLoggedOut();
-      if (data.row_errors?.length) showTaskImportErrors(data);
+      if (data.row_errors?.length) showImportErrors(data, "数据");
       else toast(data.error || "导入失败");
       return;
     }
     state.selectedTaskIds.clear();
-    toast(`成功导入 ${data.count} 个事务`);
+    toast(`成功导入 ${data.line_count} 条线、${data.task_count} 个事务`);
     await reload();
   } catch (error) {
     toast(error.message || "导入失败");
@@ -3122,12 +3131,12 @@ async function importTasksFromExcel(file, button, inputElement) {
   }
 }
 
-async function exportTasks(scope, ids, button) {
+async function exportData(scope, ids, button) {
   const originalText = button.textContent;
   button.disabled = true;
   button.textContent = "正在导出...";
   try {
-    const response = await fetch("/api/tasks/export", {
+    const response = await fetch("/api/data/export", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ scope, ids }),
@@ -3138,33 +3147,33 @@ async function exportTasks(scope, ids, button) {
       throw new Error(data.error || "导出失败");
     }
     await downloadResponse(
-      response, `AnyLine-${scope === "all" ? "全部事务" : "选中事务"}.xlsx`
+      response, `AnyLine-${scope === "all" ? "全部数据" : "选中事务及关联线"}.xlsx`
     );
-    toast(scope === "all" ? "已导出全部事务" : `已导出 ${ids.length} 个事务`);
+    toast(scope === "all" ? "已导出全部线和事务" : `已导出 ${ids.length} 个事务及关联线`);
   } catch (error) {
     toast(error.message || "导出失败");
   } finally {
     button.textContent = originalText;
-    button.disabled = scope === "all" ? state.tasks.length === 0 :
+    button.disabled = scope === "all" ? state.tasks.length === 0 && state.lines.length === 0 :
       state.selectedTaskIds.size === 0;
   }
 }
 
-$("#btn-import-tasks").onclick = openTaskImportDialog;
-$("#task-import-file").onchange = (event) => {
+$("#btn-import-data").onclick = openDataImportDialog;
+$("#data-import-file").onchange = (event) => {
   const file = event.target.files?.[0];
-  if (file) importTasksFromExcel(file, $("#btn-import-tasks"), event.target);
+  if (file) importDataFromExcel(file, $("#btn-import-data"), event.target);
 };
 
 $("#btn-export-all").onclick = (event) =>
-  exportTasks("all", null, event.currentTarget);
+  exportData("all", null, event.currentTarget);
 $("#btn-export-selected").onclick = (event) => {
   const ids = [...state.selectedTaskIds];
   if (!ids.length) {
     toast("请先勾选事务");
     return;
   }
-  exportTasks("selected", ids, event.currentTarget);
+  exportData("selected", ids, event.currentTarget);
 };
 
 $("#bulk-status").onchange = async (e) => {

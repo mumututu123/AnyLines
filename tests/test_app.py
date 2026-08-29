@@ -69,7 +69,7 @@ class AnyLineHttpTests(unittest.TestCase):
         data = json.loads(raw.decode("utf-8")) if "application/json" in content_type else raw
         return response.status, data
 
-    def upload_xlsx(self, content, filename="tasks.xlsx"):
+    def upload_xlsx(self, content, filename="tasks.xlsx", path="/api/tasks/import"):
         boundary = "----AnyLineTestBoundary"
         body = (
             f"--{boundary}\r\n"
@@ -81,7 +81,7 @@ class AnyLineHttpTests(unittest.TestCase):
         if self.cookie:
             headers["Cookie"] = self.cookie
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-        connection.request("POST", "/api/tasks/import", body=body, headers=headers)
+        connection.request("POST", path, body=body, headers=headers)
         response = connection.getresponse()
         raw = response.read()
         content_type = response.getheader("Content-Type", "")
@@ -903,6 +903,208 @@ class AnyLineHttpTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 status, data = self.request("POST", "/api/tasks/export", payload)
                 self.assertEqual(status, expected, data)
+
+    def test_line_excel_template_export_import_and_undo(self):
+        status, content = self.request("GET", "/api/lines/import-template")
+        self.assertEqual(status, 200)
+        workbook = load_workbook(io.BytesIO(content))
+        self.assertIn("线导入", workbook.sheetnames)
+        self.assertIn("填报说明", workbook.sheetnames)
+        self.assertEqual(
+            [cell.value for cell in workbook["线导入"][1]],
+            [column[0] for column in anyline.LINE_IMPORT_COLUMNS],
+        )
+        workbook.close()
+
+        import_book = Workbook()
+        sheet = import_book.active
+        sheet.title = "线导入"
+        sheet.append([column[0] for column in anyline.LINE_IMPORT_COLUMNS])
+        # Child rows may appear before their parents; import order is resolved by key.
+        sheet.append([
+            "delivery", "product", "交付支线", "交付工作", "#123ABC",
+            date(2026, 8, 10), date(2026, 8, 28),
+        ])
+        sheet.append([
+            "acceptance", "delivery", "验收支线", "", "",
+            date(2026, 8, 12), None,
+        ])
+        sheet.append([
+            "product", "", "=产品主线", "产品规划", "#ABCDEF",
+            date(2026, 8, 1), None,
+        ])
+        output = io.BytesIO()
+        import_book.save(output)
+        status, data = self.upload_xlsx(
+            output.getvalue(), "lines.xlsx", "/api/lines/import"
+        )
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["count"], 3)
+
+        _, state = self.request("GET", "/api/state")
+        by_name = {line["name"]: line for line in state["lines"]}
+        self.assertIsNone(by_name["=产品主线"]["parent_id"])
+        self.assertEqual(
+            by_name["交付支线"]["parent_id"], by_name["=产品主线"]["id"]
+        )
+        self.assertEqual(
+            by_name["验收支线"]["parent_id"], by_name["交付支线"]["id"]
+        )
+        self.assertEqual(by_name["交付支线"]["color"], "#123abc")
+
+        status, content = self.request("GET", "/api/lines/export")
+        self.assertEqual(status, 200)
+        exported = load_workbook(io.BytesIO(content))
+        exported_sheet = exported["线导入"]
+        self.assertEqual(exported_sheet.freeze_panes, "A2")
+        self.assertEqual(exported_sheet.max_row, 4)
+        self.assertEqual(
+            [cell.value for cell in exported_sheet[1]],
+            [column[0] for column in anyline.LINE_EXPORT_COLUMNS],
+        )
+        main_name = next(
+            cell for cell in exported_sheet["F"] if cell.value == "=产品主线"
+        )
+        self.assertEqual(main_name.data_type, "s")
+        exported.close()
+
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"], [])
+
+        status, data = self.upload_xlsx(
+            content, "exported-lines.xlsx", "/api/lines/import"
+        )
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["count"], 3)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["lines"]), 3)
+
+    def test_line_excel_import_is_atomic_on_invalid_hierarchy(self):
+        import_book = Workbook()
+        sheet = import_book.active
+        sheet.title = "线导入"
+        sheet.append([column[0] for column in anyline.LINE_IMPORT_COLUMNS])
+        sheet.append(["a", "b", "支线 A", "", "", "2026-08-01", ""])
+        sheet.append(["b", "a", "支线 B", "", "", "2026-08-01", ""])
+        output = io.BytesIO()
+        import_book.save(output)
+        status, data = self.upload_xlsx(
+            output.getvalue(), "invalid-lines.xlsx", "/api/lines/import"
+        )
+        self.assertEqual(status, 400, data)
+        self.assertIn("未导入任何主线或支线", data["error"])
+        self.assertTrue(any("循环" in item["message"] for item in data["row_errors"]))
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"], [])
+
+    def test_unified_excel_import_export_and_selected_lineage(self):
+        status, content = self.request("GET", "/api/data/import-template")
+        self.assertEqual(status, 200)
+        workbook = load_workbook(io.BytesIO(content))
+        self.assertIn("线导入", workbook.sheetnames)
+        self.assertIn("事务导入", workbook.sheetnames)
+        line_sheet = workbook["线导入"]
+        line_sheet.append([
+            "branch", "main", "交付支线", "", "#123456",
+            self.today, None,
+        ])
+        line_sheet.append([
+            "main", "", "产品主线", "", "", self.today, None,
+        ])
+        task_sheet = workbook["事务导入"]
+        task_sheet.append([
+            "branch", "", "交付事务", "完成交付", "完成", "下一步", "",
+            "高", "系统管理员", "进行中", self.today,
+            self.today + timedelta(days=7),
+        ])
+        output = io.BytesIO()
+        workbook.save(output)
+        workbook.close()
+
+        status, data = self.upload_xlsx(
+            output.getvalue(), "all-data.xlsx", "/api/data/import"
+        )
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["line_count"], 2)
+        self.assertEqual(data["task_count"], 1)
+        _, state = self.request("GET", "/api/state")
+        by_name = {line["name"]: line for line in state["lines"]}
+        self.assertEqual(
+            state["tasks"][0]["line_id"], by_name["交付支线"]["id"]
+        )
+
+        unrelated_id = self.create_line("无关主线")
+        task_id = state["tasks"][0]["id"]
+        status, content = self.request(
+            "POST", "/api/data/export", {"scope": "selected", "ids": [task_id]}
+        )
+        self.assertEqual(status, 200)
+        selected_book = load_workbook(io.BytesIO(content))
+        exported_line_ids = {
+            selected_book["线导入"].cell(row, 1).value
+            for row in range(2, selected_book["线导入"].max_row + 1)
+        }
+        self.assertEqual(
+            exported_line_ids,
+            {by_name["产品主线"]["id"], by_name["交付支线"]["id"]},
+        )
+        self.assertNotIn(unrelated_id, exported_line_ids)
+        self.assertEqual(selected_book["事务导入"].max_row, 2)
+        selected_book.close()
+
+        status, content = self.request(
+            "POST", "/api/data/export", {"scope": "all", "ids": None}
+        )
+        self.assertEqual(status, 200)
+        exported = load_workbook(io.BytesIO(content))
+        self.assertIn("线导入", exported.sheetnames)
+        self.assertIn("事务导入", exported.sheetnames)
+        self.assertEqual(
+            [cell.value for cell in exported["事务导入"][1]],
+            [column[0] for column in anyline.DATA_TASK_EXPORT_COLUMNS],
+        )
+        exported.close()
+
+        second_workspace = self.request(
+            "POST", "/api/workspaces", {"name": "回导空间", "description": ""}
+        )
+        self.assertEqual(second_workspace[0], 201, second_workspace[1])
+        status, data = self.upload_xlsx(
+            content, "exported-all-data.xlsx", "/api/data/import"
+        )
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["line_count"], 3)
+        self.assertEqual(data["task_count"], 1)
+        _, imported_state = self.request("GET", "/api/state")
+        imported_lines = {line["id"] for line in imported_state["lines"]}
+        self.assertIn(imported_state["tasks"][0]["line_id"], imported_lines)
+
+    def test_unified_excel_import_is_atomic_across_sheets(self):
+        workbook = Workbook()
+        line_sheet = workbook.active
+        line_sheet.title = "线导入"
+        line_sheet.append([column[0] for column in anyline.LINE_IMPORT_COLUMNS])
+        line_sheet.append([
+            "main", "", "不应写入的主线", "", "", self.today, None,
+        ])
+        task_sheet = workbook.create_sheet("事务导入")
+        task_sheet.append([column[0] for column in anyline.TASK_IMPORT_COLUMNS])
+        task_sheet.append([
+            "main", "", "错误事务", "内容", "", "", "", "中",
+            "系统管理员", "不存在的状态", self.today, self.today,
+        ])
+        output = io.BytesIO()
+        workbook.save(output)
+        status, data = self.upload_xlsx(
+            output.getvalue(), "invalid-all-data.xlsx", "/api/data/import"
+        )
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["row_errors"][0]["sheet"], "事务导入")
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"], [])
+        self.assertEqual(state["tasks"], [])
 
     def test_excel_import_template_and_atomic_import(self):
         self.add_member("zhangsan", "张三")

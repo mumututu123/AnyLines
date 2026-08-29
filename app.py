@@ -42,6 +42,46 @@ MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TASK_IMAGES_BYTES = 20 * 1024 * 1024
 MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024
 MAX_TASK_IMPORT_ROWS = 2000
+MAX_LINE_IMPORT_ROWS = 2000
+LINE_EXPORT_COLUMNS = (
+    ("线ID", "id", 12),
+    ("线类型", "type", 12),
+    ("线路径", "path", 36),
+    ("父线ID", "parent_id", 12),
+    ("父线路径", "parent_path", 36),
+    ("线名", "name", 24),
+    ("描述", "description", 36),
+    ("颜色", "color", 14),
+    ("起始日期", "fork_date", 14),
+    ("反合日期", "merge_date", 14),
+    ("更新日期", "updated_at", 14),
+)
+LINE_IMPORT_COLUMNS = (
+    ("线标识", "import_key", 16, True),
+    ("父线标识", "parent_key", 16, False),
+    ("线名", "name", 24, True),
+    ("描述", "description", 36, False),
+    ("颜色", "color", 14, False),
+    ("起始日期", "fork_date", 14, True),
+    ("反合日期", "merge_date", 14, False),
+)
+DATA_TASK_EXPORT_COLUMNS = (
+    ("事务ID", "id", 12),
+    ("所属线ID", "line_id", 14),
+    ("所属线路径", "line_path", 36),
+    ("事务名", "name", 24),
+    ("事务内容", "content", 36),
+    ("闭环目标", "goal", 28),
+    ("下一步动作", "next_action", 28),
+    ("风险原因", "risk_reason", 28),
+    ("优先级", "priority", 12),
+    ("责任人", "owner", 16),
+    ("进展状态", "status", 14),
+    ("起始日期", "start_date", 14),
+    ("结束日期", "end_date", 14),
+    ("状态起始日期", "status_since", 16),
+    ("更新日期", "updated_at", 14),
+)
 TASK_EXPORT_COLUMNS = (
     ("事务ID", "id", 12),
     ("线名", "line_name", 20),
@@ -328,6 +368,111 @@ def line_color(value):
     return value.lower()
 
 
+def append_excel_value(cell, value, is_date=False):
+    if is_date and value:
+        try:
+            cell.value = date.fromisoformat(value)
+            cell.number_format = "yyyy-mm-dd"
+            return
+        except ValueError:
+            pass
+    cell.value = "" if value is None else value
+    if isinstance(cell.value, str):
+        # Prevent user-entered values from being evaluated as Excel formulas.
+        cell.data_type = "s"
+
+
+def line_export_workbook(rows):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "线导入"
+    sheet.append([column[0] for column in LINE_EXPORT_COLUMNS])
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    for row in rows:
+        sheet.append([None] * len(LINE_EXPORT_COLUMNS))
+        for column_index, (_label, key, _width) in enumerate(LINE_EXPORT_COLUMNS, 1):
+            append_excel_value(
+                sheet.cell(sheet.max_row, column_index), row.get(key),
+                key in {"fork_date", "merge_date", "updated_at"},
+            )
+    last_column = get_column_letter(len(LINE_EXPORT_COLUMNS))
+    sheet.auto_filter.ref = f"A1:{last_column}{sheet.max_row}"
+    sheet.freeze_panes = "A2"
+    sheet.row_dimensions[1].height = 22
+    for index, (_label, _key, width) in enumerate(LINE_EXPORT_COLUMNS, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    instructions = workbook.create_sheet("填报说明")
+    for row in (
+        ("项目", "说明"),
+        ("导入方式", "该导出文件可直接作为线导入文件使用，也可按需修改后导入。"),
+        ("线ID", "导入时作为文件内唯一的线标识；可使用数字或文本，导入后会生成新的系统 ID。"),
+        ("父线ID", "主线留空；支线填写同一工作表内父线的线ID。行顺序不影响导入。"),
+        ("只读列", "线类型、线路径、父线路径和更新日期仅供查看，导入时会自动忽略。"),
+        ("导入规则", "任意一行校验失败时整批不导入；一次成功导入可使用 Ctrl+Z 整批撤销。"),
+    ):
+        instructions.append(row)
+    instructions["A1"].font = instructions["B1"].font = Font(bold=True)
+    instructions["A1"].fill = instructions["B1"].fill = header_fill
+    instructions.column_dimensions["A"].width = 16
+    instructions.column_dimensions["B"].width = 88
+    for row in instructions.iter_rows(min_row=2, max_col=2):
+        row[1].alignment = Alignment(wrap_text=True, vertical="top")
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def line_import_template_workbook():
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "线导入"
+    sheet.append([column[0] for column in LINE_IMPORT_COLUMNS])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(LINE_IMPORT_COLUMNS))}1"
+    sheet.row_dimensions[1].height = 24
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    required_fill = PatternFill("solid", fgColor="FCE8E6")
+    for index, (label, _key, width, required) in enumerate(LINE_IMPORT_COLUMNS, 1):
+        cell = sheet.cell(1, index)
+        cell.font = Font(bold=True, color="9C0006" if required else "1F2328")
+        cell.fill = required_fill if required else header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.comment = Comment("必填字段", "AnyLine") if required else None
+        sheet.column_dimensions[get_column_letter(index)].width = width
+
+    instructions = workbook.create_sheet("填报说明")
+    for row in (
+        ("项目", "说明"),
+        ("导入规则", "从第 2 行开始填写；空白行会自动忽略。任意一行校验失败时整批不导入。"),
+        ("线标识", "文件内必须唯一，可使用便于识别的数字或文本，仅用于关联父线。"),
+        ("主线", "父线标识留空。"),
+        ("支线", "父线标识填写同一工作表中父线的线标识；父线可以写在支线之后。"),
+        ("日期格式", "使用 YYYY-MM-DD；支线不能早于父线，反合日期不能早于支线起始日期。"),
+        ("颜色", "可留空，或填写 #RRGGBB 格式的颜色。"),
+        ("导入范围", f"单次最多 {MAX_LINE_IMPORT_ROWS} 条主线与支线，仅创建新线。"),
+        ("撤销", "一次导入作为一次编辑，可在画布视图使用 Ctrl+Z 整批撤销。"),
+    ):
+        instructions.append(row)
+    instructions["A1"].font = instructions["B1"].font = Font(bold=True)
+    instructions["A1"].fill = instructions["B1"].fill = header_fill
+    instructions.column_dimensions["A"].width = 16
+    instructions.column_dimensions["B"].width = 88
+    for row in instructions.iter_rows(min_row=2, max_col=2):
+        row[1].alignment = Alignment(wrap_text=True, vertical="top")
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
 def task_export_workbook(rows):
     workbook = Workbook()
     sheet = workbook.active
@@ -346,19 +491,9 @@ def task_export_workbook(rows):
         sheet.append([None] * len(TASK_EXPORT_COLUMNS))
         row_index = sheet.max_row
         for column_index, (_, key, _) in enumerate(TASK_EXPORT_COLUMNS, 1):
-            value = row[key]
-            cell = sheet.cell(row_index, column_index)
-            if key in date_keys and value:
-                try:
-                    cell.value = date.fromisoformat(value)
-                    cell.number_format = "yyyy-mm-dd"
-                    continue
-                except ValueError:
-                    pass
-            cell.value = "" if value is None else value
-            if isinstance(cell.value, str):
-                # 避免以 =、+、-、@ 开头的用户内容被 Excel 当作公式执行。
-                cell.data_type = "s"
+            append_excel_value(
+                sheet.cell(row_index, column_index), row[key], key in date_keys
+            )
 
     last_column = get_column_letter(len(TASK_EXPORT_COLUMNS))
     sheet.auto_filter.ref = f"A1:{last_column}{sheet.max_row}"
@@ -375,7 +510,7 @@ def task_export_workbook(rows):
 
 def workspace_line_records(db, workspace_id):
     rows = [dict(row) for row in db.execute(
-        "SELECT id,name,parent_id,fork_date FROM lines "
+        "SELECT id,name,description,color,parent_id,fork_date,merge_date,updated_at FROM lines "
         "WHERE workspace_id=? AND deleted=0 ORDER BY id", (workspace_id,)
     )]
     by_id = {row["id"]: row for row in rows}
@@ -398,7 +533,43 @@ def workspace_line_records(db, workspace_id):
     for row in rows:
         row["path"] = line_path(row["id"])
         row["type"] = "主线" if row["parent_id"] is None else "支线"
+        row["parent_path"] = paths.get(row["parent_id"], "")
     return rows
+
+
+def data_export_workbook(line_rows, task_rows):
+    line_output = line_export_workbook(line_rows)
+    workbook = load_workbook(line_output)
+    sheet = workbook.create_sheet("事务导入", 1)
+    sheet.append([column[0] for column in DATA_TASK_EXPORT_COLUMNS])
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    for cell in sheet[1]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    date_keys = {"start_date", "end_date", "status_since", "updated_at"}
+    for row in task_rows:
+        sheet.append([None] * len(DATA_TASK_EXPORT_COLUMNS))
+        for index, (_label, key, _width) in enumerate(DATA_TASK_EXPORT_COLUMNS, 1):
+            append_excel_value(
+                sheet.cell(sheet.max_row, index), row.get(key), key in date_keys
+            )
+    last_column = get_column_letter(len(DATA_TASK_EXPORT_COLUMNS))
+    sheet.auto_filter.ref = f"A1:{last_column}{sheet.max_row}"
+    sheet.freeze_panes = "A2"
+    sheet.row_dimensions[1].height = 22
+    for index, (_label, _key, width) in enumerate(DATA_TASK_EXPORT_COLUMNS, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    instructions = workbook["填报说明"]
+    instructions.append((
+        "事务导入",
+        "事务通过所属线ID或所属线路径关联“线导入”工作表中的线；事务ID、状态起始日期和更新日期仅供查看。",
+    ))
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    output.seek(0)
+    return output
 
 
 def task_import_template_workbook(db, workspace_id):
@@ -502,6 +673,38 @@ def task_import_template_workbook(db, workspace_id):
     return output
 
 
+def data_import_template_workbook(db, workspace_id):
+    task_output = task_import_template_workbook(db, workspace_id)
+    workbook = load_workbook(task_output)
+    sheet = workbook.create_sheet("线导入", 0)
+    sheet.append([column[0] for column in LINE_IMPORT_COLUMNS])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(LINE_IMPORT_COLUMNS))}1"
+    sheet.row_dimensions[1].height = 24
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    required_fill = PatternFill("solid", fgColor="FCE8E6")
+    for index, (_label, _key, width, required) in enumerate(LINE_IMPORT_COLUMNS, 1):
+        cell = sheet.cell(1, index)
+        cell.font = Font(bold=True, color="9C0006" if required else "1F2328")
+        cell.fill = required_fill if required else header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.comment = Comment("必填字段", "AnyLine") if required else None
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    instructions = workbook["填报说明"]
+    line_instructions = (
+        ("线导入", "“线导入”与“事务导入”可只填写一张，也可同时填写；任意数据校验失败时整批不导入。"),
+        ("线标识", "文件内必须唯一；主线的父线标识留空，支线填写同一工作表内父线的线标识。"),
+        ("事务关联新线", "事务的所属线ID可填写“线导入”工作表中的线标识，也可填写当前项目已有线ID或路径。"),
+    )
+    for row in line_instructions:
+        instructions.append(row)
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    output.seek(0)
+    return output
+
+
 def import_cell_text(value):
     if value is None:
         return ""
@@ -524,7 +727,154 @@ def import_cell_date(value, label):
     return text
 
 
-def parse_task_import_sheet(sheet, db, workspace_id):
+def parse_line_import_sheet(sheet):
+    if sheet.max_row > MAX_LINE_IMPORT_ROWS + 1:
+        return [], [{
+            "row": MAX_LINE_IMPORT_ROWS + 2,
+            "message": f"单次最多导入 {MAX_LINE_IMPORT_ROWS} 条线，请删除多余行",
+        }], MAX_LINE_IMPORT_ROWS + 1
+    if sheet.max_column > 100:
+        return [], [{"row": 1, "message": "导入工作表列数异常，请使用下载的导入模板"}], 1
+    header_cells = next(sheet.iter_rows(min_row=1, max_row=1), None)
+    if not header_cells:
+        return [], [{"row": 1, "message": "工作表缺少表头"}], 1
+    headers = [import_cell_text(cell.value) for cell in header_cells]
+    nonempty_headers = [header for header in headers if header]
+    duplicates = sorted({header for header in nonempty_headers if nonempty_headers.count(header) > 1})
+    if duplicates:
+        return [], [{"row": 1, "message": f"表头重复：{'、'.join(duplicates)}"}], 1
+    header_indexes = {header: index for index, header in enumerate(headers) if header}
+    aliases = {
+        "线标识": "import_key", "线ID": "import_key",
+        "父线标识": "parent_key", "父线ID": "parent_key",
+        "线名": "name", "描述": "description", "颜色": "color",
+        "起始日期": "fork_date", "反合日期": "merge_date",
+    }
+    missing = []
+    for label, alternatives in (
+        ("线标识", {"线标识", "线ID"}),
+        ("线名", {"线名"}),
+        ("起始日期", {"起始日期"}),
+    ):
+        if not alternatives & set(header_indexes):
+            missing.append(label)
+    if missing:
+        return [], [{"row": 1, "message": f"缺少必需表头：{'、'.join(missing)}"}], 1
+
+    parsed_rows = []
+    errors = []
+    seen_keys = {}
+    data_count = 0
+
+    def add_error(row_number, message):
+        item = {"row": row_number, "message": message}
+        if item not in errors:
+            errors.append(item)
+
+    for row_number, cells in enumerate(sheet.iter_rows(min_row=2), 2):
+        values = [cell.value for cell in cells]
+        if not any(import_cell_text(value) for value in values):
+            continue
+        data_count += 1
+        raw = {}
+        for label, index in header_indexes.items():
+            key = aliases.get(label)
+            if key:
+                raw[key] = values[index] if index < len(values) else None
+        try:
+            import_key = import_cell_text(raw.get("import_key"))
+            parent_key = import_cell_text(raw.get("parent_key"))
+            name = import_cell_text(raw.get("name"))
+            if not import_key:
+                raise ValueError("线标识不能为空")
+            if import_key in seen_keys:
+                raise ValueError(f"线标识与第 {seen_keys[import_key]} 行重复")
+            seen_keys[import_key] = row_number
+            if not name:
+                raise ValueError("线名不能为空")
+            color_text = import_cell_text(raw.get("color"))
+            fork_date = import_cell_date(raw.get("fork_date"), "起始日期")
+            merge_text = import_cell_text(raw.get("merge_date"))
+            merge_date = import_cell_date(raw.get("merge_date"), "反合日期") if merge_text else None
+            parsed_rows.append({
+                "_row": row_number,
+                "_key": import_key,
+                "_parent_key": parent_key,
+                "name": name,
+                "description": import_cell_text(raw.get("description")),
+                "color": line_color(color_text),
+                "fork_date": fork_date,
+                "merge_date": merge_date,
+            })
+        except ValueError as exc:
+            add_error(row_number, str(exc))
+
+    by_key = {row["_key"]: row for row in parsed_rows}
+    for row in parsed_rows:
+        parent_key = row["_parent_key"]
+        if not parent_key:
+            if row["merge_date"]:
+                add_error(row["_row"], "主线不能填写反合日期")
+            continue
+        if parent_key == row["_key"]:
+            add_error(row["_row"], "父线标识不能与线标识相同")
+            continue
+        parent = by_key.get(parent_key)
+        if not parent:
+            add_error(row["_row"], "父线标识不存在于当前导入文件")
+            continue
+        if row["fork_date"] < parent["fork_date"]:
+            add_error(row["_row"], "支线起始日期不能早于父线起始日期")
+        if row["merge_date"] and row["merge_date"] < row["fork_date"]:
+            add_error(row["_row"], "反合日期不能早于支线起始日期")
+
+    ordered = []
+    visit_state = {}
+
+    def visit(row, trail):
+        state = visit_state.get(row["_key"], 0)
+        if state == 2:
+            return
+        if state == 1:
+            for key in trail[trail.index(row["_key"]):]:
+                add_error(by_key[key]["_row"], "父线关系不能形成循环")
+            return
+        visit_state[row["_key"]] = 1
+        parent = by_key.get(row["_parent_key"])
+        if parent:
+            visit(parent, trail + [row["_key"]])
+        visit_state[row["_key"]] = 2
+        if row not in ordered:
+            ordered.append(row)
+
+    for row in parsed_rows:
+        visit(row, [])
+    errors.sort(key=lambda item: item["row"])
+    return ordered, errors, data_count
+
+
+def imported_line_records(rows):
+    by_key = {row["_key"]: row for row in rows}
+    paths = {}
+
+    def line_path(key):
+        if key in paths:
+            return paths[key]
+        row = by_key[key]
+        parent = by_key.get(row["_parent_key"])
+        paths[key] = f"{line_path(parent['_key'])} / {row['name']}" if parent else row["name"]
+        return paths[key]
+
+    return [{
+        "id": None,
+        "import_key": row["_key"],
+        "name": row["name"],
+        "path": line_path(row["_key"]),
+        "fork_date": row["fork_date"],
+    } for row in rows]
+
+
+def parse_task_import_sheet(sheet, db, workspace_id, imported_lines=None):
     if sheet.max_row > MAX_TASK_IMPORT_ROWS + 1:
         return [], [{
             "row": MAX_TASK_IMPORT_ROWS + 2,
@@ -549,10 +899,13 @@ def parse_task_import_sheet(sheet, db, workspace_id):
         return [], [{"row": 1, "message": f"缺少必需表头：{'、'.join(missing)}"}], 1
 
     lines = workspace_line_records(db, workspace_id)
+    imported_lines = imported_lines or []
+    all_lines = lines + imported_lines
     line_by_id = {line["id"]: line for line in lines}
+    line_by_import_key = {line["import_key"]: line for line in imported_lines}
     line_by_path = {}
     line_by_name = {}
-    for line in lines:
+    for line in all_lines:
         line_by_path.setdefault(line["path"], []).append(line)
         line_by_name.setdefault(line["name"], []).append(line)
     statuses = set(get_statuses(db))
@@ -581,16 +934,18 @@ def parse_task_import_sheet(sheet, db, workspace_id):
             line_path_text = import_cell_text(raw.get("line_path"))
             line = None
             if line_id_text:
-                try:
-                    numeric_id = float(line_id_text)
-                    if not numeric_id.is_integer():
-                        raise ValueError
-                    line_id = int(numeric_id)
-                except ValueError:
-                    raise ValueError("所属线ID必须是整数")
-                line = line_by_id.get(line_id)
-                if not line:
-                    raise ValueError("所属线ID不存在于当前项目空间")
+                line = line_by_import_key.get(line_id_text)
+                if line is None:
+                    try:
+                        numeric_id = float(line_id_text)
+                        if not numeric_id.is_integer():
+                            raise ValueError
+                        line_id = int(numeric_id)
+                    except ValueError:
+                        raise ValueError("所属线ID必须是整数或本文件中的线标识")
+                    line = line_by_id.get(line_id)
+                    if not line:
+                        raise ValueError("所属线ID不存在于当前项目空间或本次线导入数据")
                 if line_path_text and line_path_text not in {line["path"], line["name"]}:
                     raise ValueError("所属线ID与所属线路径不一致")
             elif line_path_text:
@@ -605,6 +960,7 @@ def parse_task_import_sheet(sheet, db, workspace_id):
 
             task = {
                 "line_id": line["id"],
+                "_line_import_key": line.get("import_key"),
                 "name": import_cell_text(raw.get("name")),
                 "content": import_cell_text(raw.get("content")),
                 "goal": import_cell_text(raw.get("goal")),
@@ -693,7 +1049,7 @@ def require_workspace_writable(workspace_id=None):
 
 CURRENT_WORKSPACE_WRITE_ENDPOINTS = {
     "api_set_statuses",
-    "create_line", "update_line", "delete_line",
+    "create_line", "update_line", "delete_line", "import_lines", "import_data",
     "create_task", "update_task", "task_dependency", "delete_task",
     "import_tasks", "bulk_tasks", "undo", "restore_trash", "purge_trash",
 }
@@ -1661,7 +2017,250 @@ def api_set_statuses():
     })
 
 
+# ----- unified Excel import/export
+@app.route("/api/data/import-template")
+def download_data_import_template():
+    output = data_import_template_workbook(get_db(), current_workspace_id())
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"AnyLine-数据导入模板-{date.today():%Y%m%d}.xlsx",
+    )
+
+
+@app.route("/api/data/import", methods=["POST"])
+def import_data():
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        raise ApiError("请选择要导入的 Excel 文件")
+    if not uploaded.filename.lower().endswith(".xlsx"):
+        raise ApiError("仅支持 .xlsx 格式的 Excel 文件")
+    content = uploaded.read(MAX_TASK_IMPORT_BYTES + 1)
+    if not content:
+        raise ApiError("导入文件不能为空")
+    if len(content) > MAX_TASK_IMPORT_BYTES:
+        raise ApiError("导入文件不能超过 5MB")
+    try:
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
+    except (InvalidFileException, BadZipFile, OSError, ValueError, KeyError):
+        raise ApiError("无法读取 Excel 文件，请使用下载的导入模板")
+    db = get_db()
+    workspace_id = current_workspace_id()
+    try:
+        if not ({"线导入", "事务导入"} & set(workbook.sheetnames)):
+            raise ApiError("Excel 文件至少需要“线导入”或“事务导入”工作表")
+        line_rows, line_errors, line_count = ([], [], 0)
+        if "线导入" in workbook.sheetnames:
+            line_rows, line_errors, line_count = parse_line_import_sheet(
+                workbook["线导入"]
+            )
+        imported_lines = imported_line_records(line_rows) if not line_errors else []
+        task_rows, task_errors, task_count = ([], [], 0)
+        if "事务导入" in workbook.sheetnames:
+            task_rows, task_errors, task_count = parse_task_import_sheet(
+                workbook["事务导入"], db, workspace_id, imported_lines
+            )
+    finally:
+        workbook.close()
+    if not line_count and not task_count:
+        raise ApiError("导入工作表中没有可导入的数据")
+    row_errors = [
+        {**item, "sheet": "线导入"} for item in line_errors
+    ] + [
+        {**item, "sheet": "事务导入"} for item in task_errors
+    ]
+    if row_errors:
+        return jsonify({
+            "error": f"导入文件存在 {len(row_errors)} 行错误，未导入任何数据",
+            "error_count": len(row_errors),
+            "row_errors": row_errors[:50],
+        }), 400
+
+    today = date.today().isoformat()
+    on_edit(db)
+    ids_by_key = {}
+    imported_line_ids = []
+    for line in line_rows:
+        cur = db.execute(
+            "INSERT INTO lines(workspace_id,name,description,color,parent_id,fork_date,"
+            "merge_date,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                workspace_id, line["name"], line["description"], line["color"],
+                ids_by_key.get(line["_parent_key"]), line["fork_date"],
+                line["merge_date"], today,
+            ),
+        )
+        ids_by_key[line["_key"]] = cur.lastrowid
+        imported_line_ids.append(cur.lastrowid)
+    imported_task_ids = []
+    for task in task_rows:
+        line_id = ids_by_key.get(task["_line_import_key"], task["line_id"])
+        cur = db.execute(
+            "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,priority,"
+            "next_action,risk_reason,status,start_date,end_date,status_since,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                workspace_id, line_id, task["name"], task["content"], task["goal"],
+                task["owner"], task["priority"], task["next_action"],
+                task["risk_reason"], task["status"], task["start_date"],
+                task["end_date"], today, today,
+            ),
+        )
+        imported_task_ids.append(cur.lastrowid)
+    db.commit()
+    return jsonify({
+        "ok": True,
+        "count": len(imported_line_ids) + len(imported_task_ids),
+        "line_count": len(imported_line_ids),
+        "task_count": len(imported_task_ids),
+        "line_ids": imported_line_ids,
+        "task_ids": imported_task_ids,
+        "can_undo": True,
+    }), 201
+
+
+@app.route("/api/data/export", methods=["POST"])
+def export_data():
+    d = json_object()
+    scope = d.get("scope")
+    workspace_id = current_workspace_id()
+    params = [workspace_id, workspace_id]
+    selected_count = None
+    id_clause = ""
+    if scope == "selected":
+        ids = d.get("ids")
+        if not isinstance(ids, list) or not ids or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in ids
+        ):
+            raise ApiError("ids 必须是非空整数数组")
+        if len(ids) != len(set(ids)):
+            raise ApiError("ids 不能包含重复项")
+        id_clause = f" AND t.id IN ({','.join('?' * len(ids))})"
+        params.extend(ids)
+        selected_count = len(ids)
+    elif scope != "all":
+        raise ApiError("scope 必须是 all 或 selected")
+
+    db = get_db()
+    task_rows = [dict(row) for row in db.execute(
+        "SELECT t.id,t.line_id,t.name,t.content,t.goal,t.next_action,t.risk_reason,"
+        "t.priority,t.owner,t.status,t.start_date,t.end_date,t.status_since,t.updated_at "
+        "FROM tasks t JOIN lines l ON l.id=t.line_id "
+        "WHERE t.workspace_id=? AND l.workspace_id=? AND t.deleted=0 AND l.deleted=0" +
+        id_clause + " ORDER BY t.start_date,t.id",
+        params,
+    ).fetchall()]
+    if scope == "selected" and len(task_rows) != selected_count:
+        raise ApiError("部分事务不存在或已删除", 404)
+
+    all_lines = workspace_line_records(db, workspace_id)
+    line_by_id = {line["id"]: line for line in all_lines}
+    if scope == "all":
+        line_rows = all_lines
+    else:
+        included_ids = {task["line_id"] for task in task_rows}
+        pending = list(included_ids)
+        while pending:
+            parent_id = line_by_id[pending.pop()].get("parent_id")
+            if parent_id is not None and parent_id not in included_ids:
+                included_ids.add(parent_id)
+                pending.append(parent_id)
+        line_rows = [line for line in all_lines if line["id"] in included_ids]
+    for task in task_rows:
+        task["line_path"] = line_by_id[task["line_id"]]["path"]
+    output = data_export_workbook(line_rows, task_rows)
+    scope_name = "全部数据" if scope == "all" else "选中事务及关联线"
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"AnyLine-{scope_name}-{date.today():%Y%m%d}.xlsx",
+    )
+
+
 # ----- lines
+@app.route("/api/lines/import-template")
+def download_line_import_template():
+    output = line_import_template_workbook()
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"AnyLine-主线支线导入模板-{date.today():%Y%m%d}.xlsx",
+    )
+
+
+@app.route("/api/lines/import", methods=["POST"])
+def import_lines():
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        raise ApiError("请选择要导入的 Excel 文件")
+    if not uploaded.filename.lower().endswith(".xlsx"):
+        raise ApiError("仅支持 .xlsx 格式的 Excel 文件")
+    content = uploaded.read(MAX_TASK_IMPORT_BYTES + 1)
+    if not content:
+        raise ApiError("导入文件不能为空")
+    if len(content) > MAX_TASK_IMPORT_BYTES:
+        raise ApiError("导入文件不能超过 5MB")
+    try:
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
+    except (InvalidFileException, BadZipFile, OSError, ValueError, KeyError):
+        raise ApiError("无法读取 Excel 文件，请使用下载的导入模板")
+    try:
+        if "线导入" not in workbook.sheetnames:
+            raise ApiError("Excel 文件缺少“线导入”工作表")
+        rows, row_errors, data_count = parse_line_import_sheet(workbook["线导入"])
+    finally:
+        workbook.close()
+    if not data_count:
+        raise ApiError("“线导入”工作表中没有可导入的数据")
+    if row_errors:
+        return jsonify({
+            "error": f"导入文件存在 {len(row_errors)} 行错误，未导入任何主线或支线",
+            "error_count": len(row_errors),
+            "row_errors": row_errors[:50],
+        }), 400
+
+    db = get_db()
+    workspace_id = current_workspace_id()
+    today = date.today().isoformat()
+    on_edit(db)
+    ids_by_key = {}
+    imported_ids = []
+    for line in rows:
+        parent_id = ids_by_key.get(line["_parent_key"])
+        cur = db.execute(
+            "INSERT INTO lines(workspace_id,name,description,color,parent_id,fork_date,"
+            "merge_date,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+            (
+                workspace_id, line["name"], line["description"], line["color"],
+                parent_id, line["fork_date"], line["merge_date"], today,
+            ),
+        )
+        ids_by_key[line["_key"]] = cur.lastrowid
+        imported_ids.append(cur.lastrowid)
+    db.commit()
+    return jsonify({
+        "ok": True,
+        "count": len(imported_ids),
+        "ids": imported_ids,
+        "can_undo": True,
+    }), 201
+
+
+@app.route("/api/lines/export")
+def export_lines():
+    rows = workspace_line_records(get_db(), current_workspace_id())
+    output = line_export_workbook(rows)
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"AnyLine-主线与支线-{date.today():%Y%m%d}.xlsx",
+    )
+
+
 @app.route("/api/lines", methods=["POST"])
 def create_line():
     d = json_object()
