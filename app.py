@@ -6,13 +6,18 @@ import os
 import sqlite3
 import base64
 import binascii
+from zipfile import BadZipFile
 from io import BytesIO
-from datetime import date
+from datetime import date, datetime
 
 from flask import (
     Flask, g, jsonify, request, send_file, send_from_directory, session,
 )
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
+from openpyxl.comments import Comment
+from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from werkzeug.exceptions import HTTPException
@@ -35,6 +40,8 @@ TASK_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 MAX_TASK_IMAGES = 8
 MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TASK_IMAGES_BYTES = 20 * 1024 * 1024
+MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024
+MAX_TASK_IMPORT_ROWS = 2000
 TASK_EXPORT_COLUMNS = (
     ("事务ID", "id", 12),
     ("线名", "line_name", 20),
@@ -52,6 +59,20 @@ TASK_EXPORT_COLUMNS = (
     ("结束日期", "end_date", 14),
     ("状态起始日期", "status_since", 16),
     ("更新日期", "updated_at", 14),
+)
+TASK_IMPORT_COLUMNS = (
+    ("所属线ID", "line_id", 14, False),
+    ("所属线路径", "line_path", 32, False),
+    ("事务名", "name", 24, True),
+    ("事务内容", "content", 36, True),
+    ("闭环目标", "goal", 28, False),
+    ("下一步动作", "next_action", 28, False),
+    ("风险原因", "risk_reason", 28, False),
+    ("优先级", "priority", 12, False),
+    ("责任人", "owner", 16, True),
+    ("进展状态", "status", 14, True),
+    ("起始日期", "start_date", 14, True),
+    ("结束日期", "end_date", 14, True),
 )
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -348,6 +369,264 @@ def task_export_workbook(rows):
     workbook.save(output)
     output.seek(0)
     return output
+
+
+def workspace_line_records(db, workspace_id):
+    rows = [dict(row) for row in db.execute(
+        "SELECT id,name,parent_id,fork_date FROM lines "
+        "WHERE workspace_id=? AND deleted=0 ORDER BY id", (workspace_id,)
+    )]
+    by_id = {row["id"]: row for row in rows}
+    paths = {}
+
+    def line_path(line_id, visiting=None):
+        if line_id in paths:
+            return paths[line_id]
+        row = by_id[line_id]
+        visiting = set() if visiting is None else visiting
+        if line_id in visiting or row["parent_id"] not in by_id:
+            result = row["name"]
+        elif row["parent_id"] is None:
+            result = row["name"]
+        else:
+            result = f"{line_path(row['parent_id'], visiting | {line_id})} / {row['name']}"
+        paths[line_id] = result
+        return result
+
+    for row in rows:
+        row["path"] = line_path(row["id"])
+        row["type"] = "主线" if row["parent_id"] is None else "支线"
+    return rows
+
+
+def task_import_template_workbook(db, workspace_id):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "事务导入"
+    headers = [column[0] for column in TASK_IMPORT_COLUMNS]
+    sheet.append(headers)
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
+    sheet.row_dimensions[1].height = 24
+
+    header_fill = PatternFill("solid", fgColor="DDEBF7")
+    required_fill = PatternFill("solid", fgColor="FCE8E6")
+    for index, (label, _key, width, required) in enumerate(TASK_IMPORT_COLUMNS, 1):
+        cell = sheet.cell(1, index)
+        cell.font = Font(bold=True, color="9C0006" if required else "1F2328")
+        cell.fill = required_fill if required else header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        sheet.column_dimensions[get_column_letter(index)].width = width
+        if label in {"所属线ID", "所属线路径"}:
+            cell.comment = Comment("两列至少填写一项；同时填写时必须指向同一条线。", "AnyLine")
+        elif required:
+            cell.comment = Comment("必填字段", "AnyLine")
+
+    instructions = workbook.create_sheet("填报说明")
+    instruction_rows = [
+        ("项目", "说明"),
+        ("导入规则", "从第 2 行开始填写；空白行会自动忽略。任意一行校验失败时整批不导入。"),
+        ("所属线", "所属线ID与所属线路径至少填写一项，建议从“项目数据”工作表复制。"),
+        ("必填字段", "事务名、事务内容、责任人、进展状态、起始日期、结束日期。"),
+        ("日期格式", "使用 YYYY-MM-DD；结束日期不能早于起始日期。"),
+        ("优先级", "留空时默认为“中”。"),
+        ("导入范围", f"单次最多 {MAX_TASK_IMPORT_ROWS} 条事务，仅创建新事务，不导入图片和依赖关系。"),
+        ("撤销", "一次导入作为一次编辑，可在画布视图使用 Ctrl+Z 整批撤销。"),
+    ]
+    for row in instruction_rows:
+        instructions.append(row)
+    instructions["A1"].font = instructions["B1"].font = Font(bold=True)
+    instructions["A1"].fill = instructions["B1"].fill = header_fill
+    instructions.column_dimensions["A"].width = 16
+    instructions.column_dimensions["B"].width = 88
+    for row in instructions.iter_rows(min_row=2, max_col=2):
+        row[1].alignment = Alignment(wrap_text=True, vertical="top")
+
+    lines = workspace_line_records(db, workspace_id)
+    project_data = workbook.create_sheet("项目数据")
+    project_data.append(["线ID", "所属线路径", "线类型", "线起始日期"])
+    for line in lines:
+        project_data.append([line["id"], line["path"], line["type"], date.fromisoformat(line["fork_date"])])
+        project_data.cell(project_data.max_row, 4).number_format = "yyyy-mm-dd"
+    for cell in project_data[1]:
+        cell.font = Font(bold=True)
+        cell.fill = header_fill
+    project_data.freeze_panes = "A2"
+    project_data.auto_filter.ref = f"A1:D{max(1, project_data.max_row)}"
+    for column, width in zip("ABCD", (12, 40, 12, 16)):
+        project_data.column_dimensions[column].width = width
+
+    options = workbook.create_sheet("选项")
+    statuses = get_statuses(db)
+    owners = get_owners(db)
+    options.append(["优先级", "进展状态", "责任人"])
+    for index in range(max(len(PRIORITY_ENUM), len(statuses), len(owners))):
+        options.append([
+            PRIORITY_ENUM[index] if index < len(PRIORITY_ENUM) else None,
+            statuses[index] if index < len(statuses) else None,
+            owners[index] if index < len(owners) else None,
+        ])
+    key_columns = {key: get_column_letter(index) for index, (_, key, _, _) in enumerate(TASK_IMPORT_COLUMNS, 1)}
+    validations = [
+        ("priority", 1, len(PRIORITY_ENUM), "ImportPriorities"),
+        ("status", 2, len(statuses), "ImportStatuses"),
+        ("owner", 3, len(owners), "ImportOwners"),
+    ]
+    for key, option_column, count, range_name in validations:
+        if not count:
+            continue
+        option_letter = get_column_letter(option_column)
+        workbook.defined_names.add(DefinedName(
+            range_name,
+            attr_text=f"'选项'!${option_letter}$2:${option_letter}${count + 1}",
+        ))
+        validation = DataValidation(
+            type="list",
+            formula1=range_name,
+            allow_blank=(key == "priority"),
+        )
+        validation.error = "请选择模板提供的有效选项"
+        validation.errorTitle = "无效选项"
+        validation.showErrorMessage = True
+        sheet.add_data_validation(validation)
+        column = key_columns[key]
+        validation.add(f"{column}2:{column}{MAX_TASK_IMPORT_ROWS + 1}")
+    options.sheet_state = "hidden"
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def import_cell_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, (date, datetime)):
+        return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
+    return str(value).strip()
+
+
+def import_cell_date(value, label):
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = import_cell_text(value)
+    if not text:
+        raise ValueError(f"{label}不能为空")
+    parse_iso_date(text, label)
+    return text
+
+
+def parse_task_import_sheet(sheet, db, workspace_id):
+    if sheet.max_row > MAX_TASK_IMPORT_ROWS + 1:
+        return [], [{
+            "row": MAX_TASK_IMPORT_ROWS + 2,
+            "message": f"单次最多导入 {MAX_TASK_IMPORT_ROWS} 条事务，请删除多余行",
+        }], MAX_TASK_IMPORT_ROWS + 1
+    if sheet.max_column > 100:
+        return [], [{"row": 1, "message": "导入工作表列数异常，请使用下载的导入模板"}], 1
+    header_cells = next(sheet.iter_rows(min_row=1, max_row=1), None)
+    if not header_cells:
+        return [], [{"row": 1, "message": "工作表缺少表头"}], 1
+    headers = [import_cell_text(cell.value) for cell in header_cells]
+    nonempty_headers = [header for header in headers if header]
+    duplicates = sorted({header for header in nonempty_headers if nonempty_headers.count(header) > 1})
+    if duplicates:
+        return [], [{"row": 1, "message": f"表头重复：{'、'.join(duplicates)}"}], 1
+    header_indexes = {header: index for index, header in enumerate(headers) if header}
+    required = {label for label, _key, _width, is_required in TASK_IMPORT_COLUMNS if is_required}
+    missing = sorted(required - set(header_indexes))
+    if not ({"所属线ID", "所属线路径", "线名"} & set(header_indexes)):
+        missing.append("所属线ID或所属线路径")
+    if missing:
+        return [], [{"row": 1, "message": f"缺少必需表头：{'、'.join(missing)}"}], 1
+
+    lines = workspace_line_records(db, workspace_id)
+    line_by_id = {line["id"]: line for line in lines}
+    line_by_path = {}
+    line_by_name = {}
+    for line in lines:
+        line_by_path.setdefault(line["path"], []).append(line)
+        line_by_name.setdefault(line["name"], []).append(line)
+    statuses = set(get_statuses(db))
+    column_keys = {label: key for label, key, _width, _required in TASK_IMPORT_COLUMNS}
+    column_keys["线名"] = "line_path"
+    parsed_rows = []
+    errors = []
+    data_count = 0
+
+    for row_number, cells in enumerate(sheet.iter_rows(min_row=2), 2):
+        values = [cell.value for cell in cells]
+        if not any(import_cell_text(value) for value in values):
+            continue
+        data_count += 1
+        if data_count > MAX_TASK_IMPORT_ROWS:
+            errors.append({"row": row_number, "message": f"单次最多导入 {MAX_TASK_IMPORT_ROWS} 条事务"})
+            break
+        raw = {}
+        for label, index in header_indexes.items():
+            key = column_keys.get(label)
+            if key:
+                raw[key] = values[index] if index < len(values) else None
+        try:
+            line_id_text = import_cell_text(raw.get("line_id"))
+            line_path_text = import_cell_text(raw.get("line_path"))
+            line = None
+            if line_id_text:
+                try:
+                    numeric_id = float(line_id_text)
+                    if not numeric_id.is_integer():
+                        raise ValueError
+                    line_id = int(numeric_id)
+                except ValueError:
+                    raise ValueError("所属线ID必须是整数")
+                line = line_by_id.get(line_id)
+                if not line:
+                    raise ValueError("所属线ID不存在于当前项目空间")
+                if line_path_text and line_path_text not in {line["path"], line["name"]}:
+                    raise ValueError("所属线ID与所属线路径不一致")
+            elif line_path_text:
+                candidates = line_by_path.get(line_path_text) or line_by_name.get(line_path_text) or []
+                if not candidates:
+                    raise ValueError("所属线路径不存在于当前项目空间")
+                if len(candidates) > 1:
+                    raise ValueError("所属线名称不唯一，请填写所属线ID或完整路径")
+                line = candidates[0]
+            else:
+                raise ValueError("所属线ID与所属线路径至少填写一项")
+
+            task = {
+                "line_id": line["id"],
+                "name": import_cell_text(raw.get("name")),
+                "content": import_cell_text(raw.get("content")),
+                "goal": import_cell_text(raw.get("goal")),
+                "next_action": import_cell_text(raw.get("next_action")),
+                "risk_reason": import_cell_text(raw.get("risk_reason")),
+                "priority": import_cell_text(raw.get("priority")) or "中",
+                "owner": import_cell_text(raw.get("owner")),
+                "status": import_cell_text(raw.get("status")),
+                "start_date": import_cell_date(raw.get("start_date"), "起始日期"),
+                "end_date": import_cell_date(raw.get("end_date"), "结束日期"),
+            }
+            for key, label in (("name", "事务名"), ("content", "事务内容"),
+                               ("owner", "责任人"), ("status", "进展状态")):
+                if not task[key]:
+                    raise ValueError(f"{label}不能为空")
+            if task["priority"] not in PRIORITY_ENUM:
+                raise ValueError("非法的优先级")
+            if task["status"] not in statuses:
+                raise ValueError("非法的进展状态")
+            validate_date_range(task["start_date"], task["end_date"])
+            if task["start_date"] < line["fork_date"]:
+                raise ValueError("事务起始日期不能早于所属线起始日期")
+            parsed_rows.append(task)
+        except ValueError as exc:
+            errors.append({"row": row_number, "message": str(exc)})
+    return parsed_rows, errors, data_count
 
 
 @app.errorhandler(ApiError)
@@ -1709,6 +1988,77 @@ def delete_task(tid):
     )
     db.commit()
     return jsonify({"ok": True, "can_undo": True})
+
+
+@app.route("/api/tasks/import-template")
+def download_task_import_template():
+    output = task_import_template_workbook(get_db(), current_workspace_id())
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"AnyLine-事务导入模板-{date.today():%Y%m%d}.xlsx",
+    )
+
+
+@app.route("/api/tasks/import", methods=["POST"])
+def import_tasks():
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        raise ApiError("请选择要导入的 Excel 文件")
+    if not uploaded.filename.lower().endswith(".xlsx"):
+        raise ApiError("仅支持 .xlsx 格式的 Excel 文件")
+    content = uploaded.read(MAX_TASK_IMPORT_BYTES + 1)
+    if not content:
+        raise ApiError("导入文件不能为空")
+    if len(content) > MAX_TASK_IMPORT_BYTES:
+        raise ApiError("导入文件不能超过 5MB")
+    try:
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=False)
+    except (InvalidFileException, BadZipFile, OSError, ValueError, KeyError):
+        raise ApiError("无法读取 Excel 文件，请使用下载的导入模板")
+    try:
+        if "事务导入" not in workbook.sheetnames:
+            raise ApiError("Excel 文件缺少“事务导入”工作表")
+        db = get_db()
+        workspace_id = current_workspace_id()
+        rows, row_errors, data_count = parse_task_import_sheet(
+            workbook["事务导入"], db, workspace_id
+        )
+    finally:
+        workbook.close()
+    if not data_count:
+        raise ApiError("“事务导入”工作表中没有可导入的数据")
+    if row_errors:
+        return jsonify({
+            "error": f"导入文件存在 {len(row_errors)} 行错误，未导入任何事务",
+            "error_count": len(row_errors),
+            "row_errors": row_errors[:50],
+        }), 400
+
+    today = date.today().isoformat()
+    on_edit(db)
+    imported_ids = []
+    for task in rows:
+        cur = db.execute(
+            "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,priority,"
+            "next_action,risk_reason,status,start_date,end_date,status_since,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                workspace_id, task["line_id"], task["name"], task["content"],
+                task["goal"], task["owner"], task["priority"], task["next_action"],
+                task["risk_reason"], task["status"], task["start_date"],
+                task["end_date"], today, today,
+            ),
+        )
+        imported_ids.append(cur.lastrowid)
+    db.commit()
+    return jsonify({
+        "ok": True,
+        "count": len(imported_ids),
+        "ids": imported_ids,
+        "can_undo": True,
+    }), 201
 
 
 @app.route("/api/tasks/export", methods=["POST"])

@@ -38,6 +38,7 @@ const DEFAULT_STATUS_COLORS = {
 const TASK_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_TASK_IMAGES = 8;
 const MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024;
 
 /* ---------------------------------------------- 界面偏好记忆 (localStorage) */
 const PREFS_KEY = "anyline.prefs";
@@ -2668,6 +2669,191 @@ async function bulkUpdate(field, value) {
   await reload();
 }
 
+function responseFilename(response, fallback) {
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  return encodedName ? decodeURIComponent(encodedName[1]) : fallback;
+}
+
+async function downloadResponse(response, fallbackName) {
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = responseFilename(response, fallbackName);
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function showTaskImportErrors(data) {
+  openModal("导入失败", (body) => {
+    $("#modal").classList.add("modal-wide");
+    $("#modal-ok").classList.add("hidden");
+    $("#modal-cancel").textContent = "关闭";
+    const summary = document.createElement("p");
+    summary.className = "import-error-summary";
+    summary.textContent = data.error || "导入文件校验失败，未导入任何事务";
+    body.appendChild(summary);
+    const list = document.createElement("ol");
+    list.className = "import-error-list";
+    for (const item of data.row_errors || []) {
+      const row = document.createElement("li");
+      const rowNumber = document.createElement("strong");
+      rowNumber.textContent = `第 ${item.row} 行`;
+      row.append(rowNumber, document.createTextNode(item.message));
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+    if ((data.error_count || 0) > (data.row_errors || []).length) {
+      const truncated = document.createElement("p");
+      truncated.className = "import-error-more";
+      truncated.textContent = `仅显示前 ${(data.row_errors || []).length} 条错误，请修正后重新导入。`;
+      body.appendChild(truncated);
+    }
+  }, async () => true);
+}
+
+async function downloadTaskImportTemplate(button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "正在生成...";
+  try {
+    const response = await fetch("/api/tasks/import-template");
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      if (response.status === 401) showLoggedOut();
+      throw new Error(data.error || "模板下载失败");
+    }
+    await downloadResponse(response, "AnyLine-事务导入模板.xlsx");
+    toast("导入模板已下载");
+  } catch (error) {
+    toast(error.message || "模板下载失败");
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+function openTaskImportDialog() {
+  if (!state.lines.length) {
+    toast("请先创建主线或支线");
+    return;
+  }
+  openModal("导入事务", (body) => {
+    const intro = document.createElement("p");
+    intro.className = "import-dialog-intro";
+    intro.textContent = "请选择填写完成的 Excel 文件。首次导入或字段有变化时，可先下载当前项目空间的最新模板。";
+    body.appendChild(intro);
+
+    const templatePanel = document.createElement("div");
+    templatePanel.className = "import-template-panel";
+    const templateText = document.createElement("div");
+    const templateTitle = document.createElement("strong");
+    templateTitle.textContent = "事务导入模板";
+    const templateHint = document.createElement("span");
+    templateHint.textContent = "包含当前项目的线路、状态、责任人和优先级选项";
+    templateText.append(templateTitle, templateHint);
+    const downloadButton = document.createElement("button");
+    downloadButton.type = "button";
+    downloadButton.textContent = "下载模板";
+    downloadButton.onclick = () => downloadTaskImportTemplate(downloadButton);
+    templatePanel.append(templateText, downloadButton);
+    body.appendChild(templatePanel);
+
+    const dropZone = document.createElement("div");
+    dropZone.className = "task-import-drop-zone";
+    dropZone.tabIndex = 0;
+    dropZone.setAttribute("role", "button");
+    dropZone.setAttribute("aria-label", "拖拽或选择 Excel 文件");
+    const dropIcon = document.createElement("span");
+    dropIcon.className = "task-import-drop-icon";
+    dropIcon.setAttribute("aria-hidden", "true");
+    dropIcon.textContent = "⇩";
+    const dropTitle = document.createElement("strong");
+    dropTitle.textContent = "将 Excel 文件拖到此处";
+    const dropHint = document.createElement("span");
+    dropHint.textContent = "或点击此区域选择文件";
+    dropZone.append(dropIcon, dropTitle, dropHint);
+    dropZone.onclick = () => $("#task-import-file").click();
+    dropZone.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        $("#task-import-file").click();
+      }
+    };
+    dropZone.ondragenter = dropZone.ondragover = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+      dropZone.classList.add("is-dragover");
+    };
+    dropZone.ondragleave = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dropZone.classList.remove("is-dragover");
+    };
+    dropZone.ondrop = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dropZone.classList.remove("is-dragover");
+      const files = event.dataTransfer?.files;
+      if (!files?.length) return;
+      if (files.length > 1) {
+        toast("每次只能导入一个 Excel 文件");
+        return;
+      }
+      importTasksFromExcel(files[0], $("#btn-import-tasks"), $("#task-import-file"));
+    };
+    body.appendChild(dropZone);
+
+    const note = document.createElement("p");
+    note.className = "import-dialog-note";
+    note.textContent = "仅支持 .xlsx 文件，大小不超过 5 MB，单次最多导入 2,000 条事务。导入前会校验全部数据。";
+    body.appendChild(note);
+    $("#modal-ok").classList.add("hidden");
+    $("#modal-cancel").textContent = "关闭";
+  }, async () => true);
+}
+
+async function importTasksFromExcel(file, button, inputElement) {
+  if (!file.name.toLowerCase().endsWith(".xlsx")) {
+    toast("仅支持 .xlsx 格式的 Excel 文件");
+    inputElement.value = "";
+    return;
+  }
+  if (file.size > MAX_TASK_IMPORT_BYTES) {
+    toast("导入文件不能超过 5MB");
+    inputElement.value = "";
+    return;
+  }
+  $("#modal-mask").classList.add("hidden");
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "正在导入...";
+  try {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await fetch("/api/tasks/import", { method: "POST", body: formData });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      if (response.status === 401) showLoggedOut();
+      if (data.row_errors?.length) showTaskImportErrors(data);
+      else toast(data.error || "导入失败");
+      return;
+    }
+    state.selectedTaskIds.clear();
+    toast(`成功导入 ${data.count} 个事务`);
+    await reload();
+  } catch (error) {
+    toast(error.message || "导入失败");
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+    inputElement.value = "";
+  }
+}
+
 async function exportTasks(scope, ids, button) {
   const originalText = button.textContent;
   button.disabled = true;
@@ -2683,18 +2869,9 @@ async function exportTasks(scope, ids, button) {
       if (response.status === 401) showLoggedOut();
       throw new Error(data.error || "导出失败");
     }
-    const disposition = response.headers.get("Content-Disposition") || "";
-    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-    const filename = encodedName ? decodeURIComponent(encodedName[1]) :
-      `AnyLine-${scope === "all" ? "全部事务" : "选中事务"}.xlsx`;
-    const url = URL.createObjectURL(await response.blob());
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    await downloadResponse(
+      response, `AnyLine-${scope === "all" ? "全部事务" : "选中事务"}.xlsx`
+    );
     toast(scope === "all" ? "已导出全部事务" : `已导出 ${ids.length} 个事务`);
   } catch (error) {
     toast(error.message || "导出失败");
@@ -2704,6 +2881,12 @@ async function exportTasks(scope, ids, button) {
       state.selectedTaskIds.size === 0;
   }
 }
+
+$("#btn-import-tasks").onclick = openTaskImportDialog;
+$("#task-import-file").onchange = (event) => {
+  const file = event.target.files?.[0];
+  if (file) importTasksFromExcel(file, $("#btn-import-tasks"), event.target);
+};
 
 $("#btn-export-all").onclick = (event) =>
   exportTasks("all", null, event.currentTarget);

@@ -9,7 +9,7 @@ import threading
 import unittest
 from datetime import date, timedelta
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from werkzeug.serving import make_server
 
 _IMPORT_TEMP_DIR = tempfile.TemporaryDirectory()
@@ -65,6 +65,26 @@ class AnyLineHttpTests(unittest.TestCase):
             self.cookie = set_cookie.split(";", 1)[0]
         content_type = response.getheader("Content-Type", "")
         raw = response.read()
+        connection.close()
+        data = json.loads(raw.decode("utf-8")) if "application/json" in content_type else raw
+        return response.status, data
+
+    def upload_xlsx(self, content, filename="tasks.xlsx"):
+        boundary = "----AnyLineTestBoundary"
+        body = (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            "Content-Type: application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet\r\n\r\n"
+        ).encode("utf-8") + content + f"\r\n--{boundary}--\r\n".encode("ascii")
+        headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+        if self.cookie:
+            headers["Cookie"] = self.cookie
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        connection.request("POST", "/api/tasks/import", body=body, headers=headers)
+        response = connection.getresponse()
+        raw = response.read()
+        content_type = response.getheader("Content-Type", "")
         connection.close()
         data = json.loads(raw.decode("utf-8")) if "application/json" in content_type else raw
         return response.status, data
@@ -744,6 +764,85 @@ class AnyLineHttpTests(unittest.TestCase):
             with self.subTest(payload=payload):
                 status, data = self.request("POST", "/api/tasks/export", payload)
                 self.assertEqual(status, expected, data)
+
+    def test_excel_import_template_and_atomic_import(self):
+        main_id = self.create_line("产品主线", "2026-08-01")
+        branch_id = self.create_line(
+            "交付支线", "2026-08-10", parent_id=main_id
+        )
+
+        status, content = self.request("GET", "/api/tasks/import-template")
+        self.assertEqual(status, 200)
+        self.assertTrue(content.startswith(b"PK"))
+        workbook = load_workbook(io.BytesIO(content))
+        self.assertIn("事务导入", workbook.sheetnames)
+        self.assertIn("填报说明", workbook.sheetnames)
+        self.assertIn("项目数据", workbook.sheetnames)
+        template = workbook["事务导入"]
+        self.assertEqual(
+            [cell.value for cell in template[1]],
+            [column[0] for column in anyline.TASK_IMPORT_COLUMNS],
+        )
+        project_data = workbook["项目数据"]
+        self.assertEqual(project_data["A2"].value, main_id)
+        self.assertEqual(project_data["B3"].value, "产品主线 / 交付支线")
+        self.assertGreaterEqual(len(template.data_validations.dataValidation), 2)
+        self.assertIn("ImportStatuses", workbook.defined_names)
+        self.assertIn("ImportPriorities", workbook.defined_names)
+        workbook.close()
+
+        import_book = Workbook()
+        sheet = import_book.active
+        sheet.title = "事务导入"
+        sheet.append([column[0] for column in anyline.TASK_IMPORT_COLUMNS])
+        sheet.append([
+            main_id, "产品主线", "接口联调", "完成接口联调", "联调通过", "修复问题", "",
+            "高", "张三", "进行中", date(2026, 8, 20), date(2026, 9, 5),
+        ])
+        sheet.append([
+            None, "产品主线 / 交付支线", "准备验收", "整理验收材料", "材料齐备", "",
+            "等待客户确认", None, "李四", "有风险", "2026-08-12", "2026-08-28",
+        ])
+        output = io.BytesIO()
+        import_book.save(output)
+        status, data = self.upload_xlsx(output.getvalue())
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["count"], 2)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["tasks"]), 2)
+
+        status, data = self.upload_xlsx(b"not-an-excel-workbook")
+        self.assertEqual(status, 400, data)
+        self.assertIn("无法读取", data["error"])
+        self.assertEqual(state["tasks"][0]["line_id"], branch_id)
+        self.assertEqual(state["tasks"][0]["priority"], "中")
+        self.assertEqual(state["tasks"][1]["line_id"], main_id)
+
+        invalid_book = Workbook()
+        sheet = invalid_book.active
+        sheet.title = "事务导入"
+        sheet.append([column[0] for column in anyline.TASK_IMPORT_COLUMNS])
+        sheet.append([
+            main_id, "产品主线", "有效事务", "有效内容", "", "", "", "中", "张三",
+            "进行中", "2026-08-20", "2026-08-21",
+        ])
+        sheet.append([
+            branch_id, "产品主线 / 交付支线", "错误事务", "错误内容", "", "", "", "中",
+            "李四", "不存在的状态", "2026-08-20", "2026-08-21",
+        ])
+        output = io.BytesIO()
+        invalid_book.save(output)
+        status, data = self.upload_xlsx(output.getvalue())
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["row_errors"][0]["row"], 3)
+        self.assertIn("未导入任何事务", data["error"])
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["tasks"]), 2)
+
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["tasks"], [])
 
     def test_recursive_delete_restore_and_purge(self):
         main_id = self.create_line("主线")

@@ -472,6 +472,42 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .dashboard-task-status { font-weight: 650; }
 .dashboard-task-alert { color: #cf222e; font-weight: 650; }
 .task-list-empty { padding: 44px 20px; }
+.import-error-summary {
+  margin-bottom: 12px; padding: 10px 12px; border-left: 3px solid #cf222e;
+  background: #ffebe9; color: #a40e26; font-size: 13px; line-height: 1.5;
+}
+.import-error-list {
+  max-height: min(48vh, 420px); overflow: auto; padding-left: 28px;
+  border: 1px solid #d8dee4; border-radius: 6px;
+}
+.import-error-list li { padding: 9px 12px 9px 2px; border-bottom: 1px solid #eaeef2; font-size: 12px; }
+.import-error-list li:last-child { border-bottom: 0; }
+.import-error-list strong { display: inline-block; min-width: 64px; margin-right: 8px; color: #cf222e; }
+.import-error-more { margin-top: 10px; color: #8c959f; font-size: 12px; }
+.import-dialog-intro { margin: 0 0 14px; color: #24292f; font-size: 13px; line-height: 1.6; }
+.import-template-panel {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px; border: 1px solid #d8dee4; border-radius: 7px; background: #f6f8fa;
+}
+.import-template-panel > div { min-width: 0; }
+.import-template-panel strong { display: block; margin-bottom: 3px; font-size: 13px; }
+.import-template-panel span { display: block; color: #57606a; font-size: 12px; line-height: 1.45; }
+.import-template-panel button { flex: 0 0 auto; }
+.task-import-drop-zone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 132px; margin-top: 14px; padding: 18px; border: 2px dashed #afb8c1;
+  border-radius: 8px; background: #fff; cursor: pointer; text-align: center;
+  transition: border-color .15s, background-color .15s, box-shadow .15s;
+}
+.task-import-drop-zone:hover, .task-import-drop-zone:focus-visible,
+.task-import-drop-zone.is-dragover {
+  outline: none; border-color: #0969da; background: #ddf4ff;
+  box-shadow: 0 0 0 3px rgba(9,105,218,.12);
+}
+.task-import-drop-icon { color: #0969da; font-size: 30px; font-weight: 700; line-height: 1; }
+.task-import-drop-zone strong { margin-top: 8px; color: #24292f; font-size: 14px; }
+.task-import-drop-zone span:last-child { margin-top: 4px; color: #57606a; font-size: 12px; }
+.import-dialog-note { margin: 12px 0 0; color: #6e7781; font-size: 12px; line-height: 1.5; }
 .task-content-editor { display: flex; flex-direction: column; gap: 6px; }
 .task-content-hint { color: #6e7781; font-size: 11px; line-height: 1.4; }
 .task-image-gallery {

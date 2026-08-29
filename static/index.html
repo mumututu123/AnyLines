@@ -174,6 +174,9 @@
 <main id="table-view" class="app-surface hidden">
   <div id="table-bar">
     <button id="btn-table-add">+ 新增事务</button>
+    <button id="btn-import-tasks" title="从 Excel 模板批量创建事务">导入事务</button>
+    <input id="task-import-file" class="hidden" type="file"
+           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
     <button id="btn-export-all">导出全部</button>
     <button id="btn-export-selected" disabled>导出选中</button>
     <select id="bulk-status"><option value="">批量改状态</option></select>
