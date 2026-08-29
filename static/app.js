@@ -723,13 +723,21 @@ function openTaskListModal(title, tasks) {
       ];
       values.forEach((value, index) => {
         const cell = document.createElement("td");
-        cell.textContent = value;
         if (index === 0) cell.className = "dashboard-task-name";
         if (index === 3) {
-          cell.classList.add("dashboard-task-status");
-          cell.style.color = statusColor(task.status);
+          const statusText = document.createElement("span");
+          statusText.className = "dashboard-task-status";
+          statusText.style.color = statusColor(task.status);
+          statusText.textContent = value;
+          cell.appendChild(statusText);
+        } else if (index === 5 && (health.overdue || health.risk)) {
+          const alertText = document.createElement("span");
+          alertText.className = "dashboard-task-alert";
+          alertText.textContent = value;
+          cell.appendChild(alertText);
+        } else {
+          cell.textContent = value;
         }
-        if (index === 5 && (health.overdue || health.risk)) cell.className = "dashboard-task-alert";
         row.appendChild(cell);
       });
       tbody.appendChild(row);
@@ -1637,8 +1645,10 @@ function renderTable() {
     tr.appendChild(dateField("end_date", t.end_date));
 
     const tdUpdated = document.createElement("td");
-    tdUpdated.className = "muted-cell";
-    tdUpdated.textContent = t.updated_at || "—";
+    const updatedText = document.createElement("span");
+    updatedText.className = "muted-text";
+    updatedText.textContent = t.updated_at || "—";
+    tdUpdated.appendChild(updatedText);
     tr.appendChild(tdUpdated);
 
     /* 删除 */
@@ -1665,8 +1675,10 @@ function renderTable() {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
     td.colSpan = 16;
-    td.style.color = "#8c959f";
-    td.textContent = state.tasks.length ? "没有匹配筛选条件的事务。" : "暂无事务，点击「+ 新增事务」添加。";
+    const emptyText = document.createElement("span");
+    emptyText.className = "muted-text";
+    emptyText.textContent = state.tasks.length ? "没有匹配筛选条件的事务。" : "暂无事务，点击「+ 新增事务」添加。";
+    td.appendChild(emptyText);
     tr.appendChild(td);
     tbody.appendChild(tr);
   }
@@ -1736,6 +1748,12 @@ function openModal(title, bodyBuilder, onOk) {
     }
   };
 }
+
+$("#modal-mask").onclick = (event) => {
+  if (event.button === 0 && event.target === event.currentTarget) {
+    event.currentTarget.classList.add("hidden");
+  }
+};
 
 function field(parent, labelText, el, required = false) {
   const div = document.createElement("div");

@@ -631,6 +631,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('moreSummary.textContent = "更多描述"', source)
         self.assertIn('mark.className = "required-mark"', source)
         self.assertIn('$("#modal-header-tools").appendChild(del)', source)
+        self.assertIn('$("#modal-mask").onclick = (event) => {', source)
+        self.assertIn('event.target === event.currentTarget', source)
 
         task_id = self.create_task(line_id)
         status, data = self.request(

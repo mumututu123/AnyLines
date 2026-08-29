@@ -260,14 +260,12 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   white-space: nowrap;
 }
 .dashboard-owner-table thead th {
-  background: #f6f8fa; color: #57606a; font-weight: 600;
+  font-weight: 600;
 }
-.dashboard-owner-table th:first-child { position: sticky; left: 0; z-index: 1; text-align: left; background: #fff; }
-.dashboard-owner-table thead th:first-child { z-index: 2; background: #f6f8fa; }
+.dashboard-owner-table th:first-child { position: sticky; left: 0; z-index: 1; text-align: left; }
+.dashboard-owner-table thead th:first-child { z-index: 2; }
 .dashboard-owner-table tbody tr:last-child > * { border-bottom: 0; }
-.dashboard-owner-table tbody tr:hover > * { background-color: #f6f8fa; }
-.dashboard-owner-table tbody tr:hover > th:first-child { background-color: #f6f8fa; }
-.dashboard-owner-table tbody tr.dashboard-owner-alert > th:first-child { color: #cf222e; }
+.dashboard-owner-table tbody tr:hover { background-color: #f6f8fa; }
 .dashboard-table-count {
   width: 34px; min-height: 28px; border: 1px solid transparent; border-radius: 4px;
   background: transparent; color: #24292f; font: inherit; font-weight: 650;
@@ -401,7 +399,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 #task-table th, #task-table td {
   border-bottom: 1px solid #eaeef2; padding: 6px 10px; text-align: left; white-space: nowrap;
 }
-#task-table th { background: #f6f8fa; position: sticky; top: 0; font-weight: 600; color: #57606a; }
+#task-table th { position: sticky; top: 0; font-weight: 600; }
 #task-table tr.selected-row { background: #ddf4ff; }
 #task-table td input, #task-table td select {
   border: 1px solid transparent; background: transparent; font-size: 13px;
@@ -410,7 +408,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 #task-table td input:hover, #task-table td select:hover { border-color: #d0d7de; }
 #task-table td input:focus, #task-table td select:focus { border-color: #0969da; outline: none; background: #fff; }
 .task-check { width: 16px; height: 16px; }
-.muted-cell { color: #8c959f; font-size: 12px; }
+.muted-text { color: #8c959f; font-size: 12px; }
 .row-action {
   color: #0969da; cursor: pointer; border: none; background: none;
   font-size: 13px; margin-right: 8px;
@@ -461,7 +459,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   padding: 10px 12px; border-bottom: 1px solid #eaeef2; text-align: left; white-space: nowrap;
 }
 .dashboard-task-list th {
-  position: sticky; top: 0; z-index: 1; background: #f6f8fa; color: #57606a; font-weight: 600;
+  position: sticky; top: 0; z-index: 1; font-weight: 600;
 }
 .dashboard-task-list tbody tr { cursor: pointer; }
 .dashboard-task-list tbody tr:last-child td { border-bottom: 0; }
