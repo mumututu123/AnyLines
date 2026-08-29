@@ -2363,6 +2363,7 @@ $("#btn-logout").onclick = async () => {
 function switchView(v) {
   state.view = v;
   $("#btn-view-dashboard").classList.toggle("active", v === "dashboard");
+  $("#btn-view-dashboard").setAttribute("aria-pressed", String(v === "dashboard"));
   $("#btn-view-canvas").classList.toggle("active", v === "canvas");
   $("#btn-view-table").classList.toggle("active", v === "table");
   $("#dashboard-view").classList.toggle("hidden", v !== "dashboard");

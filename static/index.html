@@ -22,8 +22,19 @@
   <div id="brand">Any<span>Line</span></div>
   <select id="workspace-select" title="切换项目空间或新建空间" aria-label="项目空间"></select>
 
+  <button id="btn-view-dashboard" class="dashboard-entry" type="button"
+          title="项目看板" aria-label="打开项目看板" aria-pressed="false">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
+         fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 3v18h18"></path>
+      <path d="M8 17v-3"></path>
+      <path d="M13 17V5"></path>
+      <path d="M18 17V9"></path>
+    </svg>
+  </button>
+
   <nav id="view-switch">
-    <button id="btn-view-dashboard" class="view-btn">看板</button>
     <button id="btn-view-canvas" class="view-btn active">画布视图</button>
     <button id="btn-view-table" class="view-btn">表格视图</button>
   </nav>
