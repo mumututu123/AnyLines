@@ -289,9 +289,7 @@ function decorateStatusSelect(select) {
   paint();
 }
 function ownerOptions() {
-  const owners = new Set(state.owners);
-  for (const t of state.tasks) if (t.owner) owners.add(t.owner);
-  return [...owners].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  return [...new Set(state.owners)].sort((a, b) => a.localeCompare(b, "zh-CN"));
 }
 function taskHealth(t) {
   const h = {
@@ -546,7 +544,7 @@ function renderDashboard() {
   const ownerLabel = document.createElement("span");
   ownerLabel.textContent = "责任人";
   const ownerDetail = document.createElement("small");
-  ownerDetail.textContent = "名单及事务中出现的责任人";
+  ownerDetail.textContent = "当前项目空间成员";
   ownerOverview.append(ownerNumber, ownerLabel, ownerDetail);
   overview.appendChild(ownerOverview);
 
@@ -1784,25 +1782,18 @@ function input(type = "text", value = "") {
   return i;
 }
 
-/*
- * 责任人输入控件：
- * - 配置了名单 -> 下拉选择；当前值不在名单时保留为一项以免丢数据
- * - 未配置名单 -> 普通文本框
- */
+/* 责任人输入控件：选项直接来自当前项目空间成员。 */
 function ownerInput(value = "", required = false) {
-  if (!state.owners.length) return input("text", value);
   const sel = document.createElement("select");
   const empty = document.createElement("option");
   empty.value = "";
   empty.textContent = required ? "请选择责任人" : "（不指定）";
   empty.disabled = required;
   sel.appendChild(empty);
-  const names = [...state.owners];
-  if (value && !names.includes(value)) names.unshift(value);  // 保留历史值
-  for (const n of names) {
+  for (const n of ownerOptions()) {
     const o = document.createElement("option");
     o.value = n;
-    o.textContent = n + (state.owners.includes(n) ? "" : "（不在名单）");
+    o.textContent = n;
     if (n === value) o.selected = true;
     sel.appendChild(o);
   }
@@ -2267,31 +2258,69 @@ async function openMembersModal() {
   const result = await api(`/api/workspaces/${workspace.id}/members`);
   openModal(`成员管理 · ${workspace.name}`, (body) => {
     $("#modal").classList.add("modal-wide");
+
+    const listHeading = document.createElement("div");
+    listHeading.className = "member-section-heading";
+    const listTitle = document.createElement("strong");
+    listTitle.textContent = "现有成员";
+    const memberCount = document.createElement("span");
+    memberCount.textContent = `${result.members.length} 人`;
+    listHeading.append(listTitle, memberCount);
+    body.appendChild(listHeading);
+
+    const listHeader = document.createElement("div");
+    listHeader.className = "member-list-header";
+    for (const title of ["成员", "空间角色", "重置密码", "操作"]) {
+      const label = document.createElement("span");
+      label.textContent = title;
+      listHeader.appendChild(label);
+    }
+    body.appendChild(listHeader);
+
     const list = document.createElement("div");
     list.className = "member-list";
     for (const member of result.members) {
       const row = document.createElement("div");
       row.className = "member-row";
       const identity = document.createElement("div");
+      identity.className = "member-identity";
       const name = input("text", member.display_name);
+      name.setAttribute("aria-label", `${member.username} 的姓名`);
       name.disabled = !member.can_manage_account;
       const account = document.createElement("div");
       account.className = "member-account";
       account.textContent = member.username;
       identity.appendChild(name);
       identity.appendChild(account);
+
+      const roleGroup = document.createElement("div");
+      roleGroup.className = "member-control";
+      const roleLabel = document.createElement("span");
+      roleLabel.className = "member-control-label";
+      roleLabel.textContent = "空间角色";
       const role = document.createElement("select");
+      role.setAttribute("aria-label", `${member.username} 的空间角色`);
       for (const [value, label] of [["admin", "管理员"], ["member", "普通用户"]]) {
         const option = document.createElement("option");
         option.value = value; option.textContent = label;
         option.selected = member.role === value;
         role.appendChild(option);
       }
+      roleGroup.append(roleLabel, role);
+
+      const passwordGroup = document.createElement("div");
+      passwordGroup.className = "member-control";
+      const passwordLabel = document.createElement("span");
+      passwordLabel.className = "member-control-label";
+      passwordLabel.textContent = "重置密码";
       const password = input("password");
       password.placeholder = member.can_manage_account ?
         "重置密码（可选）" : "由其他管理员维护";
+      password.setAttribute("aria-label", `${member.username} 的新密码`);
       password.disabled = !member.can_manage_account;
       password.autocomplete = "new-password";
+      passwordGroup.append(passwordLabel, password);
+
       const actions = document.createElement("div");
       actions.className = "member-actions";
       const save = document.createElement("button");
@@ -2306,6 +2335,7 @@ async function openMembersModal() {
           `/api/workspaces/${workspace.id}/members/${member.id}`, "PATCH", payload
         );
         await refreshSession();
+        await reload();
         toast("成员配置已保存");
         if (state.currentWorkspace?.role === "admin") openMembersModal();
         else $("#modal-mask").classList.add("hidden");
@@ -2317,14 +2347,15 @@ async function openMembersModal() {
         remove.onclick = async () => {
           if (!confirm(`将账号「${member.username}」移出当前空间？`)) return;
           await api(`/api/workspaces/${workspace.id}/members/${member.id}`, "DELETE");
+          await reload();
           toast("成员已移出项目空间");
           openMembersModal();
         };
         actions.appendChild(remove);
       }
       row.appendChild(identity);
-      row.appendChild(role);
-      row.appendChild(password);
+      row.appendChild(roleGroup);
+      row.appendChild(passwordGroup);
       row.appendChild(actions);
       list.appendChild(row);
     }
@@ -2332,16 +2363,24 @@ async function openMembersModal() {
 
     const add = document.createElement("div");
     add.className = "member-add";
-    const title = document.createElement("div");
-    title.className = "opt-title"; title.textContent = "添加账号";
-    add.appendChild(title);
-    body._username = field(add, "账号", input("text"));
-    body._displayName = field(add, "姓名", input("text"));
-    body._password = field(add, "初始密码（新账号至少 6 位）", input("password"));
+    const addHeader = document.createElement("div");
+    addHeader.className = "member-add-header";
+    const addTitle = document.createElement("strong");
+    addTitle.textContent = "添加成员";
+    const addHint = document.createElement("span");
+    addHint.textContent = "可添加已有账号，或填写初始密码创建新账号";
+    addHeader.append(addTitle, addHint);
+    add.appendChild(addHeader);
+    const addGrid = document.createElement("div");
+    addGrid.className = "member-add-grid";
+    body._username = field(addGrid, "账号", input("text"));
+    body._displayName = field(addGrid, "姓名", input("text"));
+    body._password = field(addGrid, "初始密码（新账号至少 6 位）", input("password"));
     body._password.autocomplete = "new-password";
     const addRole = document.createElement("select");
     addRole.innerHTML = '<option value="member">普通用户</option><option value="admin">管理员</option>';
-    body._role = field(add, "空间角色", addRole);
+    body._role = field(addGrid, "空间角色", addRole);
+    add.appendChild(addGrid);
     body.appendChild(add);
     $("#modal-ok").textContent = "添加成员";
   }, async () => {
@@ -2354,6 +2393,7 @@ async function openMembersModal() {
       password: body._password.value,
       role: body._role.value,
     });
+    await reload();
     toast("成员已添加");
   });
 }
@@ -2502,31 +2542,6 @@ $("#btn-table-add").onclick = () => {
   if (!state.lines.length) { toast("请先创建一条主线"); return; }
   const lineId = state.selectedLineId || state.lines[0].id;
   openTaskModal(null, lineId, true);
-};
-
-/* 责任人名单配置 */
-$("#btn-owners").onclick = () => {
-  closeAccountMenu();
-  openModal("配置责任人名单", (body) => {
-    const ta = document.createElement("textarea");
-    ta.rows = 8;
-    ta.placeholder = "每行一个责任人姓名，留空则不启用下拉选择";
-    ta.value = state.owners.join("\n");
-    body._owners = field(body, "责任人名单（每行一个）", ta);
-    const hint = document.createElement("div");
-    hint.className = "opt-hint";
-    hint.textContent =
-      "配置生效后，事务的责任人改为下拉选择；清空名单可恢复自由输入。" +
-      "已有事务中不在名单里的责任人不会丢失。";
-    body.appendChild(hint);
-    ta.focus();
-  }, async () => {
-    const owners = $("#modal-body")._owners.value
-      .split("\n").map((s) => s.trim()).filter(Boolean);
-    await api("/api/owners", "PUT", { owners });
-    toast(owners.length ? `名单已保存（${owners.length} 人）` : "名单已清空，恢复自由输入");
-    reload();
-  });
 };
 
 $("#btn-statuses").onclick = () => {
@@ -2770,7 +2785,7 @@ function openTaskImportDialog() {
     const templateTitle = document.createElement("strong");
     templateTitle.textContent = "事务导入模板";
     const templateHint = document.createElement("span");
-    templateHint.textContent = "包含当前项目的线路、状态、责任人和优先级选项";
+    templateHint.textContent = "包含当前项目的线路、状态、成员责任人和优先级选项";
     templateText.append(templateTitle, templateHint);
     const downloadButton = document.createElement("button");
     downloadButton.type = "button";

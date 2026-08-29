@@ -116,7 +116,7 @@ class AnyLineHttpTests(unittest.TestCase):
             "name": name,
             "content": "内容",
             "goal": "目标",
-            "owner": "张三",
+            "owner": "系统管理员",
             "priority": "高",
             "next_action": "下一步",
             "risk_reason": "",
@@ -129,6 +129,21 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 201, data)
         return data["id"]
 
+    def add_member(self, username, display_name, role="member"):
+        workspace_id = self.request(
+            "GET", "/api/auth/session"
+        )[1]["current_workspace"]["id"]
+        status, data = self.request(
+            "POST", f"/api/workspaces/{workspace_id}/members", {
+                "username": username,
+                "display_name": display_name,
+                "password": "member123",
+                "role": role,
+            },
+        )
+        self.assertEqual(status, 201, data)
+        return data["user_id"]
+
     def test_index_and_empty_state(self):
         status, body = self.request("GET", "/")
         self.assertEqual(status, 200)
@@ -138,6 +153,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(b'id="dashboard-view"', body)
         self.assertIn(b'id="image-lightbox"', body)
         self.assertNotIn(b'id="btn-workspace-create"', body)
+        self.assertNotIn(b'id="btn-owners"', body)
         self.assertNotIn(b'id="btn-delete-line"', body)
         self.assertNotIn(b'id="btn-undo"', body)
 
@@ -148,6 +164,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertFalse(state["can_undo"])
         self.assertEqual(state["priority_enum"], ["低", "中", "高", "紧急"])
         self.assertEqual(state["status_colors"]["进行中"], "#0969da")
+        self.assertEqual(state["owners"], ["系统管理员"])
 
     def test_canvas_merge_uses_rounded_polyline(self):
         status, body = self.request("GET", "/static/app.js")
@@ -213,9 +230,6 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 201)
         second_task = self.create_task(second_line, "第二空间事务")
         self.assertEqual(
-            self.request("PUT", "/api/owners", {"owners": ["空间二责任人"]})[0], 200
-        )
-        self.assertEqual(
             self.request("POST", "/api/workspaces", {"name": "越权空间"})[0], 403
         )
         self.assertEqual(
@@ -237,7 +251,7 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         state = self.request("GET", "/api/state")[1]
         self.assertEqual([line["id"] for line in state["lines"]], [default_line])
-        self.assertEqual(state["owners"], [])
+        self.assertEqual(state["owners"], ["系统管理员"])
         self.assertEqual(
             self.request(
                 "PATCH", f"/api/lines/{second_line}", {"name": "跨空间修改"}
@@ -289,12 +303,9 @@ class AnyLineHttpTests(unittest.TestCase):
             201,
         )
 
-    def test_configuration_validation_and_deduplication(self):
-        status, data = self.request(
-            "PUT", "/api/owners", {"owners": [" 张三 ", "李四", "张三", ""]}
-        )
-        self.assertEqual(status, 200)
-        self.assertEqual(data["owners"], ["张三", "李四"])
+    def test_configuration_validation_and_member_owner_options(self):
+        self.add_member("zhangsan", "张三")
+        self.add_member("lisi", "李四")
 
         status, data = self.request(
             "PUT", "/api/statuses", {
@@ -305,12 +316,16 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["statuses"], ["待办", "处理中"])
         self.assertEqual(data["colors"], {"待办": "#aabbcc", "处理中": "#123456"})
-        self.assertEqual(self.request("GET", "/api/owners")[1]["owners"], ["张三", "李四"])
         status_config = self.request("GET", "/api/statuses")[1]
         self.assertEqual(status_config["statuses"], ["待办", "处理中"])
         self.assertEqual(status_config["colors"]["待办"], "#aabbcc")
         state = self.request("GET", "/api/state")[1]
         self.assertEqual(state["status_colors"]["处理中"], "#123456")
+        self.assertEqual(state["owners"], ["系统管理员", "张三", "李四"])
+        self.assertEqual(self.request("GET", "/api/owners")[0], 404)
+        self.assertEqual(
+            self.request("PUT", "/api/owners", {"owners": ["张三"]})[0], 404
+        )
 
         status, data = self.request("PUT", "/api/statuses", {"statuses": []})
         self.assertEqual(status, 400)
@@ -321,10 +336,6 @@ class AnyLineHttpTests(unittest.TestCase):
         })
         self.assertEqual(status, 400)
         self.assertIn("#RRGGBB", data["error"])
-
-        status, data = self.request("PUT", "/api/owners", {"owners": "张三"})
-        self.assertEqual(status, 400)
-        self.assertIn("字符串数组", data["error"])
 
     def test_line_crud_and_date_rules(self):
         yesterday = (self.today - timedelta(days=1)).isoformat()
@@ -607,7 +618,7 @@ class AnyLineHttpTests(unittest.TestCase):
             "line_id": line_id,
             "name": "必填校验事务",
             "content": "内容",
-            "owner": "张三",
+            "owner": "系统管理员",
             "status": "进行中",
             "start_date": self.today.isoformat(),
             "end_date": (self.today + timedelta(days=1)).isoformat(),
@@ -622,6 +633,12 @@ class AnyLineHttpTests(unittest.TestCase):
             status, data = self.request("POST", "/api/tasks", payload)
             self.assertEqual(status, 400, (key, data))
             self.assertIn(f"{label}不能为空", data["error"])
+
+        invalid_owner = dict(valid)
+        invalid_owner["owner"] = "非空间成员"
+        status, data = self.request("POST", "/api/tasks", invalid_owner)
+        self.assertEqual(status, 400, data)
+        self.assertIn("当前项目空间成员", data["error"])
 
         status, body = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)
@@ -694,6 +711,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('if (e.key === "ArrowRight") moveTaskImageViewer(1)', source)
 
     def test_bulk_update_delete_and_undo(self):
+        self.add_member("lisi", "李四")
         first_line = self.create_line("第一条线")
         second_line = self.create_line("第二条线")
         first = self.create_task(first_line, "事务一")
@@ -723,6 +741,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(len(state["tasks"]), 2)
 
     def test_excel_export_all_and_selected(self):
+        self.add_member("lisi", "李四")
         main_id = self.create_line("产品主线")
         branch_id = self.create_line("交付支线", parent_id=main_id)
         first = self.create_task(main_id, "=1+1")
@@ -768,6 +787,8 @@ class AnyLineHttpTests(unittest.TestCase):
                 self.assertEqual(status, expected, data)
 
     def test_excel_import_template_and_atomic_import(self):
+        self.add_member("zhangsan", "张三")
+        self.add_member("lisi", "李四")
         main_id = self.create_line("产品主线", "2026-08-01")
         branch_id = self.create_line(
             "交付支线", "2026-08-10", parent_id=main_id
@@ -788,6 +809,12 @@ class AnyLineHttpTests(unittest.TestCase):
         project_data = workbook["项目数据"]
         self.assertEqual(project_data["A2"].value, main_id)
         self.assertEqual(project_data["B3"].value, "产品主线 / 交付支线")
+        owner_options = [
+            workbook["选项"].cell(row, 3).value
+            for row in range(2, workbook["选项"].max_row + 1)
+            if workbook["选项"].cell(row, 3).value
+        ]
+        self.assertEqual(owner_options, ["系统管理员", "张三", "李四"])
         self.assertGreaterEqual(len(template.data_validations.dataValidation), 2)
         self.assertIn("ImportStatuses", workbook.defined_names)
         self.assertIn("ImportPriorities", workbook.defined_names)

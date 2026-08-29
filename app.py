@@ -428,6 +428,7 @@ def task_import_template_workbook(db, workspace_id):
         ("导入规则", "从第 2 行开始填写；空白行会自动忽略。任意一行校验失败时整批不导入。"),
         ("所属线", "所属线ID与所属线路径至少填写一项，建议从“项目数据”工作表复制。"),
         ("必填字段", "事务名、事务内容、责任人、进展状态、起始日期、结束日期。"),
+        ("责任人", "必须从当前项目空间成员中选择；成员变更后请重新下载模板。"),
         ("日期格式", "使用 YYYY-MM-DD；结束日期不能早于起始日期。"),
         ("优先级", "留空时默认为“中”。"),
         ("导入范围", f"单次最多 {MAX_TASK_IMPORT_ROWS} 条事务，仅创建新事务，不导入图片和依赖关系。"),
@@ -458,7 +459,7 @@ def task_import_template_workbook(db, workspace_id):
 
     options = workbook.create_sheet("选项")
     statuses = get_statuses(db)
-    owners = get_owners(db)
+    owners = get_workspace_member_names(db, workspace_id)
     options.append(["优先级", "进展状态", "责任人"])
     for index in range(max(len(PRIORITY_ENUM), len(statuses), len(owners))):
         options.append([
@@ -553,6 +554,7 @@ def parse_task_import_sheet(sheet, db, workspace_id):
         line_by_path.setdefault(line["path"], []).append(line)
         line_by_name.setdefault(line["name"], []).append(line)
     statuses = set(get_statuses(db))
+    owners = set(get_workspace_member_names(db, workspace_id))
     column_keys = {label: key for label, key, _width, _required in TASK_IMPORT_COLUMNS}
     column_keys["线名"] = "line_path"
     parsed_rows = []
@@ -620,6 +622,8 @@ def parse_task_import_sheet(sheet, db, workspace_id):
                 raise ValueError("非法的优先级")
             if task["status"] not in statuses:
                 raise ValueError("非法的进展状态")
+            if task["owner"] not in owners:
+                raise ValueError("责任人不是当前项目空间成员")
             validate_date_range(task["start_date"], task["end_date"])
             if task["start_date"] < line["fork_date"]:
                 raise ValueError("事务起始日期不能早于所属线起始日期")
@@ -1445,7 +1449,7 @@ def api_state():
         "status_enum": statuses,
         "status_colors": get_status_colors(db, statuses),
         "priority_enum": PRIORITY_ENUM,
-        "owners": get_owners(db),
+        "owners": get_workspace_member_names(db, workspace_id),
         "today": date.today().isoformat(),
     })
 
@@ -1473,40 +1477,22 @@ def task_image(image_id):
     return response
 
 
-# ----- owners (责任人名单)
-def get_owners(db):
-    raw = get_meta(db, "owners")
-    if not raw:
-        return []
-    try:
-        return json.loads(raw)
-    except ValueError:
-        return []
-
-
-@app.route("/api/owners", methods=["GET"])
-def api_get_owners():
-    return jsonify({"owners": get_owners(get_db())})
-
-
-@app.route("/api/owners", methods=["PUT"])
-def api_set_owners():
-    d = json_object()
-    owners = d.get("owners")
-    if not isinstance(owners, list) or \
-            not all(isinstance(o, str) for o in owners):
-        return jsonify({"error": "owners 必须是字符串数组"}), 400
-    # 去空白、去重（保持顺序）
-    cleaned, seen = [], set()
-    for o in owners:
-        o = o.strip()
-        if o and o not in seen:
-            seen.add(o)
-            cleaned.append(o)
-    db = get_db()
-    set_meta(db, "owners", json.dumps(cleaned, ensure_ascii=False))
-    db.commit()
-    return jsonify({"ok": True, "owners": cleaned})
+# ----- owner options (directly derived from current workspace members)
+def get_workspace_member_names(db, workspace_id):
+    rows = db.execute(
+        "SELECT u.display_name FROM workspace_members m "
+        "JOIN users u ON u.id=m.user_id "
+        "WHERE m.workspace_id=? AND u.active=1 "
+        "ORDER BY CASE m.role WHEN 'admin' THEN 0 ELSE 1 END,u.display_name,u.id",
+        (workspace_id,),
+    )
+    names, seen = [], set()
+    for row in rows:
+        name = row["display_name"].strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
 
 
 # ----- statuses (进展状态配置)
@@ -1773,13 +1759,15 @@ def create_task():
     end_date = text_field(d, "end_date", "结束日期").strip()
     content = text_field(d, "content", "事务内容")
     goal = text_field(d, "goal", "闭环目标")
-    owner = text_field(d, "owner", "责任人")
+    owner = text_field(d, "owner", "责任人").strip()
     next_action = text_field(d, "next_action", "下一步动作")
     risk_reason = text_field(d, "risk_reason", "风险原因")
     for label, value in (("事务内容", content), ("责任人", owner),
                          ("起始日期", start_date), ("结束日期", end_date)):
         if not value.strip():
             raise ApiError(f"{label}不能为空")
+    if owner not in get_workspace_member_names(db, workspace_id):
+        raise ApiError("责任人不是当前项目空间成员")
     prerequisite_ids = validate_dependencies(
         db, workspace_id, None, d.get("prerequisite_ids", [])
     )
@@ -1886,6 +1874,10 @@ def update_task(tid):
                      "status": "进展状态", "start_date": "起始日期",
                      "end_date": "结束日期"}[k]
             raise ApiError(f"{label}不能为空")
+        if k == "owner":
+            d[k] = d[k].strip()
+            if d[k] not in get_workspace_member_names(db, workspace_id):
+                raise ApiError("责任人不是当前项目空间成员")
         if k == "name":
             d[k] = d[k].strip()
         if k == "priority" and d[k] not in PRIORITY_ENUM:
@@ -2162,8 +2154,11 @@ def bulk_tasks():
     if "owner" in patch:
         if not isinstance(patch["owner"], str):
             return jsonify({"error": "责任人必须是字符串"}), 400
-        if not patch["owner"].strip():
+        patch["owner"] = patch["owner"].strip()
+        if not patch["owner"]:
             return jsonify({"error": "责任人不能为空"}), 400
+        if patch["owner"] not in get_workspace_member_names(db, workspace_id):
+            return jsonify({"error": "责任人不是当前项目空间成员"}), 400
     if "line_id" in patch:
         required_id(patch["line_id"], "line_id")
         ln = db.execute(
