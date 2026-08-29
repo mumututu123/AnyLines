@@ -282,7 +282,8 @@ class AnyLineHttpTests(unittest.TestCase):
         task_id = self.create_task(line_id, "待归档事务")
 
         status, data = self.request(
-            "DELETE", f"/api/workspaces/{default_workspace}"
+            "DELETE", f"/api/workspaces/{default_workspace}",
+            {"confirmation": "默认项目"},
         )
         self.assertEqual(status, 409, data)
         self.assertIn("至少需要保留", data["error"])
@@ -335,8 +336,37 @@ class AnyLineHttpTests(unittest.TestCase):
                 "POST", f"/api/workspaces/{default_workspace}/archive"
             )[0], 409
         )
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/workspaces/{default_workspace}/restore"
+            )[0], 200
+        )
+        session_data = self.request("GET", "/api/auth/session")[1]
+        self.assertIsNone(session_data["current_workspace"]["archived_at"])
+        self.assertEqual(
+            self.request(
+                "PATCH", f"/api/tasks/{task_id}", {"name": "恢复后可修改"}
+            )[0], 200
+        )
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/workspaces/{default_workspace}/restore"
+            )[0], 409
+        )
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/workspaces/{default_workspace}/archive"
+            )[0], 200
+        )
         status, data = self.request(
-            "DELETE", f"/api/workspaces/{default_workspace}"
+            "DELETE", f"/api/workspaces/{default_workspace}",
+            {"confirmation": "名称不匹配"},
+        )
+        self.assertEqual(status, 400, data)
+        self.assertIn("名称不匹配", data["error"])
+        status, data = self.request(
+            "DELETE", f"/api/workspaces/{default_workspace}",
+            {"confirmation": "默认项目"},
         )
         self.assertEqual(status, 200, data)
         self.assertEqual(data["current_workspace_id"], remaining_workspace)

@@ -1319,10 +1319,37 @@ def archive_workspace(workspace_id):
     return jsonify({"ok": True, "archived_at": archived_at})
 
 
+@app.route("/api/workspaces/<int:workspace_id>/restore", methods=["POST"])
+def restore_workspace(workspace_id):
+    require_workspace_admin(workspace_id)
+    db = get_db()
+    workspace = db.execute(
+        "SELECT archived_at FROM workspaces WHERE id=?", (workspace_id,)
+    ).fetchone()
+    if not workspace:
+        raise ApiError("项目空间不存在", 404)
+    if not workspace["archived_at"]:
+        raise ApiError("项目空间尚未归档", 409)
+    db.execute(
+        "UPDATE workspaces SET archived_at=NULL,updated_at=? WHERE id=?",
+        (date.today().isoformat(), workspace_id),
+    )
+    db.commit()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/workspaces/<int:workspace_id>", methods=["DELETE"])
 def delete_workspace(workspace_id):
     require_workspace_admin(workspace_id)
     db = get_db()
+    workspace = db.execute(
+        "SELECT name FROM workspaces WHERE id=?", (workspace_id,)
+    ).fetchone()
+    if not workspace:
+        raise ApiError("项目空间不存在", 404)
+    confirmation = text_field(json_object(), "confirmation", "确认项目名称")
+    if confirmation != workspace["name"]:
+        raise ApiError("输入的项目空间名称不匹配，无法删除")
     remaining = [
         workspace for workspace in user_workspaces(db, g.user["id"])
         if workspace["id"] != workspace_id

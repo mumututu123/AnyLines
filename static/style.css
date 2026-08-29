@@ -204,6 +204,13 @@ body.authenticated #login-view { display: none; }
 #toolbar button.danger, #table-bar button.danger { color: #cf222e; border-color: #f0b3b8; }
 #toolbar button.danger:hover:not(:disabled), #table-bar button.danger:hover:not(:disabled) { background: #ffebe9; }
 button.primary { background: #0969da !important; color: #fff; border-color: #0969da !important; }
+#modal-btns button.danger {
+  background: #cf222e; border-color: #cf222e; color: #fff;
+}
+.workspace-delete-warning {
+  margin-bottom: 16px; border: 1px solid #ff8182; border-radius: 6px;
+  background: #ffebe9; color: #82071e; padding: 12px; line-height: 1.6;
+}
 
 /* ---------------- workbench ---------------- */
 #workbench {

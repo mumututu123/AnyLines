@@ -1757,7 +1757,7 @@ function openModal(title, bodyBuilder, onOk) {
   $("#modal-title").textContent = title;
   $("#modal").classList.remove("modal-wide", "task-list-modal");
   $("#modal-ok").textContent = "确定";
-  $("#modal-ok").classList.remove("hidden");
+  $("#modal-ok").classList.remove("hidden", "danger");
   $("#modal-cancel").textContent = "取消";
   const body = $("#modal-body");
   body.innerHTML = "";
@@ -2290,6 +2290,41 @@ function openWorkspaceModal() {
   });
 }
 
+function openWorkspaceDeleteModal(workspace) {
+  openModal("删除项目空间", (body) => {
+    const warning = document.createElement("div");
+    warning.className = "workspace-delete-warning";
+    warning.textContent =
+      `此操作将永久删除「${workspace.name}」内的全部线、事务、成员关系和配置，且无法恢复。`;
+    body.appendChild(warning);
+    const confirmation = input("text");
+    confirmation.placeholder = workspace.name;
+    confirmation.autocomplete = "off";
+    body._confirmation = field(
+      body, `请输入项目名称“${workspace.name}”以确认`, confirmation, true
+    );
+    $("#modal-ok").textContent = "永久删除";
+    $("#modal-ok").classList.add("danger");
+    confirmation.focus();
+  }, async () => {
+    const confirmation = $("#modal-body")._confirmation.value;
+    if (confirmation !== workspace.name) {
+      toast("输入的项目名称不匹配");
+      $("#modal-body")._confirmation.focus();
+      return false;
+    }
+    await api(`/api/workspaces/${workspace.id}`, "DELETE", { confirmation });
+    resetWorkspaceState();
+    await refreshSession();
+    await reload();
+    toast("项目空间已删除");
+    if (state.workspaces.some((item) => item.role === "admin")) {
+      openWorkspaceManagementModal();
+      return false;
+    }
+  });
+}
+
 function openWorkspaceManagementModal() {
   const managedWorkspaces = state.workspaces.filter(
     (workspace) => workspace.role === "admin"
@@ -2338,7 +2373,19 @@ function openWorkspaceManagementModal() {
 
       const actions = document.createElement("div");
       actions.className = "workspace-management-actions";
-      if (!workspace.archived_at) {
+      if (workspace.archived_at) {
+        const restore = document.createElement("button");
+        restore.type = "button";
+        restore.textContent = "恢复项目";
+        restore.onclick = async () => {
+          await api(`/api/workspaces/${workspace.id}/restore`, "POST");
+          await refreshSession();
+          await reload();
+          toast("项目空间已恢复");
+          openWorkspaceManagementModal();
+        };
+        actions.appendChild(restore);
+      } else {
         const archive = document.createElement("button");
         archive.type = "button";
         archive.textContent = "归档";
@@ -2358,21 +2405,7 @@ function openWorkspaceManagementModal() {
       remove.type = "button";
       remove.className = "row-del";
       remove.textContent = "删除";
-      remove.onclick = async () => {
-        if (!confirm(
-          `永久删除项目空间「${workspace.name}」？\n空间内的线、事务和配置都会被删除，且无法恢复。`
-        )) return;
-        await api(`/api/workspaces/${workspace.id}`, "DELETE");
-        resetWorkspaceState();
-        await refreshSession();
-        await reload();
-        toast("项目空间已删除");
-        if (state.workspaces.some((item) => item.role === "admin")) {
-          openWorkspaceManagementModal();
-        } else {
-          $("#modal-mask").classList.add("hidden");
-        }
-      };
+      remove.onclick = () => openWorkspaceDeleteModal(workspace);
       actions.appendChild(remove);
       row.append(info, actions);
       list.appendChild(row);
