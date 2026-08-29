@@ -149,6 +149,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"AnyLine", body)
         self.assertIn(b'id="workspace-select"', body)
+        self.assertIn(b'id="btn-workspaces"', body)
         self.assertIn(b'id="btn-view-dashboard"', body)
         self.assertIn(b'id="dashboard-view"', body)
         self.assertIn(b'id="image-lightbox"', body)
@@ -273,6 +274,87 @@ class AnyLineHttpTests(unittest.TestCase):
                 "POST", "/api/tasks/export", {"scope": "selected", "ids": [second_task]}
             )[0], 404
         )
+
+    def test_workspace_archive_is_read_only_and_workspace_can_be_deleted(self):
+        session_data = self.request("GET", "/api/auth/session")[1]
+        default_workspace = session_data["current_workspace"]["id"]
+        line_id = self.create_line("待归档主线")
+        task_id = self.create_task(line_id, "待归档事务")
+
+        status, data = self.request(
+            "DELETE", f"/api/workspaces/{default_workspace}"
+        )
+        self.assertEqual(status, 409, data)
+        self.assertIn("至少需要保留", data["error"])
+
+        status, created = self.request(
+            "POST", "/api/workspaces", {"name": "保留项目", "description": "删除后切换"}
+        )
+        self.assertEqual(status, 201, created)
+        remaining_workspace = created["id"]
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/workspaces/{default_workspace}/select"
+            )[0], 200
+        )
+
+        status, archived = self.request(
+            "POST", f"/api/workspaces/{default_workspace}/archive"
+        )
+        self.assertEqual(status, 200, archived)
+        session_data = self.request("GET", "/api/auth/session")[1]
+        self.assertEqual(
+            session_data["current_workspace"]["archived_at"],
+            self.today.isoformat(),
+        )
+        self.assertEqual(self.request("GET", "/api/state")[0], 200)
+        self.assertEqual(
+            self.request("POST", "/api/tasks/export", {"scope": "all"})[0], 200
+        )
+
+        readonly_requests = [
+            ("POST", "/api/lines", {
+                "name": "不可新增", "fork_date": self.today.isoformat(),
+            }),
+            ("PATCH", f"/api/tasks/{task_id}", {"name": "不可修改"}),
+            ("PUT", "/api/statuses", {"statuses": ["不可修改"]}),
+            ("PATCH", f"/api/workspaces/{default_workspace}", {"name": "不可改名"}),
+            ("POST", f"/api/workspaces/{default_workspace}/members", {
+                "username": "archived-member", "display_name": "归档成员",
+                "password": "member123", "role": "member",
+            }),
+        ]
+        for method, path, payload in readonly_requests:
+            with self.subTest(method=method, path=path):
+                status, data = self.request(method, path, payload)
+                self.assertEqual(status, 409, data)
+                self.assertIn("已归档", data["error"])
+
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/workspaces/{default_workspace}/archive"
+            )[0], 409
+        )
+        status, data = self.request(
+            "DELETE", f"/api/workspaces/{default_workspace}"
+        )
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["current_workspace_id"], remaining_workspace)
+        session_data = self.request("GET", "/api/auth/session")[1]
+        self.assertEqual(session_data["current_workspace"]["id"], remaining_workspace)
+        self.assertEqual(
+            self.request(
+                "POST", f"/api/workspaces/{default_workspace}/select"
+            )[0], 403
+        )
+        with anyline.app.app_context():
+            db = anyline.get_db()
+            self.assertIsNone(db.execute(
+                "SELECT id FROM workspaces WHERE id=?", (default_workspace,)
+            ).fetchone())
+            self.assertIsNone(db.execute(
+                "SELECT id FROM tasks WHERE id=?", (task_id,)
+            ).fetchone())
 
     def test_admin_can_manage_member_role_and_password(self):
         auth = self.request("GET", "/api/auth/session")[1]

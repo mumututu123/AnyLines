@@ -20,7 +20,7 @@
 
 <header id="topbar" class="app-surface">
   <div id="brand">Any<span>Line</span></div>
-  <select id="workspace-select" title="切换项目空间或新建空间" aria-label="项目空间"></select>
+  <select id="workspace-select" title="切换项目空间" aria-label="项目空间"></select>
 
   <button id="btn-view-dashboard" class="dashboard-entry" type="button"
           title="项目看板" aria-label="打开项目看板" aria-pressed="false">
@@ -57,6 +57,7 @@
         <strong id="current-user"></strong>
         <span id="current-username"></span>
       </div>
+      <button id="btn-workspaces" class="admin-only" type="button" role="menuitem">项目空间管理</button>
       <button id="btn-members" class="admin-only" type="button" role="menuitem">成员管理</button>
       <button id="btn-statuses" type="button" role="menuitem">状态设置</button>
       <button id="btn-password" type="button" role="menuitem">修改密码</button>
@@ -182,7 +183,7 @@
     <select id="bulk-owner"><option value="">批量改责任人</option></select>
     <select id="bulk-priority"><option value="">批量改优先级</option></select>
     <button id="btn-bulk-delete" class="danger">批量删除</button>
-    <span class="opt-hint">单元格可直接编辑，修改后自动保存</span>
+    <span id="table-edit-hint" class="opt-hint">单元格可直接编辑，修改后自动保存</span>
   </div>
   <div id="table-wrap">
     <table id="task-table">

@@ -26,7 +26,6 @@ const state = {
 
 const SOON_DAYS = 7;
 const STALE_DAYS = 7;
-const CREATE_WORKSPACE_OPTION = "__create_workspace__";
 const DONE_STATUSES = new Set(["已闭环", "已取消"]);
 const RISK_STATUSES = new Set(["有风险"]);
 const PRIORITY_WEIGHT = { "低": 1, "中": 2, "高": 3, "紧急": 4 };
@@ -167,6 +166,7 @@ function showLoggedOut() {
   closeAccountMenu();
   closeTaskImageViewer({ restoreFocus: false });
   document.body.classList.remove("authenticated");
+  document.body.classList.remove("workspace-archived");
   state.user = null;
   state.workspaces = [];
   state.currentWorkspace = null;
@@ -185,19 +185,22 @@ function applySession(data) {
   for (const workspace of state.workspaces) {
     const option = document.createElement("option");
     option.value = workspace.id;
-    option.textContent = workspace.name;
+    option.textContent = workspace.archived_at ?
+      `${workspace.name}（已归档）` : workspace.name;
     option.selected = workspace.id === state.currentWorkspace.id;
     select.appendChild(option);
   }
   const isCurrentAdmin = state.currentWorkspace?.role === "admin";
-  const canCreateWorkspace = state.workspaces.some((workspace) => workspace.role === "admin");
-  if (canCreateWorkspace) {
-    const createOption = document.createElement("option");
-    createOption.value = CREATE_WORKSPACE_OPTION;
-    createOption.textContent = "+";
-    select.appendChild(createOption);
-  }
-  $("#btn-members").classList.toggle("hidden", !isCurrentAdmin);
+  const isArchived = Boolean(state.currentWorkspace?.archived_at);
+  const canManageWorkspaces = state.workspaces.some(
+    (workspace) => workspace.role === "admin"
+  );
+  document.body.classList.toggle("workspace-archived", isArchived);
+  select.classList.toggle("archived", isArchived);
+  select.title = isArchived ? "当前项目空间已归档，仅可浏览" : "切换项目空间";
+  $("#btn-workspaces").classList.toggle("hidden", !canManageWorkspaces);
+  $("#btn-members").classList.toggle("hidden", !isCurrentAdmin || isArchived);
+  $("#btn-statuses").classList.toggle("hidden", isArchived);
   const displayName = (state.user.display_name || state.user.username || "").trim();
   const accountName = state.user.username || displayName;
   $("#account-avatar").textContent = Array.from(displayName)[0]?.toLocaleUpperCase() || "用";
@@ -206,6 +209,16 @@ function applySession(data) {
   $("#current-username").textContent = accountName === displayName ? "" : accountName;
   $("#current-username").classList.toggle("hidden", accountName === displayName);
   $("#current-user-role").textContent = isCurrentAdmin ? "管理员" : "普通用户";
+}
+
+function isWorkspaceArchived() {
+  return Boolean(state.currentWorkspace?.archived_at);
+}
+
+function ensureWorkspaceEditable() {
+  if (!isWorkspaceArchived()) return true;
+  toast("项目空间已归档，仅可浏览，不能编辑");
+  return false;
 }
 
 function closeAccountMenu({ restoreFocus = false } = {}) {
@@ -407,14 +420,16 @@ function render() {
 
 /* ---------------------------------------------------------------- toolbar */
 function renderToolbar() {
+  const archived = isWorkspaceArchived();
   const sel = state.selectedLineId ? lineById(state.selectedLineId) : null;
   const selectedTask = state.selectedTaskId ? taskById(state.selectedTaskId) : null;
   const children = sel ? state.lines.filter((line) => line.parent_id === sel.id) : [];
   const allChildrenHidden = children.length > 0 &&
     children.every((line) => state.hiddenBranchIds.has(line.id));
-  $("#btn-add-branch").disabled = !sel;
-  $("#btn-add-task").disabled = !sel;
-  $("#btn-merge").disabled = !sel || sel.parent_id === null || sel.merge_date;
+  $("#btn-add-mainline").disabled = archived;
+  $("#btn-add-branch").disabled = archived || !sel;
+  $("#btn-add-task").disabled = archived || !sel;
+  $("#btn-merge").disabled = archived || !sel || sel.parent_id === null || sel.merge_date;
   $("#btn-toggle-children").disabled = !children.length;
   $("#btn-toggle-children").textContent =
     allChildrenHidden ? "展开子支线" : "折叠子支线";
@@ -1221,6 +1236,7 @@ function renderCanvas() {
   };
 
   const startDependencyDrag = (event, sourceTask) => {
+    if (isWorkspaceArchived()) return;
     if (event.pointerType !== "mouse" || event.button !== 0) return;
     const start = state.canvasTaskPositions.get(sourceTask.id);
     if (!start) return;
@@ -1499,6 +1515,7 @@ function renderCanvas() {
 
 /* ============================================================== 表格视图 */
 function renderTable() {
+  const archived = isWorkspaceArchived();
   const tbody = $("#task-tbody");
   tbody.innerHTML = "";
   const sorted = filteredTasks();
@@ -1515,6 +1532,14 @@ function renderTable() {
   exportSelected.disabled = state.selectedTaskIds.size === 0;
   exportSelected.textContent = state.selectedTaskIds.size ?
     `导出选中 (${state.selectedTaskIds.size})` : "导出选中";
+  $("#btn-table-add").disabled = archived;
+  $("#btn-import-tasks").disabled = archived;
+  $("#bulk-status").disabled = archived;
+  $("#bulk-owner").disabled = archived;
+  $("#bulk-priority").disabled = archived;
+  $("#btn-bulk-delete").disabled = archived;
+  $("#table-edit-hint").textContent = archived ?
+    "已归档项目仅可浏览和导出" : "单元格可直接编辑，修改后自动保存";
   checkAll.onchange = () => {
     if (checkAll.checked) sorted.forEach((t) => state.selectedTaskIds.add(t.id));
     else sorted.forEach((t) => state.selectedTaskIds.delete(t.id));
@@ -1561,6 +1586,7 @@ function renderTable() {
       if (l.id === t.line_id) o.selected = true;
       selLine.appendChild(o);
     }
+    selLine.disabled = archived;
     selLine.onchange = () => saveTask(t.id, { line_id: +selLine.value });
     tdLine.appendChild(selLine);
     tr.appendChild(tdLine);
@@ -1570,6 +1596,7 @@ function renderTable() {
       const td = document.createElement("td");
       const inp = document.createElement("input");
       inp.value = val || "";
+      inp.disabled = archived;
       inp.onchange = () => saveTask(t.id, { [key]: inp.value });
       td.appendChild(inp);
       return td;
@@ -1590,6 +1617,7 @@ function renderTable() {
       selPriority.appendChild(o);
     }
     selPriority.className = `priority-${t.priority || "中"}`;
+    selPriority.disabled = archived;
     selPriority.onchange = () => saveTask(t.id, { priority: selPriority.value });
     tdPriority.appendChild(selPriority);
     tr.appendChild(tdPriority);
@@ -1597,6 +1625,7 @@ function renderTable() {
     /* 责任人：配置了名单则下拉选择，否则文本输入 */
     const tdOwner = document.createElement("td");
     const ownerEl = ownerInput(t.owner, true);
+    ownerEl.disabled = archived;
     ownerEl.onchange = () => saveTask(t.id, { owner: ownerEl.value });
     tdOwner.appendChild(ownerEl);
     tr.appendChild(tdOwner);
@@ -1611,6 +1640,7 @@ function renderTable() {
       selSt.appendChild(o);
     }
     selSt.onchange = () => saveTask(t.id, { status: selSt.value });
+    selSt.disabled = archived;
     decorateStatusSelect(selSt);
     tdSt.appendChild(selSt);
     tr.appendChild(tdSt);
@@ -1624,6 +1654,7 @@ function renderTable() {
     dependencyButton.title = dependencyIds.length
       ? dependencyIds.map((id) => taskById(id)?.name).filter(Boolean).join("、")
       : "配置依赖事务";
+    dependencyButton.disabled = archived;
     dependencyButton.onclick = () => openTaskDependenciesModal(t);
     tdDependencies.appendChild(dependencyButton);
     tr.appendChild(tdDependencies);
@@ -1634,6 +1665,7 @@ function renderTable() {
       const inp = document.createElement("input");
       inp.type = "date";
       inp.value = val || "";
+      inp.disabled = archived;
       inp.onchange = () => saveTask(t.id, { [key]: inp.value || null });
       td.appendChild(inp);
       return td;
@@ -1657,13 +1689,14 @@ function renderTable() {
     const btn = document.createElement("button");
     btn.className = "row-del";
     btn.textContent = "删除";
+    btn.disabled = archived;
     btn.onclick = async () => {
       await api(`/api/tasks/${t.id}`, "DELETE");
       toast("已删除事务，可从回收站恢复");
       reload();
     };
     tdDel.appendChild(locate);
-    tdDel.appendChild(btn);
+    if (!archived) tdDel.appendChild(btn);
     tr.appendChild(tdDel);
 
     tbody.appendChild(tr);
@@ -1674,7 +1707,8 @@ function renderTable() {
     td.colSpan = 16;
     const emptyText = document.createElement("span");
     emptyText.className = "muted-text";
-    emptyText.textContent = state.tasks.length ? "没有匹配筛选条件的事务。" : "暂无事务，点击「+ 新增事务」添加。";
+    emptyText.textContent = state.tasks.length ? "没有匹配筛选条件的事务。" :
+      (archived ? "该归档项目暂无事务。" : "暂无事务，点击「+ 新增事务」添加。");
     td.appendChild(emptyText);
     tr.appendChild(td);
     tbody.appendChild(tr);
@@ -1682,6 +1716,7 @@ function renderTable() {
 }
 
 async function saveTask(id, patch) {
+  if (!ensureWorkspaceEditable()) return;
   try {
     await api(`/api/tasks/${id}`, "PATCH", patch);
   } catch (_error) {
@@ -1801,6 +1836,7 @@ function ownerInput(value = "", required = false) {
 
 /* 新建/编辑线 */
 function openLineModal(line, parentId = null) {
+  if (!ensureWorkspaceEditable()) return;
   const isNew = !line;
   openModal(
     isNew ? (parentId ? "新建支线" : "新建主线") : "编辑线",
@@ -1938,6 +1974,7 @@ function selectedDependencyIds(body) {
 }
 
 function openTaskDependenciesModal(task) {
+  if (!ensureWorkspaceEditable()) return;
   openModal(`配置依赖（${task.name}）`, (body) => {
     createDependencyPicker(body, task, prerequisiteIds(task.id));
   }, async () => {
@@ -2062,6 +2099,7 @@ function createTaskContentEditor(body, task) {
 
 /* 新建/编辑事务 */
 function openTaskModal(task, lineId = null, allowLineSelection = false) {
+  if (!ensureWorkspaceEditable()) return;
   const isNew = !task;
   openModal(
     isNew && allowLineSelection ? "新建事务" :
@@ -2250,6 +2288,99 @@ function openWorkspaceModal() {
     await reload();
     toast("项目空间已创建");
   });
+}
+
+function openWorkspaceManagementModal() {
+  const managedWorkspaces = state.workspaces.filter(
+    (workspace) => workspace.role === "admin"
+  );
+  openModal("项目空间管理", (body) => {
+    $("#modal").classList.add("modal-wide");
+
+    const heading = document.createElement("div");
+    heading.className = "workspace-management-heading";
+    const hint = document.createElement("span");
+    hint.textContent = "归档项目仍可浏览和导出，但不能再编辑。";
+    const create = document.createElement("button");
+    create.type = "button";
+    create.textContent = "+ 新建项目空间";
+    create.onclick = openWorkspaceModal;
+    heading.append(hint, create);
+    body.appendChild(heading);
+
+    const list = document.createElement("div");
+    list.className = "workspace-management-list";
+    for (const workspace of managedWorkspaces) {
+      const row = document.createElement("div");
+      row.className = "workspace-management-row";
+      const info = document.createElement("div");
+      info.className = "workspace-management-info";
+      const nameLine = document.createElement("div");
+      nameLine.className = "workspace-management-name";
+      const name = document.createElement("strong");
+      name.textContent = workspace.name;
+      nameLine.appendChild(name);
+      if (workspace.id === state.currentWorkspace?.id) {
+        const current = document.createElement("span");
+        current.className = "workspace-badge";
+        current.textContent = "当前";
+        nameLine.appendChild(current);
+      }
+      if (workspace.archived_at) {
+        const archived = document.createElement("span");
+        archived.className = "workspace-badge archived";
+        archived.textContent = "已归档";
+        nameLine.appendChild(archived);
+      }
+      const description = document.createElement("span");
+      description.textContent = workspace.description || "暂无描述";
+      info.append(nameLine, description);
+
+      const actions = document.createElement("div");
+      actions.className = "workspace-management-actions";
+      if (!workspace.archived_at) {
+        const archive = document.createElement("button");
+        archive.type = "button";
+        archive.textContent = "归档";
+        archive.onclick = async () => {
+          if (!confirm(
+            `归档项目空间「${workspace.name}」？\n归档后项目仅可浏览和导出，不能再编辑。`
+          )) return;
+          await api(`/api/workspaces/${workspace.id}/archive`, "POST");
+          await refreshSession();
+          await reload();
+          toast("项目空间已归档");
+          openWorkspaceManagementModal();
+        };
+        actions.appendChild(archive);
+      }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "row-del";
+      remove.textContent = "删除";
+      remove.onclick = async () => {
+        if (!confirm(
+          `永久删除项目空间「${workspace.name}」？\n空间内的线、事务和配置都会被删除，且无法恢复。`
+        )) return;
+        await api(`/api/workspaces/${workspace.id}`, "DELETE");
+        resetWorkspaceState();
+        await refreshSession();
+        await reload();
+        toast("项目空间已删除");
+        if (state.workspaces.some((item) => item.role === "admin")) {
+          openWorkspaceManagementModal();
+        } else {
+          $("#modal-mask").classList.add("hidden");
+        }
+      };
+      actions.appendChild(remove);
+      row.append(info, actions);
+      list.appendChild(row);
+    }
+    body.appendChild(list);
+    $("#modal-ok").classList.add("hidden");
+    $("#modal-cancel").textContent = "关闭";
+  }, async () => true);
 }
 
 async function openMembersModal() {
@@ -2441,11 +2572,6 @@ $("#login-form").onsubmit = async (event) => {
 };
 
 $("#workspace-select").onchange = async (event) => {
-  if (event.target.value === CREATE_WORKSPACE_OPTION) {
-    event.target.value = state.currentWorkspace.id;
-    openWorkspaceModal();
-    return;
-  }
   const workspaceId = Number(event.target.value);
   try {
     await api(`/api/workspaces/${workspaceId}/select`, "POST");
@@ -2465,6 +2591,10 @@ document.addEventListener("keydown", (event) => {
     closeAccountMenu({ restoreFocus: true });
   }
 });
+$("#btn-workspaces").onclick = () => {
+  closeAccountMenu();
+  openWorkspaceManagementModal();
+};
 $("#btn-members").onclick = () => {
   closeAccountMenu();
   openMembersModal();
@@ -2522,6 +2652,7 @@ $("#btn-merge").onclick = () => {
 };
 
 async function deleteSelectedLine() {
+  if (!ensureWorkspaceEditable()) return;
   const line = lineById(state.selectedLineId);
   if (!line) return;
   const ids = [line.id, ...descendantIds(line.id)];
@@ -2545,6 +2676,7 @@ $("#btn-table-add").onclick = () => {
 
 $("#btn-statuses").onclick = () => {
   closeAccountMenu();
+  if (!ensureWorkspaceEditable()) return;
   openModal("配置进展状态", (body) => {
     const list = document.createElement("div");
     list.className = "status-config-list";
@@ -2613,6 +2745,13 @@ $("#btn-statuses").onclick = () => {
 $("#btn-trash").onclick = async () => {
   const trash = await api("/api/trash");
   openModal("回收站", (body) => {
+    const archived = isWorkspaceArchived();
+    if (archived) {
+      const readonlyHint = document.createElement("div");
+      readonlyHint.className = "opt-hint";
+      readonlyHint.textContent = "项目空间已归档，回收站内容仅可查看。";
+      body.appendChild(readonlyHint);
+    }
     if (!trash.batches.length) {
       const empty = document.createElement("div");
       empty.className = "opt-hint";
@@ -2631,6 +2770,7 @@ $("#btn-trash").onclick = async () => {
         (names ? ` · ${names}` : "");
       const restore = document.createElement("button");
       restore.textContent = "恢复";
+      restore.disabled = archived;
       restore.onclick = async () => {
         await api("/api/trash/restore", "POST", { batch: b.batch });
         $("#modal-mask").classList.add("hidden");
@@ -2641,6 +2781,7 @@ $("#btn-trash").onclick = async () => {
       row.appendChild(restore);
       body.appendChild(row);
     }
+    if (archived) return;
     const purge = document.createElement("button");
     purge.className = "row-del";
     purge.style.marginTop = "12px";
@@ -2689,6 +2830,7 @@ for (const btn of document.querySelectorAll(".summary-card")) {
 }
 
 async function bulkUpdate(field, value) {
+  if (!ensureWorkspaceEditable()) return;
   if (!value) return;
   const ids = [...state.selectedTaskIds];
   if (!ids.length) {
@@ -2768,6 +2910,7 @@ async function downloadTaskImportTemplate(button) {
 }
 
 function openTaskImportDialog() {
+  if (!ensureWorkspaceEditable()) return;
   if (!state.lines.length) {
     toast("请先创建主线或支线");
     return;
@@ -2849,6 +2992,7 @@ function openTaskImportDialog() {
 }
 
 async function importTasksFromExcel(file, button, inputElement) {
+  if (!ensureWorkspaceEditable()) return;
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
     toast("仅支持 .xlsx 格式的 Excel 文件");
     inputElement.value = "";
@@ -2944,6 +3088,7 @@ $("#bulk-priority").onchange = async (e) => {
   e.target.value = "";
 };
 $("#btn-bulk-delete").onclick = async () => {
+  if (!ensureWorkspaceEditable()) return;
   const ids = [...state.selectedTaskIds];
   if (!ids.length) {
     toast("请先勾选事务");
@@ -3144,6 +3289,7 @@ document.addEventListener("keydown", async (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
     e.preventDefault();
     if (e.repeat) return;
+    if (!ensureWorkspaceEditable()) return;
     try {
       await api("/api/undo", "POST");
       toast("已撤销上一次编辑");

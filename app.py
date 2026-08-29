@@ -175,7 +175,8 @@ def init_db(db_path=None):
             description TEXT NOT NULL DEFAULT '',
             created_by  INTEGER NOT NULL,
             created_at  TEXT NOT NULL,
-            updated_at  TEXT NOT NULL
+            updated_at  TEXT NOT NULL,
+            archived_at TEXT
         );
         CREATE TABLE IF NOT EXISTS workspace_members (
             workspace_id INTEGER NOT NULL,
@@ -209,6 +210,7 @@ def init_db(db_path=None):
     ensure_column(db, "tasks", "updated_at", "TEXT")
     ensure_column(db, "tasks", "workspace_id", "INTEGER")
     ensure_column(db, "users", "managed_by", "INTEGER")
+    ensure_column(db, "workspaces", "archived_at", "TEXT")
     today = date.today().isoformat()
 
     admin_username = os.environ.get("ANYLINE_ADMIN_USERNAME", "admin").strip() or "admin"
@@ -656,7 +658,7 @@ def handle_unexpected_error(exc):
 # ------------------------------------------------------------- auth helpers
 def user_workspaces(db, user_id):
     return [dict(row) for row in db.execute(
-        "SELECT w.id,w.name,w.description,m.role FROM workspaces w "
+        "SELECT w.id,w.name,w.description,w.archived_at,m.role FROM workspaces w "
         "JOIN workspace_members m ON m.workspace_id=w.id "
         "WHERE m.user_id=? ORDER BY w.name,w.id", (user_id,)
     )]
@@ -675,6 +677,26 @@ def require_workspace_admin(workspace_id=None):
     if not row or row["role"] != "admin":
         raise ApiError("仅项目空间管理员可执行此操作", 403)
     return row
+
+
+def require_workspace_writable(workspace_id=None):
+    workspace_id = workspace_id or current_workspace_id()
+    row = get_db().execute(
+        "SELECT archived_at FROM workspaces WHERE id=?", (workspace_id,)
+    ).fetchone()
+    if not row:
+        raise ApiError("项目空间不存在", 404)
+    if row["archived_at"]:
+        raise ApiError("项目空间已归档，仅可浏览，不能编辑", 409)
+    return row
+
+
+CURRENT_WORKSPACE_WRITE_ENDPOINTS = {
+    "api_set_statuses",
+    "create_line", "update_line", "delete_line",
+    "create_task", "update_task", "task_dependency", "delete_task",
+    "import_tasks", "bulk_tasks", "undo", "restore_trash", "purge_trash",
+}
 
 
 def validate_username(value):
@@ -720,6 +742,8 @@ def load_authenticated_context():
         current = workspaces[0]
         session["workspace_id"] = current["id"]
     g.workspace = current
+    if request.endpoint in CURRENT_WORKSPACE_WRITE_ENDPOINTS:
+        require_workspace_writable()
     return None
 
 
@@ -1255,6 +1279,7 @@ def create_workspace():
 @app.route("/api/workspaces/<int:workspace_id>", methods=["PATCH"])
 def update_workspace(workspace_id):
     require_workspace_admin(workspace_id)
+    require_workspace_writable(workspace_id)
     data = json_object()
     fields, values = [], []
     for key, label in (("name", "项目空间名称"), ("description", "项目空间描述")):
@@ -1272,6 +1297,55 @@ def update_workspace(workspace_id):
         )
         get_db().commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/workspaces/<int:workspace_id>/archive", methods=["POST"])
+def archive_workspace(workspace_id):
+    require_workspace_admin(workspace_id)
+    db = get_db()
+    workspace = db.execute(
+        "SELECT archived_at FROM workspaces WHERE id=?", (workspace_id,)
+    ).fetchone()
+    if not workspace:
+        raise ApiError("项目空间不存在", 404)
+    if workspace["archived_at"]:
+        raise ApiError("项目空间已经归档", 409)
+    archived_at = date.today().isoformat()
+    db.execute(
+        "UPDATE workspaces SET archived_at=?,updated_at=? WHERE id=?",
+        (archived_at, archived_at, workspace_id),
+    )
+    db.commit()
+    return jsonify({"ok": True, "archived_at": archived_at})
+
+
+@app.route("/api/workspaces/<int:workspace_id>", methods=["DELETE"])
+def delete_workspace(workspace_id):
+    require_workspace_admin(workspace_id)
+    db = get_db()
+    remaining = [
+        workspace for workspace in user_workspaces(db, g.user["id"])
+        if workspace["id"] != workspace_id
+    ]
+    if not remaining:
+        raise ApiError("至少需要保留一个可访问的项目空间", 409)
+
+    db.execute("DELETE FROM task_dependencies WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM task_images WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM workspace_meta WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM undo_snapshots WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM workspace_members WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM workspaces WHERE id=?", (workspace_id,))
+    db.commit()
+
+    if session.get("workspace_id") == workspace_id:
+        session["workspace_id"] = remaining[0]["id"]
+    return jsonify({
+        "ok": True,
+        "current_workspace_id": session.get("workspace_id"),
+    })
 
 
 @app.route("/api/workspaces/<int:workspace_id>/select", methods=["POST"])
@@ -1300,6 +1374,7 @@ def workspace_members(workspace_id):
         )]
         return jsonify({"members": rows})
 
+    require_workspace_writable(workspace_id)
     data = json_object()
     username = validate_username(data.get("username"))
     display_name = text_field(data, "display_name", "姓名", username).strip() or username
@@ -1340,6 +1415,7 @@ def workspace_members(workspace_id):
 )
 def workspace_member(workspace_id, user_id):
     require_workspace_admin(workspace_id)
+    require_workspace_writable(workspace_id)
     db = get_db()
     member = db.execute(
         "SELECT m.role,u.managed_by FROM workspace_members m "

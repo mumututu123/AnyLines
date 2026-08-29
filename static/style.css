@@ -119,6 +119,37 @@ body.authenticated #login-view { display: none; }
 }
 .member-add-grid .field { min-width: 0; margin-bottom: 0 !important; }
 
+.workspace-management-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin-bottom: 14px; color: #57606a; font-size: 12px;
+}
+.workspace-management-heading button,
+.workspace-management-actions button {
+  border: 1px solid #d0d7de; border-radius: 6px; background: #f6f8fa;
+  padding: 6px 10px; cursor: pointer;
+}
+.workspace-management-list {
+  overflow: hidden; border: 1px solid #d8dee4; border-radius: 7px;
+}
+.workspace-management-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 12px; border-bottom: 1px solid #eaeef2;
+}
+.workspace-management-row:last-child { border-bottom: 0; }
+.workspace-management-info { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.workspace-management-info > span {
+  overflow: hidden; color: #6e7781; font-size: 12px; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-management-name { display: flex; align-items: center; gap: 7px; }
+.workspace-badge {
+  border-radius: 10px; background: #ddf4ff; color: #0969da;
+  padding: 2px 7px; font-size: 10px; font-weight: 500;
+}
+.workspace-badge.archived { background: #eaeef2; color: #6e7781; }
+.workspace-management-actions { display: flex; flex: 0 0 auto; gap: 7px; }
+.workspace-management-actions .row-del { color: #cf222e; border-color: #f0b3b8; }
+
 @media (max-width: 700px) {
   .member-list-header { display: none; }
   .member-row { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; }
@@ -127,6 +158,10 @@ body.authenticated #login-view { display: none; }
   .member-actions { grid-column: 1 / -1; }
   .member-add-grid { grid-template-columns: 1fr; }
   .member-add-header { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .workspace-management-heading, .workspace-management-row {
+    align-items: stretch; flex-direction: column;
+  }
+  .workspace-management-actions { justify-content: flex-end; }
 }
 
 /* ---------------- top bar ---------------- */
@@ -140,6 +175,7 @@ body.authenticated #login-view { display: none; }
   width: 180px; max-width: 24vw; min-height: 30px; padding: 5px 8px;
   border: 1px solid #d0d7de; border-radius: 6px; background: #fff; font-size: 13px;
 }
+#workspace-select.archived { color: #8c959f; font-style: italic; }
 @media (max-width: 900px) {
   #workspace-select { width: min(180px, 42vw); max-width: none; }
 }
