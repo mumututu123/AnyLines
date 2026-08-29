@@ -973,6 +973,15 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertIn('if (e.key === "ArrowRight") moveTaskImageViewer(1)', source)
 
+        status, body = self.request("GET", "/static/style.css")
+        self.assertEqual(status, 200)
+        styles = body.decode("utf-8")
+        lightbox_figure_start = styles.index(".image-lightbox-figure {")
+        lightbox_figure_end = styles.index("}", lightbox_figure_start)
+        self.assertIn("grid-column: 2", styles[
+            lightbox_figure_start:lightbox_figure_end
+        ])
+
     def test_bulk_update_delete_and_undo(self):
         self.add_member("lisi", "李四")
         first_line = self.create_line("第一条线")
