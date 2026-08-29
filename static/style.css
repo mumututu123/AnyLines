@@ -408,11 +408,6 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   fill: #8c959f; font-size: 10px; user-select: none; pointer-events: auto;
 }
 .cluster-node:hover .cluster-hint { fill: #0969da; }
-.cluster-collapse-btn { fill: #fff; stroke: #8c959f; stroke-width: 1.2; }
-.cluster-node:hover .cluster-collapse-btn { stroke: #0969da; }
-.cluster-collapse-x {
-  fill: #57606a; font-size: 10px; pointer-events: none; user-select: none;
-}
 
 .st-未启动 { fill: #8c959f; }
 .st-进行中 { fill: #0969da; }

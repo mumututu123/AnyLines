@@ -1448,11 +1448,10 @@ function renderCanvas() {
       /* 折叠按钮：置于簇顶部 */
       const topY = Math.min(...ys) - 16;
       const g = svgEl("g", { class: "cluster-node" }, gTasks);
-      svgEl("circle", { cx, cy: topY, r: 8, class: "cluster-collapse-btn" }, g);
       const tx = svgEl("text", {
-        x: cx, y: topY + 3.5, "text-anchor": "middle", class: "cluster-collapse-x",
+        x: cx, y: topY + 3.5, "text-anchor": "middle", class: "cluster-hint",
       }, g);
-      tx.textContent = "▾";
+      tx.textContent = "▾ 折叠";
       const title = svgEl("title", {}, g);
       title.textContent = "折叠同天事务";
       g.addEventListener("click", toggle);
