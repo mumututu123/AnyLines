@@ -321,7 +321,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   position: absolute; left: 184px; bottom: 16px; z-index: 10;
   max-width: calc(100% - 200px); padding: 9px 13px;
   overflow: hidden; border: 1px solid #fbfdff; border-radius: 6px;
-  background: #e7f2ff; color: #fff;
+  background: #eef2f3d8; color: #575353;
   box-shadow: 0 4px 12px rgba(31, 35, 40, .24);
   font-size: 14px; font-weight: 600; line-height: 1.4;
   text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
