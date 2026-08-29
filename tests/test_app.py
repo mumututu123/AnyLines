@@ -116,6 +116,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(b'id="workspace-select"', body)
         self.assertIn(b'id="btn-view-dashboard"', body)
         self.assertIn(b'id="dashboard-view"', body)
+        self.assertIn(b'id="image-lightbox"', body)
         self.assertNotIn(b'id="btn-workspace-create"', body)
         self.assertNotIn(b'id="btn-delete-line"', body)
         self.assertNotIn(b'id="btn-undo"', body)
@@ -665,6 +666,10 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('textarea.addEventListener("paste"', source)
         self.assertIn('reader.readAsDataURL(file)', source)
         self.assertIn('preview.src = image.src || image.data_url', source)
+        self.assertIn(
+            'openTaskImageViewer(body._contentImages, index, previewButton)', source
+        )
+        self.assertIn('if (e.key === "ArrowRight") moveTaskImageViewer(1)', source)
 
     def test_bulk_update_delete_and_undo(self):
         first_line = self.create_line("第一条线")

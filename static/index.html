@@ -213,6 +213,21 @@
   </div>
 </div>
 
+<!-- 事务图片大图浏览 -->
+<div id="image-lightbox" class="hidden" role="dialog" aria-modal="true"
+     aria-label="事务图片浏览">
+  <button id="image-lightbox-close" class="image-lightbox-close" type="button"
+          title="关闭大图" aria-label="关闭大图">×</button>
+  <button id="image-lightbox-prev" class="image-lightbox-nav image-lightbox-prev"
+          type="button" title="上一张" aria-label="上一张图片">‹</button>
+  <figure class="image-lightbox-figure">
+    <img id="image-lightbox-image" alt="">
+    <figcaption id="image-lightbox-caption"></figcaption>
+  </figure>
+  <button id="image-lightbox-next" class="image-lightbox-nav image-lightbox-next"
+          type="button" title="下一张" aria-label="下一张图片">›</button>
+</div>
+
 <div id="toast" class="hidden"></div>
 
 <script src="/static/app.js"></script>

@@ -90,6 +90,59 @@ function toast(msg) {
   t._timer = setTimeout(() => t.classList.add("hidden"), 2200);
 }
 
+const taskImageViewer = { images: [], index: 0, returnFocus: null };
+
+function renderTaskImageViewer() {
+  const current = taskImageViewer.images[taskImageViewer.index];
+  if (!current) return;
+  const image = $("#image-lightbox-image");
+  image.src = current.src;
+  image.alt = current.alt;
+  $("#image-lightbox-caption").textContent =
+    `${current.alt} · ${taskImageViewer.index + 1} / ${taskImageViewer.images.length}`;
+  const hasMultiple = taskImageViewer.images.length > 1;
+  $("#image-lightbox-prev").classList.toggle("hidden", !hasMultiple);
+  $("#image-lightbox-next").classList.toggle("hidden", !hasMultiple);
+}
+
+function openTaskImageViewer(images, index, trigger) {
+  taskImageViewer.images = images.map((image, imageIndex) => ({
+    src: image.src || image.data_url,
+    alt: `事务内容图片 ${imageIndex + 1}`,
+  }));
+  taskImageViewer.index = index;
+  taskImageViewer.returnFocus = trigger;
+  renderTaskImageViewer();
+  $("#image-lightbox").classList.remove("hidden");
+  $("#image-lightbox-close").focus();
+}
+
+function closeTaskImageViewer({ restoreFocus = true } = {}) {
+  const lightbox = $("#image-lightbox");
+  if (lightbox.classList.contains("hidden")) return;
+  lightbox.classList.add("hidden");
+  $("#image-lightbox-image").removeAttribute("src");
+  if (restoreFocus && taskImageViewer.returnFocus?.isConnected) {
+    taskImageViewer.returnFocus.focus();
+  }
+  taskImageViewer.images = [];
+  taskImageViewer.returnFocus = null;
+}
+
+function moveTaskImageViewer(offset) {
+  const count = taskImageViewer.images.length;
+  if (count < 2) return;
+  taskImageViewer.index = (taskImageViewer.index + offset + count) % count;
+  renderTaskImageViewer();
+}
+
+$("#image-lightbox-close").onclick = () => closeTaskImageViewer();
+$("#image-lightbox-prev").onclick = () => moveTaskImageViewer(-1);
+$("#image-lightbox-next").onclick = () => moveTaskImageViewer(1);
+$("#image-lightbox").onclick = (event) => {
+  if (event.target === $("#image-lightbox")) closeTaskImageViewer();
+};
+
 async function api(url, method = "GET", body = null) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
   if (body) opt.body = JSON.stringify(body);
@@ -111,6 +164,7 @@ async function api(url, method = "GET", body = null) {
 
 function showLoggedOut() {
   closeAccountMenu();
+  closeTaskImageViewer({ restoreFocus: false });
   document.body.classList.remove("authenticated");
   state.user = null;
   state.workspaces = [];
@@ -1894,7 +1948,7 @@ function createTaskContentEditor(body, task) {
   textarea.placeholder = "填写事务内容；可在此直接粘贴图片";
   const hint = document.createElement("div");
   hint.className = "task-content-hint";
-  hint.textContent = `支持粘贴 PNG、JPEG、GIF、WebP 图片，单张不超过 5MB，最多 ${MAX_TASK_IMAGES} 张`;
+  hint.textContent = `支持粘贴 PNG、JPEG、GIF、WebP 图片，单张不超过 5MB，最多 ${MAX_TASK_IMAGES} 张；单击图片可放大浏览`;
   const gallery = document.createElement("div");
   gallery.className = "task-image-gallery";
   gallery.setAttribute("aria-live", "polite");
@@ -1914,6 +1968,13 @@ function createTaskContentEditor(body, task) {
       const preview = document.createElement("img");
       preview.src = image.src || image.data_url;
       preview.alt = `事务内容图片 ${index + 1}`;
+      const previewButton = document.createElement("button");
+      previewButton.type = "button";
+      previewButton.className = "task-image-preview";
+      previewButton.title = "放大浏览";
+      previewButton.setAttribute("aria-label", `放大浏览事务内容图片 ${index + 1}`);
+      previewButton.onclick = () => openTaskImageViewer(body._contentImages, index, previewButton);
+      previewButton.appendChild(preview);
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "task-image-remove";
@@ -1924,7 +1985,7 @@ function createTaskContentEditor(body, task) {
         body._contentImages.splice(index, 1);
         renderImages();
       };
-      item.appendChild(preview);
+      item.appendChild(previewButton);
       item.appendChild(remove);
       gallery.appendChild(item);
     });
@@ -2846,6 +2907,14 @@ wrap.addEventListener("click", (e) => {
 
 /* 画布快捷键：输入控件内保留浏览器原生的删除与撤销行为。 */
 document.addEventListener("keydown", async (e) => {
+  if (!$("#image-lightbox").classList.contains("hidden")) {
+    if (e.key === "Escape") closeTaskImageViewer();
+    else if (e.key === "ArrowLeft") moveTaskImageViewer(-1);
+    else if (e.key === "ArrowRight") moveTaskImageViewer(1);
+    else return;
+    e.preventDefault();
+    return;
+  }
   if (e.key === "Escape") {
     $("#modal-mask").classList.add("hidden");
     return;
