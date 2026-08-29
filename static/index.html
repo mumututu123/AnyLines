@@ -154,7 +154,7 @@
   <aside id="canvas-opts">
     <div class="opt-title">节点标签显示</div>
     <button id="btn-toggle-labels" title="一键显示/隐藏所有节点文字信息">隐藏全部标签</button>
-    <button id="btn-today" title="滚动到今天所在位置">回到今天</button>
+    <button id="btn-today" title="滚动到今天所在位置">聚焦今天</button>
     <button id="btn-fit" title="重置缩放并回到画布左上">适应画布</button>
     <button id="btn-toggle-children" disabled title="折叠或展开选中线的子支线">折叠子支线</button>
     <label><input type="checkbox" id="opt-name" checked> 事务名</label>
@@ -162,7 +162,22 @@
     <label><input type="checkbox" id="opt-dur" checked> 状态停留时长</label>
     <label><input type="checkbox" id="opt-owner" checked> 责任人</label>
     <div class="opt-hint">单击线选中，双击节点编辑事务；同天多事务默认折叠，点击带数字的节点展开/折叠</div>
-    <div class="opt-hint">Ctrl+滚轮：缩放画布<br>左键长按拖动：平移画布</div>
+    <section id="canvas-shortcuts" aria-labelledby="canvas-shortcuts-title">
+      <div id="canvas-shortcuts-title" class="opt-title">画布快捷键</div>
+      <dl class="shortcut-list">
+        <div><dt><kbd>Ctrl+Z</kbd></dt><dd>撤销</dd></div>
+        <div><dt><kbd>Ctrl+R</kbd></dt><dd>恢复</dd></div>
+        <div><dt><kbd>H</kbd></dt><dd>聚焦今天</dd></div>
+        <div><dt><kbd>B</kbd></dt><dd>创建支线</dd></div>
+        <div>
+          <dt class="shortcut-key-group"><kbd>A</kbd><span>/</span><kbd>N</kbd></dt>
+          <dd>创建事务</dd>
+        </div>
+        <div><dt><kbd>Delete</kbd></dt><dd>删除选中线</dd></div>
+        <div><dt><kbd>Ctrl+滚轮</kbd></dt><dd>缩放</dd></div>
+      </dl>
+    </section>
+    <div class="opt-hint">左键长按拖动：平移画布</div>
   </aside>
   <div id="sel-info" role="status" aria-live="polite">未选中任何线</div>
   <div id="canvas-wrap">

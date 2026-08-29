@@ -209,6 +209,14 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('target.matches("input, textarea, select")', source)
         self.assertIn('!$("#modal-mask").classList.contains("hidden")', source)
 
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        markup = body.decode("utf-8")
+        self.assertIn('id="canvas-shortcuts"', markup)
+        for key in ("Ctrl+Z", "Ctrl+R", "H", "B", "A", "N", "Delete", "Ctrl+滚轮"):
+            with self.subTest(shortcut_hint=key):
+                self.assertIn(f"<kbd>{key}</kbd>", markup)
+
     def test_authentication_is_required(self):
         self.cookie = None
         status, data = self.request("GET", "/api/state")
