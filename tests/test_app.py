@@ -163,6 +163,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(state["lines"], [])
         self.assertEqual(state["tasks"], [])
         self.assertFalse(state["can_undo"])
+        self.assertFalse(state["can_redo"])
         self.assertEqual(state["priority_enum"], ["低", "中", "高", "紧急"])
         self.assertEqual(state["status_colors"]["进行中"], "#0969da")
         self.assertEqual(state["owners"], ["系统管理员"])
@@ -189,7 +190,24 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("cx: merge.end.x, cy: merge.end.y", source)
         self.assertNotIn("d += ` C ${mx + 24}", source)
         self.assertIn('e.key === "Delete"', source)
-        self.assertIn('e.key.toLowerCase() === "z"', source)
+        self.assertIn('key === "z"', source)
+
+    def test_canvas_shortcuts_include_redo_today_branch_and_task(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn('key === "r"', source)
+        self.assertIn('await api("/api/redo", "POST")', source)
+        self.assertIn('if (key === "h") goToToday();', source)
+        self.assertIn(
+            'else if (key === "b") createBranchOnSelectedLine();', source
+        )
+        self.assertIn('else createTaskOnSelectedLine();', source)
+        self.assertIn('["h", "b", "a", "n"].includes(key)', source)
+        self.assertIn('state.view !== "canvas"', source)
+        self.assertIn('target.matches("input, textarea, select")', source)
+        self.assertIn('!$("#modal-mask").classList.contains("hidden")', source)
 
     def test_authentication_is_required(self):
         self.cookie = None
@@ -721,6 +739,42 @@ class AnyLineHttpTests(unittest.TestCase):
         status, data = self.request("POST", "/api/undo")
         self.assertEqual(status, 400, data)
         self.assertIn("没有可撤销", data["error"])
+
+    def test_redo_restores_undo_and_is_cleared_by_a_new_edit(self):
+        main_id = self.create_line("待撤销主线")
+
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["lines"], [])
+        self.assertFalse(state["can_undo"])
+        self.assertTrue(state["can_redo"])
+
+        status, data = self.request("POST", "/api/redo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual([line["id"] for line in state["lines"]], [main_id])
+        self.assertTrue(state["can_undo"])
+        self.assertFalse(state["can_redo"])
+
+        status, data = self.request("POST", "/api/redo")
+        self.assertEqual(status, 400, data)
+        self.assertIn("没有可恢复", data["error"])
+
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertTrue(state["can_redo"])
+
+        replacement_id = self.create_line("新的主线")
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual([line["id"] for line in state["lines"]], [replacement_id])
+        self.assertTrue(state["can_undo"])
+        self.assertFalse(state["can_redo"])
+
+        status, data = self.request("POST", "/api/redo")
+        self.assertEqual(status, 400, data)
+        self.assertIn("没有可恢复", data["error"])
 
     def test_task_validation_never_returns_500(self):
         line_id = self.create_line()

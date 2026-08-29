@@ -5,7 +5,7 @@ const $ = (sel) => document.querySelector(sel);
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = {
-  lines: [], tasks: [], dependencies: [], taskImages: [], canUndo: false,
+  lines: [], tasks: [], dependencies: [], taskImages: [], canUndo: false, canRedo: false,
   statusEnum: [], statusColors: {},
   priorityEnum: [], owners: [], today: "",
   user: null, workspaces: [], currentWorkspace: null,
@@ -390,6 +390,7 @@ async function reload() {
   state.dependencies = d.dependencies || [];
   state.taskImages = d.task_images || [];
   state.canUndo = d.can_undo;
+  state.canRedo = d.can_redo;
   state.statusEnum = d.status_enum;
   state.statusColors = d.status_colors || {};
   state.priorityEnum = d.priority_enum || ["低", "中", "高", "紧急"];
@@ -2743,10 +2744,27 @@ $("#btn-view-canvas").onclick = () => switchView("canvas");
 $("#btn-view-table").onclick = () => switchView("table");
 
 $("#btn-add-mainline").onclick = () => openLineModal(null, null);
-$("#btn-add-branch").onclick = () =>
-  state.selectedLineId && openLineModal(null, state.selectedLineId);
-$("#btn-add-task").onclick = () =>
-  state.selectedLineId && openTaskModal(null, state.selectedLineId);
+
+function createBranchOnSelectedLine() {
+  if (!ensureWorkspaceEditable()) return;
+  if (!lineById(state.selectedLineId)) {
+    toast("请先选择一条主线或支线");
+    return;
+  }
+  openLineModal(null, state.selectedLineId);
+}
+
+function createTaskOnSelectedLine() {
+  if (!ensureWorkspaceEditable()) return;
+  if (!lineById(state.selectedLineId)) {
+    toast("请先选择一条主线或支线");
+    return;
+  }
+  openTaskModal(null, state.selectedLineId);
+}
+
+$("#btn-add-branch").onclick = createBranchOnSelectedLine;
+$("#btn-add-task").onclick = createTaskOnSelectedLine;
 
 $("#btn-merge").onclick = () => {
   const line = lineById(state.selectedLineId);
@@ -3225,11 +3243,12 @@ $("#btn-bulk-delete").onclick = async () => {
   reload();
 };
 
-$("#btn-today").onclick = () => {
+function goToToday() {
   const line = $("#graph .today-line");
   if (!line) return;
   centerCanvasPoint(parseFloat(line.getAttribute("x1")));
-};
+}
+$("#btn-today").onclick = goToToday;
 $("#btn-fit").onclick = () => {
   state.zoom = 1;
   state.pan = { x: 0, y: 0 };
@@ -3410,7 +3429,8 @@ document.addEventListener("keydown", async (e) => {
   if (target instanceof HTMLElement &&
       (target.matches("input, textarea, select") || target.isContentEditable)) return;
 
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+  const key = e.key.toLowerCase();
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === "z") {
     e.preventDefault();
     if (e.repeat) return;
     if (!ensureWorkspaceEditable()) return;
@@ -3421,6 +3441,29 @@ document.addEventListener("keydown", async (e) => {
     } catch (_error) {
       // api() 已显示没有可撤销操作或服务端错误。
     }
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && key === "r") {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (!ensureWorkspaceEditable()) return;
+    try {
+      await api("/api/redo", "POST");
+      toast("已恢复上一次撤销的编辑");
+      await reload();
+    } catch (_error) {
+      // api() 已显示没有可恢复操作或服务端错误。
+    }
+    return;
+  }
+
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && ["h", "b", "a", "n"].includes(key)) {
+    e.preventDefault();
+    if (e.repeat) return;
+    if (key === "h") goToToday();
+    else if (key === "b") createBranchOnSelectedLine();
+    else createTaskOnSelectedLine();
     return;
   }
 
