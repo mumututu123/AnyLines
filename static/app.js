@@ -3183,7 +3183,7 @@ function openWorkspaceManagementModal() {
   const managedWorkspaces = state.workspaces.filter(
     (workspace) => workspace.role === "admin"
   );
-  openModal("项目空间管理", (body) => {
+  openModal("项目管理", (body) => {
     $("#modal").classList.add("modal-wide");
 
     const heading = document.createElement("div");

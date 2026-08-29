@@ -1051,7 +1051,7 @@ def require_workspace_admin(workspace_id=None):
         (workspace_id, g.user["id"]),
     ).fetchone()
     if not row or row["role"] != "admin":
-        raise ApiError("仅项目空间管理员可执行此操作", 403)
+        raise ApiError("仅项目管理员可执行此操作", 403)
     return row
 
 
