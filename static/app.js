@@ -166,6 +166,7 @@ function showLoggedOut() {
   closeAccountMenu();
   closeTaskImageViewer({ restoreFocus: false });
   document.body.classList.remove("authenticated");
+  document.body.classList.remove("auth-pending");
   document.body.classList.remove("workspace-archived");
   state.user = null;
   state.workspaces = [];
@@ -180,6 +181,7 @@ function applySession(data) {
   state.workspaces = data.workspaces || [];
   state.currentWorkspace = data.current_workspace;
   document.body.classList.add("authenticated");
+  document.body.classList.remove("auth-pending");
   const select = $("#workspace-select");
   select.innerHTML = "";
   for (const workspace of state.workspaces) {

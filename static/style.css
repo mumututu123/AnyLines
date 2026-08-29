@@ -6,6 +6,7 @@ body {
 }
 .hidden { display: none !important; }
 body:not(.authenticated) .app-surface { display: none !important; }
+body.auth-pending #login-view { display: none; }
 
 /* ---------------- authentication & workspace ---------------- */
 #login-view {
