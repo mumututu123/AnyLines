@@ -13,7 +13,7 @@ const state = {
   selectedTaskId: null,
   selectedTaskIds: new Set(),
   view: "canvas",
-  show: { name: true, status: true, dur: true, owner: true },
+  show: { name: true, status: true, dur: true, owner: true, date: true },
   expandedClusters: new Set(),   // 已展开的同天多事务簇 key: "lineId|date"
   hiddenBranchIds: new Set(),    // 画布中已折叠的支线（支线自身及其后代隐藏）
   canvasTaskPositions: new Map(),
@@ -280,6 +280,47 @@ function prerequisiteIds(taskId) {
     .filter((dependency) => dependency.dependent_task_id === taskId)
     .map((dependency) => dependency.prerequisite_task_id);
 }
+function taskDependencyFocus(taskId) {
+  const selected = taskById(taskId);
+  if (!selected) return null;
+  const prerequisitesByTask = new Map();
+  const dependentsByTask = new Map();
+  for (const dependency of state.dependencies) {
+    if (!prerequisitesByTask.has(dependency.dependent_task_id)) {
+      prerequisitesByTask.set(dependency.dependent_task_id, []);
+    }
+    prerequisitesByTask.get(dependency.dependent_task_id)
+      .push(dependency.prerequisite_task_id);
+    if (!dependentsByTask.has(dependency.prerequisite_task_id)) {
+      dependentsByTask.set(dependency.prerequisite_task_id, []);
+    }
+    dependentsByTask.get(dependency.prerequisite_task_id)
+      .push(dependency.dependent_task_id);
+  }
+  const collect = (startId, adjacency) => {
+    const found = new Set();
+    const visit = (id) => {
+      for (const nextId of adjacency.get(id) || []) {
+        if (found.has(nextId)) continue;
+        found.add(nextId);
+        visit(nextId);
+      }
+    };
+    visit(startId);
+    return found;
+  };
+  const upstream = collect(taskId, prerequisitesByTask);
+  const downstream = collect(taskId, dependentsByTask);
+  const directPrerequisiteIds = prerequisitesByTask.get(taskId) || [];
+  const directDependentIds = dependentsByTask.get(taskId) || [];
+  const related = new Set([taskId, ...upstream, ...downstream]);
+  return {
+    selected, upstream, downstream, related,
+    directPrerequisites: directPrerequisiteIds.map(taskById).filter(Boolean),
+    directDependents: directDependentIds.map(taskById).filter(Boolean),
+    blockers: directPrerequisiteIds.map(taskById).filter((task) => task && !isDone(task)),
+  };
+}
 function isDone(t) { return DONE_STATUSES.has(t.status); }
 function priorityRank(p) { return PRIORITY_WEIGHT[p] || 0; }
 function statusClass(status) {
@@ -313,7 +354,6 @@ function taskHealth(t) {
   const h = {
     overdue: false, soon: false, stale: false, risk: RISK_STATUSES.has(t.status),
     labels: [],
-    className: "",
   };
   if (!isDone(t) && t.end_date) {
     const left = daysBetween(state.today, t.end_date);
@@ -326,7 +366,6 @@ function taskHealth(t) {
   if (h.risk) h.labels.push(["风险", "badge-risk"]);
   if (h.stale) h.labels.push(["停留过久", "badge-stale"]);
   if (!h.labels.length && isDone(t)) h.labels.push(["已结束", "badge-ok"]);
-  h.className = h.overdue ? "health-overdue" : (h.soon ? "health-soon" : (h.stale ? "health-stale" : ""));
   return h;
 }
 function searchableText(t) {
@@ -425,10 +464,62 @@ function render() {
 }
 
 /* ---------------------------------------------------------------- toolbar */
+function renderDependencyTaskLinks(container, tasks, emptyText) {
+  container.innerHTML = "";
+  if (!tasks.length) {
+    const empty = document.createElement("span");
+    empty.className = "dependency-focus-empty";
+    empty.textContent = emptyText;
+    container.appendChild(empty);
+    return;
+  }
+  for (const task of tasks) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = task.name;
+    button.title = `${task.name} · ${task.status}`;
+    button.onclick = () => locateTask(task.id);
+    container.appendChild(button);
+  }
+}
+
+function renderDependencyFocusPanel(focus) {
+  const panel = $("#dependency-focus-panel");
+  panel.classList.toggle("hidden", !focus);
+  if (!focus) return;
+  $("#dependency-focus-task").textContent = focus.selected.name;
+  $("#dependency-focus-stats").textContent =
+    `前置链 ${focus.upstream.size} · 影响链 ${focus.downstream.size}`;
+  renderDependencyTaskLinks(
+    $("#dependency-focus-blockers"), focus.blockers,
+    focus.directPrerequisites.length ? "前置事务均已完成" : "没有前置事务"
+  );
+  renderDependencyTaskLinks(
+    $("#dependency-focus-affected"), focus.directDependents, "没有直接后续事务"
+  );
+}
+
+function renderCanvasLegend() {
+  const legend = $("#canvas-status-legend");
+  legend.innerHTML = "";
+  for (const status of state.statusEnum) {
+    const row = document.createElement("div");
+    row.className = "canvas-legend-row";
+    const swatch = document.createElement("i");
+    swatch.className = "legend-status";
+    swatch.style.backgroundColor = statusColor(status);
+    const label = document.createElement("span");
+    label.textContent = status;
+    row.append(swatch, label);
+    legend.appendChild(row);
+  }
+}
+
 function renderToolbar() {
   const archived = isWorkspaceArchived();
   const sel = state.selectedLineId ? lineById(state.selectedLineId) : null;
   const selectedTask = state.selectedTaskId ? taskById(state.selectedTaskId) : null;
+  const dependencyFocus = selectedTask ? taskDependencyFocus(selectedTask.id) : null;
   const children = sel ? state.lines.filter((line) => line.parent_id === sel.id) : [];
   const allChildrenHidden = children.length > 0 &&
     children.every((line) => state.hiddenBranchIds.has(line.id));
@@ -440,10 +531,15 @@ function renderToolbar() {
   $("#btn-toggle-children").textContent =
     allChildrenHidden ? "展开子支线" : "折叠子支线";
   $("#sel-info").textContent = selectedTask
-    ? `已选中事务：${selectedTask.name}`
+    ? `已选中事务：${selectedTask.name} · 前置链 ${dependencyFocus.upstream.size} · ` +
+      `影响链 ${dependencyFocus.downstream.size}` +
+      (dependencyFocus.blockers.length ?
+        ` · 当前被 ${dependencyFocus.blockers.map((task) => task.name).join("、")} 阻塞` : "")
     : (sel
       ? `已选中：${sel.name}${sel.parent_id === null ? "（主线）" : "（支线）"}`
       : "未选中任何对象");
+  renderDependencyFocusPanel(dependencyFocus);
+  renderCanvasLegend();
 }
 
 function setSelectOptions(sel, values, allText, selected) {
@@ -771,6 +867,20 @@ function openTaskListModal(title, tasks) {
 const CV = {
   padL: 60, padR: 160, padT: 56, rowH: 74, pxPerDay: 6,
 };
+const CANVAS_OVERVIEW_MAX_ZOOM = 0.7;
+const CANVAS_DETAIL_MIN_ZOOM = 1.5;
+
+function canvasDensityLevel(zoom) {
+  if (zoom < CANVAS_OVERVIEW_MAX_ZOOM) return "overview";
+  if (zoom < CANVAS_DETAIL_MIN_ZOOM) return "standard";
+  return "detail";
+}
+
+function updateCanvasDensityIndicator(level, dependencyFocusActive = false) {
+  const labels = { overview: "概览", standard: "标准", detail: "详细" };
+  $("#canvas-density-label").textContent = dependencyFocusActive && level === "overview" ?
+    "依赖聚焦" : labels[level];
+}
 
 function svgEl(tag, attrs, parent) {
   const el = document.createElementNS(SVGNS, tag);
@@ -848,6 +958,10 @@ function renderCanvas() {
   const svg = $("#graph");
   const wrap = $("#canvas-wrap");
   const z = state.zoom;
+  const dependencyFocus = taskDependencyFocus(state.selectedTaskId);
+  const zoomDensity = canvasDensityLevel(z);
+  const density = dependencyFocus && zoomDensity === "overview" ? "standard" : zoomDensity;
+  updateCanvasDensityIndicator(zoomDensity, Boolean(dependencyFocus));
   const autoSpreadSameDay = z >= SAME_DAY_AUTO_SPREAD_ZOOM;
   svg.innerHTML = "";
   state.canvasTaskPositions = new Map();
@@ -859,26 +973,40 @@ function renderCanvas() {
   );
   const hasActiveCanvasFilter = Boolean(state.filters.line || taskScopedFilterActive);
   const taskRows = hasActiveCanvasFilter ? colorRows : layoutRows;
-  const canvasTasks = filteredTasks().filter((task) => taskRows.has(task.line_id));
+  const matchedCanvasTasks = filteredTasks().filter((task) => taskRows.has(task.line_id));
+  const focusCanvasTasks = dependencyFocus ? state.tasks.filter(
+    (task) => dependencyFocus.related.has(task.id) && taskRows.has(task.line_id)
+  ) : [];
+  const canvasTasks = [...new Map(
+    [...matchedCanvasTasks, ...focusCanvasTasks].map((task) => [task.id, task])
+  ).values()].sort(compareTasks);
   const filterMatchedLineIds = new Set();
-  const retainLineAndAncestors = (lineId) => {
+  const dependencyFocusLineIds = new Set();
+  const retainLineAndAncestors = (lineId, target) => {
     const visited = new Set();
     let line = lineById(lineId);
     while (line && !visited.has(line.id)) {
-      filterMatchedLineIds.add(line.id);
+      target.add(line.id);
       visited.add(line.id);
       line = line.parent_id !== null ? lineById(line.parent_id) : null;
     }
   };
-  for (const task of canvasTasks) retainLineAndAncestors(task.line_id);
-  if (state.filters.line && !taskScopedFilterActive) {
-    retainLineAndAncestors(Number(state.filters.line));
+  for (const task of matchedCanvasTasks) {
+    retainLineAndAncestors(task.line_id, filterMatchedLineIds);
   }
+  for (const task of focusCanvasTasks) {
+    retainLineAndAncestors(task.line_id, dependencyFocusLineIds);
+  }
+  if (state.filters.line && !taskScopedFilterActive) {
+    retainLineAndAncestors(Number(state.filters.line), filterMatchedLineIds);
+  }
+  const retainedLineIds = new Set([...filterMatchedLineIds, ...dependencyFocusLineIds]);
   const rows = hasActiveCanvasFilter
     ? new Map([...colorRows.keys()]
-      .filter((id) => filterMatchedLineIds.has(id))
+      .filter((id) => retainedLineIds.has(id))
       .map((id, index) => [id, index]))
     : layoutRows;
+  const filterMatchedTaskIds = new Set(matchedCanvasTasks.map((task) => task.id));
 
   if (!state.lines.length) {
     svg.setAttribute("width", Math.max(800 * z, wrap.clientWidth));
@@ -1222,7 +1350,9 @@ function renderCanvas() {
 
   /* ---- 事务节点（同线同天多事务折叠为聚合节点，点击展开/折叠） ---- */
   const gDependencies = svgEl("g", { class: "task-dependencies" }, root);
-  const gTasks = svgEl("g", {}, root);
+  const gTasks = svgEl("g", {
+    class: `task-layer${density === "overview" ? " semantic-overview" : ""}`,
+  }, root);
 
   /* 事务日期为分叉当日时，钳制到对应支线圆角过渡后的水平段。 */
   const nodeX = (t) => {
@@ -1238,6 +1368,44 @@ function renderCanvas() {
     height: halfSize * 2,
     rx: Math.min(5, halfSize / 2),
   });
+
+  const taskFocusClass = (taskIds) => {
+    if (!dependencyFocus) return "";
+    if (taskIds.includes(dependencyFocus.selected.id)) return " is-focus-selected";
+    const classes = [];
+    if (taskIds.some((id) => dependencyFocus.upstream.has(id))) {
+      classes.push("is-focus-upstream");
+    }
+    if (taskIds.some((id) => dependencyFocus.downstream.has(id))) {
+      classes.push("is-focus-downstream");
+    }
+    return classes.length ? ` ${classes.join(" ")}` : " is-focus-dimmed";
+  };
+
+  const healthBadgeItems = (health) => {
+    const badges = [];
+    if (health.overdue) badges.push(["!", "overdue", "超期"]);
+    else if (health.soon) badges.push(["期", "soon", "即将到期"]);
+    if (health.risk) badges.push(["险", "risk", "风险"]);
+    if (health.stale) badges.push(["久", "stale", "状态停留过久"]);
+    return badges;
+  };
+
+  const drawHealthBadges = (badges, cx, cy, halfSize, parent) => {
+    badges.slice(0, 3).forEach(([symbol, kind, label], index) => {
+      const badge = svgEl("g", {
+        class: `task-alert-badge task-alert-${kind}`,
+        transform: `translate(${cx + halfSize - index * 6} ${cy - halfSize})`,
+      }, parent);
+      svgEl("circle", { cx: 0, cy: 0, r: 4 }, badge);
+      const text = svgEl("text", {
+        x: 0, y: 2.2, "text-anchor": "middle",
+      }, badge);
+      text.textContent = symbol;
+      const title = svgEl("title", {}, badge);
+      title.textContent = label;
+    });
+  };
 
   const canvasPointFromClient = (clientX, clientY) => {
     const rect = svg.getBoundingClientRect();
@@ -1314,24 +1482,30 @@ function renderCanvas() {
   const drawTask = (t, y, labelRight, xOverride = null, labelLane = null) => {
     const line = lineById(t.line_id);
     const cx = xOverride ?? nodeX(t);
+    const selectedTask = state.selectedTaskId === t.id;
+    const nodeHalfSize = selectedTask ? 12 : 9;
+    const item = svgEl("g", {
+      class: `task-item${taskFocusClass([t.id])}`,
+      "data-task-item-id": t.id,
+    }, gTasks);
 
     if (t.end_date && t.end_date > t.start_date) {
       const bar = svgEl("rect", {
         x: cx, y: y - 4, width: Math.max(x(t.end_date) - cx, 2), height: 8,
         rx: 4, class: `task-bar ${statusClass(t.status)}`,
-      }, gTasks);
+      }, item);
       bar.style.fill = statusColor(t.status);
     }
 
     const health = taskHealth(t);
-    const selectedTask = state.selectedTaskId === t.id;
     const node = svgEl("rect", {
-      ...roundedSquareAttrs(cx, y, selectedTask ? 12 : 9),
+      ...roundedSquareAttrs(cx, y, nodeHalfSize),
       "data-task-id": t.id,
-      class: `task-node ${statusClass(t.status)} ${health.className}` +
-        (hasActiveCanvasFilter ? " filter-match" : ""),
-    }, gTasks);
+      class: `task-node ${statusClass(t.status)}` +
+        (hasActiveCanvasFilter && filterMatchedTaskIds.has(t.id) ? " filter-match" : ""),
+    }, item);
     node.style.fill = statusColor(t.status);
+    drawHealthBadges(healthBadgeItems(health), cx, y, nodeHalfSize, item);
     state.canvasTaskPositions.set(t.id, { x: cx, y });
     node.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1353,10 +1527,15 @@ function renderCanvas() {
       `闭环目标：${t.goal || "—"}\n下一步：${t.next_action || "—"}\n风险原因：${t.risk_reason || "—"}`;
 
     const parts1 = [], parts2 = [];
-    if (state.show.name) parts1.push(t.name);
-    if (state.show.status) parts2.push(t.status);
-    if (state.show.dur) parts2.push(fmtDays(daysBetween(t.status_since, state.today)));
-    if (state.show.owner && t.owner) parts2.push("@" + t.owner);
+    if (density !== "overview" && state.show.name) parts1.push(t.name);
+    if (density !== "overview" && state.show.status) parts2.push(t.status);
+    if (density === "detail" && state.show.dur) {
+      parts2.push(fmtDays(daysBetween(t.status_since, state.today)));
+    }
+    if (density === "detail" && state.show.owner && t.owner) parts2.push("@" + t.owner);
+    if (density === "detail" && state.show.date) {
+      parts2.push(`${t.start_date.slice(5)}→${(t.end_date || t.start_date).slice(5)}`);
+    }
 
     if (labelRight) {
       /* 展开的簇成员：标签横排在节点右侧 */
@@ -1365,7 +1544,7 @@ function renderCanvas() {
         const e = svgEl("text", {
           x: cx + 12, y: y + 4, "text-anchor": "start",
           class: "task-label " + (parts1.length ? "t-name" : "t-meta"),
-        }, gTasks);
+        }, item);
         e.textContent = text;
       }
     } else {
@@ -1377,7 +1556,7 @@ function renderCanvas() {
       if (parts1.length) {
         const e = svgEl("text", {
           x: cx, y: ty, "text-anchor": "middle", class: "task-label t-name",
-        }, gTasks);
+        }, item);
         e.textContent = parts1.join(" ");
         ty += 13;
       }
@@ -1386,9 +1565,16 @@ function renderCanvas() {
           x: cx, y: parts1.length ? ty :
             (above ? y - 13 - laneOffset : y + 22 + laneOffset),
           "text-anchor": "middle", class: "task-label t-meta",
-        }, gTasks);
+        }, item);
         e.textContent = parts2.join(" · ");
       }
+    }
+    if (selectedTask && density === "detail") {
+      const hint = svgEl("text", {
+        x: cx, y: y + nodeHalfSize + 34, "text-anchor": "middle",
+        class: "task-action-hint",
+      }, item);
+      hint.textContent = "拖拽连线 · 双击编辑";
     }
   };
 
@@ -1418,27 +1604,34 @@ function renderCanvas() {
       /* ---- 折叠态：一个聚合节点，颜色 = 最不成熟的状态 ---- */
       const st = leastMatureStatus(arr);
       const hs = arr.map(taskHealth);
-      const clusterHealth = hs.some((h) => h.overdue) ? "health-overdue" :
-        (hs.some((h) => h.soon) ? "health-soon" :
-          (hs.some((h) => h.stale) ? "health-stale" : ""));
-      const g = svgEl("g", { class: "cluster-node" }, gTasks);
+      const clusterHealth = {
+        overdue: hs.some((h) => h.overdue),
+        soon: hs.some((h) => h.soon),
+        risk: hs.some((h) => h.risk),
+        stale: hs.some((h) => h.stale),
+      };
+      const g = svgEl("g", {
+        class: `cluster-node${taskFocusClass(arr.map((task) => task.id))}`,
+      }, gTasks);
+      const clusterMatchesFilter = arr.some((task) => filterMatchedTaskIds.has(task.id));
       for (const task of arr) {
         state.canvasTaskPositions.set(task.id, { x: cx, y: baseY });
       }
       /* 底层错位圆角正方形暗示"这是一叠节点" */
       const backNode = svgEl("rect", {
         ...roundedSquareAttrs(cx + 3, baseY + 3, 13),
-        class: `task-node ${statusClass(st)} ${clusterHealth}` +
-          (hasActiveCanvasFilter ? " filter-match" : ""),
+        class: `task-node ${statusClass(st)}` +
+          (hasActiveCanvasFilter && clusterMatchesFilter ? " filter-match" : ""),
         opacity: .35,
       }, g);
       const node = svgEl("rect", {
         ...roundedSquareAttrs(cx, baseY, 13),
-        class: `task-node ${statusClass(st)} ${clusterHealth}` +
-          (hasActiveCanvasFilter ? " filter-match" : ""),
+        class: `task-node ${statusClass(st)}` +
+          (hasActiveCanvasFilter && clusterMatchesFilter ? " filter-match" : ""),
       }, g);
       backNode.style.fill = statusColor(st);
       node.style.fill = statusColor(st);
+      drawHealthBadges(healthBadgeItems(clusterHealth), cx, baseY, 13, g);
       /* 数量徽标 */
       const badge = svgEl("text", {
         x: cx, y: baseY + 3.5, "text-anchor": "middle", class: "cluster-count",
@@ -1459,12 +1652,12 @@ function renderCanvas() {
 
       /* 折叠态标签：显示"N项"及最不成熟状态 */
       const parts = [];
-      if (state.show.name) parts.push(`${arr.length}项事务`);
-      if (state.show.status) parts.push(st);
+      if (density !== "overview" && state.show.name) parts.push(`${arr.length}项事务`);
+      if (density !== "overview" && state.show.status) parts.push(st);
       if (parts.length) {
         const e = svgEl("text", {
           x: cx, y: baseY - 18, "text-anchor": "middle", class: "task-label t-name",
-        }, gTasks);
+        }, g);
         e.textContent = parts.join(" · ");
       }
     } else {
@@ -1498,6 +1691,53 @@ function renderCanvas() {
     }
   }
 
+  if (density === "overview") {
+    const summaries = svgEl("g", { class: "line-task-summaries" }, root);
+    const unit = 1 / z;
+    for (const line of visibleLines) {
+      const lineTasks = canvasTasks.filter((task) => task.line_id === line.id);
+      if (!lineTasks.length) continue;
+      const health = lineTasks.map(taskHealth);
+      const riskCount = health.filter((item) => item.risk).length;
+      const overdueCount = health.filter((item) => item.overdue).length;
+      const soonCount = health.filter((item) => item.soon).length;
+      const summaryParts = [`${lineTasks.length}项`];
+      if (riskCount) summaryParts.push(`风险${riskCount}`);
+      if (overdueCount) summaryParts.push(`超期${overdueCount}`);
+      else if (soonCount) summaryParts.push(`近期${soonCount}`);
+      const summaryText = summaryParts.join(" · ");
+      const summaryWidth = (summaryText.length * 8 + 14) * unit;
+      const summaryHeight = 18 * unit;
+      const summaryX = lineGeometry(line).horizontalStart.x + 10 * unit;
+      const summaryY = lineY(line.id) - summaryHeight - 5 * unit;
+      const group = svgEl("g", {
+        class: "line-task-summary", role: "button", tabindex: 0,
+        "aria-label": `${line.name}：${summaryText}`,
+      }, summaries);
+      svgEl("rect", {
+        x: summaryX, y: summaryY, width: summaryWidth, height: summaryHeight,
+        rx: 5 * unit,
+      }, group);
+      const label = svgEl("text", {
+        x: summaryX + 7 * unit, y: summaryY + 12.5 * unit,
+        "font-size": 9 * unit,
+      }, group);
+      label.textContent = summaryText;
+      const selectLine = () => {
+        state.selectedLineId = line.id;
+        state.selectedTaskId = null;
+        render();
+      };
+      group.addEventListener("click", selectLine);
+      group.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          selectLine();
+        }
+      });
+    }
+  }
+
   const dependencySegment = (from, to) => {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
@@ -1510,7 +1750,8 @@ function renderCanvas() {
       x2: to.x - ux * 10, y2: to.y - uy * 10,
     };
   };
-  for (const dependency of state.dependencies) {
+  const showDependencies = density === "detail" || Boolean(dependencyFocus);
+  for (const dependency of showDependencies ? state.dependencies : []) {
     const from = state.canvasTaskPositions.get(dependency.dependent_task_id);
     const to = state.canvasTaskPositions.get(dependency.prerequisite_task_id);
     if (!from || !to) continue;
@@ -1518,8 +1759,17 @@ function renderCanvas() {
     if (!segment) continue;
     const dependent = taskById(dependency.dependent_task_id);
     const prerequisite = taskById(dependency.prerequisite_task_id);
+    const focusRelated = dependencyFocus &&
+      dependencyFocus.related.has(dependency.dependent_task_id) &&
+      dependencyFocus.related.has(dependency.prerequisite_task_id);
+    const focusBlocking = dependencyFocus &&
+      dependency.dependent_task_id === dependencyFocus.selected.id &&
+      !isDone(prerequisite);
     const path = svgEl("line", {
-      ...segment, class: "dependency-line",
+      ...segment,
+      class: "dependency-line" +
+        (dependencyFocus ? (focusRelated ? " focus-related" : " focus-dimmed") : "") +
+        (focusBlocking ? " focus-blocking" : ""),
       "marker-end": `url(#${dependencyMarkerFor(prerequisite)})`,
     }, gDependencies);
     path.style.stroke = statusColor(prerequisite.status);
@@ -3380,7 +3630,8 @@ $("#btn-toggle-children").onclick = () => {
 
 /* 画布显示开关 */
 const SHOW_OPTS = [["#opt-name", "name"], ["#opt-status", "status"],
-                   ["#opt-dur", "dur"], ["#opt-owner", "owner"]];
+                   ["#opt-dur", "dur"], ["#opt-owner", "owner"],
+                   ["#opt-date", "date"]];
 for (const [id, key] of SHOW_OPTS) {
   $(id).onchange = (e) => {
     state.show[key] = e.target.checked;
@@ -3405,6 +3656,11 @@ $("#btn-toggle-labels").onclick = () => {
   updateToggleLabelsBtn();
   savePrefs();
   renderCanvas();
+};
+
+$("#btn-clear-dependency-focus").onclick = () => {
+  state.selectedTaskId = null;
+  render();
 };
 
 /* ---- 画布缩放 (Ctrl+滚轮) 与拖拽平移 (左键长按) ---- */

@@ -238,6 +238,43 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('const node = svgEl("rect", {', source)
         self.assertNotIn("trianglePoints(", source)
 
+    def test_canvas_dependency_focus_visual_encoding_and_semantic_zoom(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        markup = body.decode("utf-8")
+        for element_id in (
+            "canvas-density-label", "dependency-focus-panel",
+            "dependency-focus-blockers", "dependency-focus-affected",
+            "canvas-legend", "canvas-status-legend", "opt-date",
+        ):
+            with self.subTest(element_id=element_id):
+                self.assertIn(f'id="{element_id}"', markup)
+
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn("function taskDependencyFocus(taskId)", source)
+        self.assertIn("const upstream = collect(taskId, prerequisitesByTask)", source)
+        self.assertIn("const downstream = collect(taskId, dependentsByTask)", source)
+        self.assertIn("is-focus-dimmed", source)
+        self.assertIn("healthBadgeItems", source)
+        self.assertIn("CANVAS_OVERVIEW_MAX_ZOOM = 0.7", source)
+        self.assertIn("CANVAS_DETAIL_MIN_ZOOM = 1.5", source)
+        self.assertIn('class: "line-task-summary"', source)
+        self.assertIn('density === "detail" || Boolean(dependencyFocus)', source)
+        self.assertIn('["#opt-date", "date"]', source)
+
+        status, body = self.request("GET", "/static/style.css")
+        self.assertEqual(status, 200)
+        styles = body.decode("utf-8")
+        self.assertIn(".task-node { stroke: none;", styles)
+        self.assertIn(".task-item.is-focus-selected .task-node", styles)
+        self.assertIn(".task-item.is-focus-upstream .task-node", styles)
+        self.assertIn(".task-item.is-focus-downstream .task-node", styles)
+        self.assertIn(".task-alert-overdue circle", styles)
+        self.assertIn(".task-layer.semantic-overview", styles)
+        self.assertNotIn(".task-node.health-overdue", styles)
+
     def test_authentication_is_required(self):
         self.cookie = None
         status, data = self.request("GET", "/api/state")

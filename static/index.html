@@ -157,11 +157,46 @@
     <button id="btn-today" title="滚动到今天所在位置">聚焦今天</button>
     <button id="btn-fit" title="重置缩放并回到画布左上">适应画布</button>
     <button id="btn-toggle-children" disabled title="折叠或展开选中线的子支线">折叠子支线</button>
+    <div class="canvas-density" aria-live="polite">
+      <span>信息密度</span><strong id="canvas-density-label">标准</strong>
+    </div>
     <label><input type="checkbox" id="opt-name" checked> 事务名</label>
     <label><input type="checkbox" id="opt-status" checked> 进展状态</label>
     <label><input type="checkbox" id="opt-dur" checked> 状态停留时长</label>
     <label><input type="checkbox" id="opt-owner" checked> 责任人</label>
-    <div class="opt-hint">单击线选中，双击节点编辑事务；同天多事务默认折叠，点击带数字的节点展开/折叠</div>
+    <label><input type="checkbox" id="opt-date" checked> 起止日期</label>
+    <div class="opt-hint">缩小为线路概览，标准倍率显示名称和状态，放大后显示完整信息与依赖；单击事务可聚焦依赖链</div>
+    <section id="dependency-focus-panel" class="hidden" aria-labelledby="dependency-focus-title">
+      <div class="dependency-focus-heading">
+        <div id="dependency-focus-title" class="opt-title">依赖聚焦</div>
+        <button id="btn-clear-dependency-focus" type="button" title="退出依赖聚焦"
+                aria-label="退出依赖聚焦">×</button>
+      </div>
+      <strong id="dependency-focus-task"></strong>
+      <div id="dependency-focus-stats"></div>
+      <div class="dependency-focus-group">
+        <span>当前阻塞</span>
+        <div id="dependency-focus-blockers" class="dependency-focus-tasks"></div>
+      </div>
+      <div class="dependency-focus-group">
+        <span>直接影响</span>
+        <div id="dependency-focus-affected" class="dependency-focus-tasks"></div>
+      </div>
+    </section>
+    <details id="canvas-legend">
+      <summary>画布图例</summary>
+      <div class="canvas-legend-content">
+        <div id="canvas-status-legend"></div>
+        <div class="canvas-legend-row"><i class="legend-focus-selected"></i><span>当前事务</span></div>
+        <div class="canvas-legend-row"><i class="legend-focus-upstream"></i><span>前置链</span></div>
+        <div class="canvas-legend-row"><i class="legend-focus-downstream"></i><span>影响链</span></div>
+        <div class="canvas-legend-row"><i class="legend-alert legend-alert-overdue">!</i><span>超期</span></div>
+        <div class="canvas-legend-row"><i class="legend-alert legend-alert-risk">险</i><span>风险</span></div>
+        <div class="canvas-legend-row"><i class="legend-alert legend-alert-soon">期</i><span>即将到期</span></div>
+        <div class="canvas-legend-row"><i class="legend-alert legend-alert-stale">久</i><span>状态停留过久</span></div>
+        <div class="canvas-legend-row"><i class="legend-dependency"></i><span>箭头指向前置事务</span></div>
+      </div>
+    </details>
     <section id="canvas-shortcuts" aria-labelledby="canvas-shortcuts-title">
       <div id="canvas-shortcuts-title" class="opt-title">画布快捷键</div>
       <dl class="shortcut-list">
