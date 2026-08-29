@@ -114,6 +114,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn(b"AnyLine", body)
         self.assertIn(b'id="workspace-select"', body)
+        self.assertIn(b'id="btn-view-dashboard"', body)
+        self.assertIn(b'id="dashboard-view"', body)
         self.assertNotIn(b'id="btn-workspace-create"', body)
         self.assertNotIn(b'id="btn-delete-line"', body)
         self.assertNotIn(b'id="btn-undo"', body)

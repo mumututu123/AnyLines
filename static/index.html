@@ -23,6 +23,7 @@
   <select id="workspace-select" title="切换项目空间或新建空间" aria-label="项目空间"></select>
 
   <nav id="view-switch">
+    <button id="btn-view-dashboard" class="view-btn">看板</button>
     <button id="btn-view-canvas" class="view-btn active">画布视图</button>
     <button id="btn-view-table" class="view-btn">表格视图</button>
   </nav>
@@ -97,6 +98,45 @@
     <button id="btn-clear-filters">清空</button>
   </div>
 </section>
+
+<!-- 项目看板 -->
+<main id="dashboard-view" class="app-surface hidden">
+  <div class="dashboard-heading">
+    <div>
+      <h1>项目看板</h1>
+      <p id="dashboard-workspace-name"></p>
+    </div>
+    <span id="dashboard-updated" class="dashboard-updated"></span>
+  </div>
+
+  <section class="dashboard-section" aria-labelledby="dashboard-overview-title">
+    <h2 id="dashboard-overview-title">项目概览</h2>
+    <div id="dashboard-overview" class="dashboard-overview"></div>
+  </section>
+
+  <div class="dashboard-grid">
+    <section class="dashboard-section" aria-labelledby="dashboard-status-title">
+      <div class="dashboard-section-heading">
+        <h2 id="dashboard-status-title">事务状态分布</h2>
+        <span id="dashboard-status-total"></span>
+      </div>
+      <div id="dashboard-statuses" class="dashboard-statuses"></div>
+    </section>
+
+    <section class="dashboard-section" aria-labelledby="dashboard-alert-title">
+      <h2 id="dashboard-alert-title">重点关注</h2>
+      <div id="dashboard-alerts" class="dashboard-alerts"></div>
+    </section>
+  </div>
+
+  <section class="dashboard-section" aria-labelledby="dashboard-owner-title">
+    <div class="dashboard-section-heading">
+      <h2 id="dashboard-owner-title">责任人事务状态分布</h2>
+      <span>单击数字查看事务</span>
+    </div>
+    <div id="dashboard-owners" class="dashboard-owner-table-wrap"></div>
+  </section>
+</main>
 
 <!-- 画布视图 -->
 <main id="canvas-view" class="app-surface hidden">

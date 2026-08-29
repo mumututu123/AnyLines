@@ -1,4 +1,4 @@
-/* AnyLine 前端逻辑：画布视图 + 表格视图 */
+/* AnyLine 前端逻辑：看板 + 画布视图 + 表格视图 */
 "use strict";
 
 const $ = (sel) => document.querySelector(sel);
@@ -61,7 +61,7 @@ function loadPrefs() {
         if (typeof p.show[k] === "boolean") state.show[k] = p.show[k];
       }
     }
-    if (p.view === "canvas" || p.view === "table") state.view = p.view;
+    if (["dashboard", "canvas", "table"].includes(p.view)) state.view = p.view;
     if (typeof p.zoom === "number" && p.zoom >= 0.25 && p.zoom <= 4) {
       state.zoom = p.zoom;
     }
@@ -347,7 +347,8 @@ async function reload() {
 function render() {
   renderToolbar();
   renderSummary();
-  if (state.view === "canvas") renderCanvas();
+  if (state.view === "dashboard") renderDashboard();
+  else if (state.view === "canvas") renderCanvas();
   else renderTable();
 }
 
@@ -421,6 +422,267 @@ function renderSummary() {
   for (const btn of document.querySelectorAll(".summary-card")) {
     btn.classList.toggle("active", btn.dataset.quick === state.quickFilter);
   }
+}
+
+/* ============================================================== 项目看板 */
+function dashboardStatuses() {
+  const statuses = [...state.statusEnum];
+  for (const task of state.tasks) {
+    if (task.status && !statuses.includes(task.status)) statuses.push(task.status);
+  }
+  return statuses;
+}
+
+function dashboardStatButton(label, value, tasks, className = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `dashboard-stat-button ${className}`.trim();
+  button.setAttribute("aria-label", `${label}，${value} 个事务，查看详情`);
+
+  const number = document.createElement("strong");
+  number.textContent = value;
+  const text = document.createElement("span");
+  text.textContent = label;
+  button.appendChild(number);
+  button.appendChild(text);
+  button.onclick = () => openTaskListModal(label, tasks);
+  return button;
+}
+
+function renderDashboard() {
+  const mainLines = state.lines.filter((line) => line.parent_id === null);
+  const branchLines = state.lines.filter((line) => line.parent_id !== null);
+  const statuses = dashboardStatuses();
+  const owners = ownerOptions();
+
+  $("#dashboard-workspace-name").textContent = state.currentWorkspace?.name || "当前项目空间";
+  $("#dashboard-updated").textContent = state.today ? `数据截至 ${state.today}` : "";
+
+  const overview = $("#dashboard-overview");
+  overview.innerHTML = "";
+  const overviewItems = [
+    ["主线", mainLines.length, "项目一级推进路径"],
+    ["支线", branchLines.length, "从主线或支线分出的路径"],
+  ];
+  for (const [label, value, description] of overviewItems) {
+    const item = document.createElement("div");
+    item.className = "dashboard-overview-item";
+    const number = document.createElement("strong");
+    number.textContent = value;
+    const name = document.createElement("span");
+    name.textContent = label;
+    const detail = document.createElement("small");
+    detail.textContent = description;
+    item.append(number, name, detail);
+    overview.appendChild(item);
+  }
+  const taskOverview = document.createElement("div");
+  taskOverview.className = "dashboard-overview-item dashboard-overview-action";
+  taskOverview.appendChild(dashboardStatButton("全部事务", state.tasks.length, state.tasks));
+  const taskDetail = document.createElement("small");
+  taskDetail.textContent = "单击查看当前空间全部事务";
+  taskOverview.appendChild(taskDetail);
+  overview.appendChild(taskOverview);
+
+  const ownerOverview = document.createElement("div");
+  ownerOverview.className = "dashboard-overview-item";
+  const ownerNumber = document.createElement("strong");
+  ownerNumber.textContent = owners.length;
+  const ownerLabel = document.createElement("span");
+  ownerLabel.textContent = "责任人";
+  const ownerDetail = document.createElement("small");
+  ownerDetail.textContent = "名单及事务中出现的责任人";
+  ownerOverview.append(ownerNumber, ownerLabel, ownerDetail);
+  overview.appendChild(ownerOverview);
+
+  $("#dashboard-status-total").textContent = `共 ${state.tasks.length} 个事务`;
+  const statusList = $("#dashboard-statuses");
+  statusList.innerHTML = "";
+  for (const status of statuses) {
+    const tasks = state.tasks.filter((task) => task.status === status);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "dashboard-status-row";
+    button.setAttribute("aria-label", `${status}，${tasks.length} 个事务，查看详情`);
+    button.onclick = () => openTaskListModal(status, tasks);
+
+    const label = document.createElement("span");
+    label.className = "dashboard-status-label";
+    const dot = document.createElement("i");
+    dot.style.backgroundColor = statusColor(status);
+    const name = document.createElement("span");
+    name.textContent = status;
+    label.append(dot, name);
+
+    const track = document.createElement("span");
+    track.className = "dashboard-status-track";
+    const fill = document.createElement("span");
+    fill.style.backgroundColor = statusColor(status);
+    fill.style.width = `${state.tasks.length ? (tasks.length / state.tasks.length) * 100 : 0}%`;
+    track.appendChild(fill);
+
+    const count = document.createElement("strong");
+    count.textContent = tasks.length;
+    button.append(label, track, count);
+    statusList.appendChild(button);
+  }
+  if (!statuses.length) {
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty";
+    empty.textContent = "暂无状态配置";
+    statusList.appendChild(empty);
+  }
+
+  const unownedTasks = state.tasks.filter((task) => !task.owner || !task.owner.trim());
+  const riskTasks = state.tasks.filter((task) => taskHealth(task).risk);
+  const overdueTasks = state.tasks.filter((task) => taskHealth(task).overdue);
+  const alerts = $("#dashboard-alerts");
+  alerts.innerHTML = "";
+  alerts.append(
+    dashboardStatButton("无主事务", unownedTasks.length, unownedTasks, "dashboard-alert-stat"),
+    dashboardStatButton("风险事务", riskTasks.length, riskTasks, "dashboard-alert-stat"),
+    dashboardStatButton("超期事务", overdueTasks.length, overdueTasks, "dashboard-alert-stat")
+  );
+
+  renderDashboardOwners(statuses, owners, unownedTasks);
+}
+
+function renderDashboardOwners(statuses, owners, unownedTasks) {
+  const wrap = $("#dashboard-owners");
+  wrap.innerHTML = "";
+  const table = document.createElement("table");
+  table.className = "dashboard-owner-table";
+  const thead = document.createElement("thead");
+  const header = document.createElement("tr");
+  for (const title of ["责任人", "合计", ...statuses]) {
+    const th = document.createElement("th");
+    th.textContent = title;
+    header.appendChild(th);
+  }
+  thead.appendChild(header);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  const ownerRows = owners.map((owner) => ({
+    owner,
+    tasks: state.tasks.filter((task) => task.owner === owner),
+  }));
+  if (unownedTasks.length) ownerRows.push({ owner: "无主", tasks: unownedTasks, alert: true });
+
+  for (const row of ownerRows) {
+    const tr = document.createElement("tr");
+    if (row.alert) tr.className = "dashboard-owner-alert";
+    const ownerCell = document.createElement("th");
+    ownerCell.scope = "row";
+    ownerCell.textContent = row.owner;
+    tr.appendChild(ownerCell);
+
+    const totalCell = document.createElement("td");
+    totalCell.appendChild(dashboardTableCount(row.tasks.length, `${row.owner}的全部事务`, row.tasks));
+    tr.appendChild(totalCell);
+    for (const status of statuses) {
+      const tasks = row.tasks.filter((task) => task.status === status);
+      const cell = document.createElement("td");
+      const count = dashboardTableCount(tasks.length, `${row.owner} · ${status}`, tasks);
+      count.style.setProperty("--status-color", statusColor(status));
+      count.classList.add("status-count");
+      cell.appendChild(count);
+      tr.appendChild(cell);
+    }
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+
+  if (!ownerRows.length) {
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty dashboard-owner-empty";
+    empty.textContent = "暂无责任人和事务";
+    wrap.appendChild(empty);
+  }
+}
+
+function dashboardTableCount(value, title, tasks) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "dashboard-table-count";
+  button.textContent = value;
+  button.title = `${title}：${value}`;
+  button.setAttribute("aria-label", `${title}，${value} 个，查看详情`);
+  button.onclick = () => openTaskListModal(title, tasks);
+  return button;
+}
+
+function openTaskListModal(title, tasks) {
+  const taskList = [...tasks].sort(compareTasks);
+  openModal(`${title}（${taskList.length}）`, (body) => {
+    $("#modal").classList.add("modal-wide", "task-list-modal");
+    $("#modal-ok").classList.add("hidden");
+    $("#modal-cancel").textContent = "关闭";
+
+    if (!taskList.length) {
+      const empty = document.createElement("div");
+      empty.className = "dashboard-empty task-list-empty";
+      empty.textContent = "暂无符合条件的事务";
+      body.appendChild(empty);
+      return;
+    }
+
+    const tableWrap = document.createElement("div");
+    tableWrap.className = "dashboard-task-list-wrap";
+    const table = document.createElement("table");
+    table.className = "dashboard-task-list";
+    const thead = document.createElement("thead");
+    const header = document.createElement("tr");
+    for (const titleText of ["事务", "所属线", "责任人", "状态", "结束日期", "提示"]) {
+      const th = document.createElement("th");
+      th.textContent = titleText;
+      header.appendChild(th);
+    }
+    thead.appendChild(header);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const task of taskList) {
+      const row = document.createElement("tr");
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-label", `编辑事务 ${task.name}`);
+      const openEditor = () => openTaskModal(task);
+      row.onclick = openEditor;
+      row.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openEditor();
+        }
+      };
+
+      const health = taskHealth(task);
+      const values = [
+        task.name,
+        lineById(task.line_id)?.name || "—",
+        task.owner || "无主",
+        task.status,
+        task.end_date || "—",
+        health.labels.map(([label]) => label).join("、") || "—",
+      ];
+      values.forEach((value, index) => {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        if (index === 0) cell.className = "dashboard-task-name";
+        if (index === 3) {
+          cell.classList.add("dashboard-task-status");
+          cell.style.color = statusColor(task.status);
+        }
+        if (index === 5 && (health.overdue || health.risk)) cell.className = "dashboard-task-alert";
+        row.appendChild(cell);
+      });
+      tbody.appendChild(row);
+    }
+    table.appendChild(tbody);
+    tableWrap.appendChild(table);
+    body.appendChild(tableWrap);
+  }, async () => true);
 }
 
 /* ============================================================== 画布视图 */
@@ -1394,8 +1656,10 @@ function centerCanvasPoint(x, y = null) {
 /* ============================================================== 弹窗 */
 function openModal(title, bodyBuilder, onOk) {
   $("#modal-title").textContent = title;
-  $("#modal").classList.remove("modal-wide");
+  $("#modal").classList.remove("modal-wide", "task-list-modal");
   $("#modal-ok").textContent = "确定";
+  $("#modal-ok").classList.remove("hidden");
+  $("#modal-cancel").textContent = "取消";
   const body = $("#modal-body");
   body.innerHTML = "";
   $("#modal-header-tools").innerHTML = "";
@@ -2098,14 +2362,18 @@ $("#btn-logout").onclick = async () => {
 
 function switchView(v) {
   state.view = v;
+  $("#btn-view-dashboard").classList.toggle("active", v === "dashboard");
   $("#btn-view-canvas").classList.toggle("active", v === "canvas");
   $("#btn-view-table").classList.toggle("active", v === "table");
+  $("#dashboard-view").classList.toggle("hidden", v !== "dashboard");
   $("#canvas-view").classList.toggle("hidden", v !== "canvas");
   $("#table-view").classList.toggle("hidden", v !== "table");
+  $("#workbench").classList.toggle("hidden", v === "dashboard");
   savePrefs();
   render();
 }
 
+$("#btn-view-dashboard").onclick = () => switchView("dashboard");
 $("#btn-view-canvas").onclick = () => switchView("canvas");
 $("#btn-view-table").onclick = () => switchView("table");
 
