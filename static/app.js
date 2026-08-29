@@ -1321,7 +1321,6 @@ function renderCanvas() {
     const title = svgEl("title", {}, node);
     title.textContent =
       `${t.name}\n状态：${t.status}\n责任人：${t.owner || "—"}\n` +
-      `优先级：${t.priority || "中"}\n` +
       `${t.start_date} ~ ${t.end_date || "…"}\n内容：${t.content || "—"}\n` +
       `闭环目标：${t.goal || "—"}\n下一步：${t.next_action || "—"}\n风险原因：${t.risk_reason || "—"}`;
 
@@ -1330,7 +1329,6 @@ function renderCanvas() {
     if (state.show.status) parts2.push(t.status);
     if (state.show.dur) parts2.push(fmtDays(daysBetween(t.status_since, state.today)));
     if (state.show.owner && t.owner) parts2.push("@" + t.owner);
-    if (t.priority === "高" || t.priority === "紧急") parts2.push(t.priority);
 
     if (labelRight) {
       /* 展开的簇成员：标签横排在节点右侧 */
