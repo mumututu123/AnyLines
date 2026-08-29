@@ -523,6 +523,20 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 400, data)
         self.assertIn("结束日期不能为空", data["error"])
 
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "start_date": "",
+        })
+        self.assertEqual(status, 400, data)
+        self.assertIn("起始日期不能为空", data["error"])
+
+        with sqlite3.connect(anyline.app.config["DATABASE"]) as db:
+            db.execute("UPDATE tasks SET end_date=NULL WHERE id=?", (task_id,))
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "name": "历史事务也必须补齐日期",
+        })
+        self.assertEqual(status, 400, data)
+        self.assertIn("结束日期不能为空", data["error"])
+
         updated_end = (self.today + timedelta(days=10)).isoformat()
         status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
             "name": "更新事务", "status": "已闭环", "end_date": updated_end,
@@ -765,6 +779,15 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('field(parent, "依赖事务（可多选）", wrapper)', source)
         self.assertIn('moreSummary.textContent = "更多描述"', source)
         self.assertIn('mark.className = "required-mark"', source)
+        self.assertIn(
+            'input("date", task ? task.start_date : initialStart), true)', source
+        )
+        self.assertIn(
+            'input("date", task ? (task.end_date || "") : initialStart), true)', source
+        )
+        self.assertIn(
+            '["起始日期", body._start], ["结束日期", body._end]', source
+        )
         self.assertIn('$("#modal-header-tools").appendChild(del)', source)
         self.assertIn('$("#modal-mask").onclick = (event) => {', source)
         self.assertIn('event.target === event.currentTarget', source)
@@ -776,6 +799,34 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 400, data)
         self.assertIn("责任人不能为空", data["error"])
+
+    def test_table_line_dropdown_only_uses_main_and_branch_lines(self):
+        main_id = self.create_line("产品主线")
+        branch_id = self.create_line("交付支线", parent_id=main_id)
+        self.create_task(main_id, "不应出现在所属线下拉中的事务")
+
+        status, state = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            {line["name"] for line in state["lines"]}, {"产品主线", "交付支线"}
+        )
+        self.assertNotIn(
+            state["tasks"][0]["name"], {line["name"] for line in state["lines"]}
+        )
+
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        helper_start = source.index("function tableLineOptions()")
+        helper_end = source.index("\n}\n", helper_start) + 3
+        helper_source = source[helper_start:helper_end]
+        self.assertIn("state.lines", helper_source)
+        self.assertNotIn("state.tasks", helper_source)
+        self.assertIn("line.parent_id === null", helper_source)
+        self.assertIn("candidateIds.has(line.parent_id)", helper_source)
+        self.assertIn("const lineOptions = tableLineOptions()", source)
+        self.assertIn("for (const l of lineOptions)", source)
+        self.assertIn("o.textContent = lineOptionLabel(l, lineOptions)", source)
 
     def test_task_content_images_are_persisted_served_and_undoable(self):
         line_id = self.create_line()

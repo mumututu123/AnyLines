@@ -2528,6 +2528,8 @@ def update_task(tid):
     required_id(new_line_id, "line_id")
     if not new_start:
         return jsonify({"error": "起始日期不能为空"}), 400
+    if not new_end:
+        return jsonify({"error": "结束日期不能为空"}), 400
     try:
         validate_date_range(new_start, new_end)
     except ValueError as e:

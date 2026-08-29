@@ -1558,6 +1558,26 @@ function makeInspectableCell(cell, control) {
   });
 }
 
+function tableLineOptions() {
+  const candidates = state.lines.filter((line) =>
+    Number.isInteger(line?.id) &&
+    typeof line.name === "string" && line.name.trim() &&
+    typeof line.fork_date === "string" &&
+    (line.parent_id === null || Number.isInteger(line.parent_id))
+  );
+  const candidateIds = new Set(candidates.map((line) => line.id));
+  const rows = assignRows(true);
+  return candidates
+    .filter((line) =>
+      (line.parent_id === null ||
+        candidateIds.has(line.parent_id))
+    )
+    .sort((a, b) =>
+      (rows.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+        (rows.get(b.id) ?? Number.MAX_SAFE_INTEGER) || a.id - b.id
+    );
+}
+
 $("#cell-preview-close").onclick = closeTableCellPreview;
 $("#table-wrap").addEventListener("scroll", closeTableCellPreview);
 window.addEventListener("resize", closeTableCellPreview);
@@ -1635,10 +1655,12 @@ function renderTable() {
     /* 线名（下拉切换所属线） */
     const tdLine = document.createElement("td");
     const selLine = document.createElement("select");
-    for (const l of state.lines) {
+    selLine.setAttribute("aria-label", `设置事务“${t.name}”的所属主线或支线`);
+    const lineOptions = tableLineOptions();
+    for (const l of lineOptions) {
       const o = document.createElement("option");
       o.value = l.id;
-      o.textContent = l.name;
+      o.textContent = lineOptionLabel(l, lineOptions);
       if (l.id === t.line_id) o.selected = true;
       selLine.appendChild(o);
     }
@@ -1938,14 +1960,15 @@ function openLineModal(line, parentId = null) {
   );
 }
 
-function lineOptionLabel(line) {
+function lineOptionLabel(line, lines = state.lines) {
+  const linesById = new Map(lines.map((candidate) => [candidate.id, candidate]));
   const names = [line.name];
-  let parent = line.parent_id !== null ? lineById(line.parent_id) : null;
+  let parent = line.parent_id !== null ? linesById.get(line.parent_id) : null;
   const visited = new Set([line.id]);
   while (parent && !visited.has(parent.id)) {
     names.unshift(parent.name);
     visited.add(parent.id);
-    parent = parent.parent_id !== null ? lineById(parent.parent_id) : null;
+    parent = parent.parent_id !== null ? linesById.get(parent.parent_id) : null;
   }
   return `${line.parent_id === null ? "主线" : "支线"} · ${names.join(" / ")}`;
 }
