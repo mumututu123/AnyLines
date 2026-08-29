@@ -22,6 +22,7 @@ const state = {
   filters: { q: "", line: "", owner: "", status: "", priority: "", due: "" },
   quickFilter: "",
   sort: "start_asc",
+  taskCreateDrafts: new Map(),
 };
 
 const SOON_DAYS = 7;
@@ -172,6 +173,7 @@ function showLoggedOut() {
   state.user = null;
   state.workspaces = [];
   state.currentWorkspace = null;
+  state.taskCreateDrafts.clear();
   $("#modal-mask").classList.add("hidden");
   $("#login-password").value = "";
   $("#login-username").focus();
@@ -1833,7 +1835,7 @@ function centerCanvasPoint(x, y = null) {
 }
 
 /* ============================================================== 弹窗 */
-function openModal(title, bodyBuilder, onOk) {
+function openModal(title, bodyBuilder, onOk, options = {}) {
   $("#modal-title").textContent = title;
   $("#modal").classList.remove("modal-wide", "task-list-modal");
   $("#modal-ok").textContent = "确定";
@@ -1844,9 +1846,17 @@ function openModal(title, bodyBuilder, onOk) {
   $("#modal-header-tools").innerHTML = "";
   $("#modal-tools").innerHTML = "";
   bodyBuilder(body);
-  $("#modal-mask").classList.remove("hidden");
-  const close = () => $("#modal-mask").classList.add("hidden");
-  $("#modal-cancel").onclick = close;
+  const mask = $("#modal-mask");
+  mask._onBackdropClose = options.onBackdropClose || null;
+  mask.classList.remove("hidden");
+  const close = () => {
+    mask.classList.add("hidden");
+    mask._onBackdropClose = null;
+  };
+  $("#modal-cancel").onclick = () => {
+    if (options.onCancel) options.onCancel();
+    close();
+  };
   $("#modal-ok").onclick = async () => {
     const ok = $("#modal-ok");
     if (ok.disabled) return;
@@ -1863,7 +1873,10 @@ function openModal(title, bodyBuilder, onOk) {
 
 $("#modal-mask").onclick = (event) => {
   if (event.button === 0 && event.target === event.currentTarget) {
+    const onBackdropClose = event.currentTarget._onBackdropClose;
     event.currentTarget.classList.add("hidden");
+    event.currentTarget._onBackdropClose = null;
+    if (onBackdropClose) onBackdropClose();
   }
 };
 
@@ -2067,11 +2080,63 @@ function openTaskDependenciesModal(task) {
   });
 }
 
-function createTaskContentEditor(body, task) {
+function taskCreateDraftKey(lineId) {
+  const workspaceId = state.currentWorkspace?.id;
+  const normalizedLineId = Number(lineId);
+  return workspaceId && lineById(normalizedLineId) ?
+    `${workspaceId}:${normalizedLineId}` : null;
+}
+
+function taskCreateDraftLineId(body, fallbackLineId) {
+  return body._line ? body._lineChoices.get(body._line.value) : fallbackLineId;
+}
+
+function saveTaskCreateDraft(body, fallbackLineId, openingDraftKey) {
+  const lineId = taskCreateDraftLineId(body, fallbackLineId);
+  const key = taskCreateDraftKey(lineId);
+  if (!key) return;
+  if (openingDraftKey && openingDraftKey !== key) {
+    state.taskCreateDrafts.delete(openingDraftKey);
+  }
+  const prerequisiteIds = selectedDependencyIds(body);
+  const images = body._contentImages || [];
+  const imageReadPromises = body._imageReadPromises || [];
+  state.taskCreateDrafts.set(key, {
+    name: body._name.value,
+    content: body._content.value,
+    owner: body._owner.value,
+    status: body._status.value,
+    startDate: body._start.value,
+    endDate: body._end.value,
+    priority: body._priority.value,
+    prerequisiteIds,
+    goal: body._goal.value,
+    nextAction: body._next.value,
+    riskReason: body._risk.value,
+    images,
+    imageReadPromises,
+    moreOpen: Boolean(body._more?.open),
+  });
+  const hasEnteredContent = [
+    body._name.value, body._content.value, body._goal.value,
+    body._next.value, body._risk.value,
+  ].some((value) => value.trim()) || prerequisiteIds.length > 0 || images.length > 0;
+  if (hasEnteredContent) toast("已暂存当前事务内容");
+}
+
+function discardTaskCreateDraft(body, fallbackLineId, openingDraftKey) {
+  if (openingDraftKey) state.taskCreateDrafts.delete(openingDraftKey);
+  const currentKey = taskCreateDraftKey(
+    taskCreateDraftLineId(body, fallbackLineId)
+  );
+  if (currentKey) state.taskCreateDrafts.delete(currentKey);
+}
+
+function createTaskContentEditor(body, task, draft = null) {
   const editor = document.createElement("div");
   editor.className = "task-content-editor";
   const textarea = document.createElement("textarea");
-  textarea.value = task ? task.content : "";
+  textarea.value = task ? task.content : (draft?.content || "");
   textarea.placeholder = "填写事务内容；可在此直接粘贴图片";
   const hint = document.createElement("div");
   hint.className = "task-content-hint";
@@ -2080,16 +2145,19 @@ function createTaskContentEditor(body, task) {
   gallery.className = "task-image-gallery";
   gallery.setAttribute("aria-live", "polite");
   body._content = textarea;
-  body._contentImages = task ? state.taskImages
+  const contentImages = task ? state.taskImages
     .filter((image) => image.task_id === task.id)
-    .map((image) => ({ id: image.id, src: `/api/task-images/${image.id}` })) : [];
-  body._imageReadPromises = [];
-  body._pendingImageCount = 0;
+    .map((image) => ({ id: image.id, src: `/api/task-images/${image.id}` })) :
+    (draft?.images || []);
+  const imageReadPromises = [...(draft?.imageReadPromises || [])];
+  let pendingImageCount = 0;
+  body._contentImages = contentImages;
+  body._imageReadPromises = imageReadPromises;
 
   const renderImages = () => {
     gallery.innerHTML = "";
-    gallery.hidden = body._contentImages.length === 0;
-    body._contentImages.forEach((image, index) => {
+    gallery.hidden = contentImages.length === 0;
+    contentImages.forEach((image, index) => {
       const item = document.createElement("div");
       item.className = "task-image-item";
       const preview = document.createElement("img");
@@ -2100,7 +2168,7 @@ function createTaskContentEditor(body, task) {
       previewButton.className = "task-image-preview";
       previewButton.title = "放大浏览";
       previewButton.setAttribute("aria-label", `放大浏览事务内容图片 ${index + 1}`);
-      previewButton.onclick = () => openTaskImageViewer(body._contentImages, index, previewButton);
+      previewButton.onclick = () => openTaskImageViewer(contentImages, index, previewButton);
       previewButton.appendChild(preview);
       const remove = document.createElement("button");
       remove.type = "button";
@@ -2109,7 +2177,7 @@ function createTaskContentEditor(body, task) {
       remove.title = "移除图片";
       remove.setAttribute("aria-label", `移除事务内容图片 ${index + 1}`);
       remove.onclick = () => {
-        body._contentImages.splice(index, 1);
+        contentImages.splice(index, 1);
         renderImages();
       };
       item.appendChild(previewButton);
@@ -2127,27 +2195,27 @@ function createTaskContentEditor(body, task) {
       toast("单张事务图片不能超过 5MB");
       return;
     }
-    if (body._contentImages.length + body._pendingImageCount >= MAX_TASK_IMAGES) {
+    if (contentImages.length + pendingImageCount >= MAX_TASK_IMAGES) {
       toast(`每个事务最多可添加 ${MAX_TASK_IMAGES} 张图片`);
       return;
     }
-    body._pendingImageCount += 1;
+    pendingImageCount += 1;
     const pending = new Promise((resolve) => {
       const reader = new FileReader();
       reader.onload = () => {
-        body._pendingImageCount -= 1;
-        body._contentImages.push({ data_url: reader.result });
+        pendingImageCount -= 1;
+        contentImages.push({ data_url: reader.result });
         renderImages();
         resolve();
       };
       reader.onerror = () => {
-        body._pendingImageCount -= 1;
+        pendingImageCount -= 1;
         toast("图片读取失败，请重试");
         resolve();
       };
       reader.readAsDataURL(file);
     });
-    body._imageReadPromises.push(pending);
+    imageReadPromises.push(pending);
   };
 
   textarea.addEventListener("paste", (event) => {
@@ -2163,7 +2231,7 @@ function createTaskContentEditor(body, task) {
       );
     }
     const capacity = Math.max(
-      0, MAX_TASK_IMAGES - body._contentImages.length - body._pendingImageCount
+      0, MAX_TASK_IMAGES - contentImages.length - pendingImageCount
     );
     files.slice(0, capacity).forEach(addImage);
     if (files.length > capacity) {
@@ -2175,6 +2243,9 @@ function createTaskContentEditor(body, task) {
   editor.appendChild(hint);
   editor.appendChild(gallery);
   renderImages();
+  if (imageReadPromises.length) {
+    Promise.all(imageReadPromises).then(renderImages);
+  }
   return editor;
 }
 
@@ -2182,6 +2253,8 @@ function createTaskContentEditor(body, task) {
 function openTaskModal(task, lineId = null, allowLineSelection = false) {
   if (!ensureWorkspaceEditable()) return;
   const isNew = !task;
+  const openingDraftKey = isNew ? taskCreateDraftKey(lineId) : null;
+  const draft = openingDraftKey ? state.taskCreateDrafts.get(openingDraftKey) : null;
   openModal(
     isNew && allowLineSelection ? "新建事务" :
       (isNew ? `新建事务（${lineById(lineId).name}）` : "编辑事务"),
@@ -2224,14 +2297,16 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         body._line = picker;
         body._lineChoices = lineChoices;
       }
-      body._name = field(body, "事务名", input("text", task ? task.name : ""), true);
-      field(body, "事务内容", createTaskContentEditor(body, task), true);
-      body._owner = field(body, "责任人", ownerInput(task ? task.owner : "", true), true);
+      body._name = field(body, "事务名",
+        input("text", task ? task.name : (draft?.name || "")), true);
+      field(body, "事务内容", createTaskContentEditor(body, task, draft), true);
+      body._owner = field(body, "责任人",
+        ownerInput(task ? task.owner : (draft?.owner || ""), true), true);
       const sel = document.createElement("select");
       for (const s of state.statusEnum) {
         const o = document.createElement("option");
         o.value = s; o.textContent = s;
-        if (task && s === task.status) o.selected = true;
+        if (s === (task ? task.status : draft?.status)) o.selected = true;
         sel.appendChild(o);
       }
       decorateStatusSelect(sel);
@@ -2240,12 +2315,15 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
       const initialStart = !task && initialLine && initialLine.fork_date > state.today ?
         initialLine.fork_date : state.today;
       body._start = field(body, "起始日期",
-        input("date", task ? task.start_date : initialStart), true);
+        input("date", task ? task.start_date : (draft?.startDate || initialStart)), true);
       body._end = field(body, "结束日期",
-        input("date", task ? (task.end_date || "") : initialStart), true);
+        input("date", task ? (task.end_date || "") :
+          (draft?.endDate || initialStart)), true);
 
       const more = document.createElement("details");
       more.className = "task-more-details";
+      more.open = Boolean(draft?.moreOpen);
+      body._more = more;
       const moreSummary = document.createElement("summary");
       moreSummary.textContent = "更多描述";
       more.appendChild(moreSummary);
@@ -2253,14 +2331,18 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
       for (const p of state.priorityEnum) {
         const o = document.createElement("option");
         o.value = p; o.textContent = p;
-        if ((task ? task.priority : "中") === p) o.selected = true;
+        if ((task ? task.priority : (draft?.priority || "中")) === p) o.selected = true;
         priority.appendChild(o);
       }
       body._priority = field(more, "优先级", priority);
-      createDependencyPicker(body, task, task ? prerequisiteIds(task.id) : [], more);
-      body._goal = field(more, "闭环目标", input("text", task ? task.goal : ""));
-      body._next = field(more, "下一步动作", input("text", task ? task.next_action : ""));
-      body._risk = field(more, "风险原因", input("text", task ? task.risk_reason : ""));
+      createDependencyPicker(body, task,
+        task ? prerequisiteIds(task.id) : (draft?.prerequisiteIds || []), more);
+      body._goal = field(more, "闭环目标",
+        input("text", task ? task.goal : (draft?.goal || "")));
+      body._next = field(more, "下一步动作",
+        input("text", task ? task.next_action : (draft?.nextAction || "")));
+      body._risk = field(more, "风险原因",
+        input("text", task ? task.risk_reason : (draft?.riskReason || "")));
       body.appendChild(more);
 
       const syncEndDate = () => {
@@ -2342,11 +2424,20 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
           return false;
         }
         await api("/api/tasks", "POST", { ...payload, line_id: targetLineId });
+        discardTaskCreateDraft(body, lineId, openingDraftKey);
       } else {
         await api(`/api/tasks/${task.id}`, "PATCH", payload);
       }
       reload();
-    }
+    },
+    isNew ? {
+      onBackdropClose: () => saveTaskCreateDraft(
+        $("#modal-body"), lineId, openingDraftKey
+      ),
+      onCancel: () => discardTaskCreateDraft(
+        $("#modal-body"), lineId, openingDraftKey
+      ),
+    } : {}
   );
 }
 

@@ -834,10 +834,10 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('moreSummary.textContent = "更多描述"', source)
         self.assertIn('mark.className = "required-mark"', source)
         self.assertIn(
-            'input("date", task ? task.start_date : initialStart), true)', source
+            'task ? task.start_date : (draft?.startDate || initialStart)', source
         )
         self.assertIn(
-            'input("date", task ? (task.end_date || "") : initialStart), true)', source
+            '(draft?.endDate || initialStart)), true)', source
         )
         self.assertIn(
             '["起始日期", body._start], ["结束日期", body._end]', source
@@ -845,6 +845,20 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('$("#modal-header-tools").appendChild(del)', source)
         self.assertIn('$("#modal-mask").onclick = (event) => {', source)
         self.assertIn('event.target === event.currentTarget', source)
+        self.assertIn('mask._onBackdropClose = options.onBackdropClose || null', source)
+        self.assertIn('if (onBackdropClose) onBackdropClose();', source)
+        self.assertIn('function saveTaskCreateDraft(', source)
+        self.assertIn('function discardTaskCreateDraft(', source)
+        self.assertIn(
+            'state.taskCreateDrafts.get(openingDraftKey)', source
+        )
+        self.assertIn('createTaskContentEditor(body, task, draft)', source)
+        self.assertIn('draft?.prerequisiteIds || []', source)
+        self.assertIn('const imageReadPromises = body._imageReadPromises || []', source)
+        self.assertIn('Promise.all(imageReadPromises).then(renderImages)', source)
+        self.assertIn('onBackdropClose: () => saveTaskCreateDraft(', source)
+        self.assertIn('onCancel: () => discardTaskCreateDraft(', source)
+        self.assertIn('state.taskCreateDrafts.clear();', source)
 
         task_id = self.create_task(line_id)
         status, data = self.request(
@@ -929,7 +943,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('reader.readAsDataURL(file)', source)
         self.assertIn('preview.src = image.src || image.data_url', source)
         self.assertIn(
-            'openTaskImageViewer(body._contentImages, index, previewButton)', source
+            'openTaskImageViewer(contentImages, index, previewButton)', source
         )
         self.assertIn('if (e.key === "ArrowRight") moveTaskImageViewer(1)', source)
 
