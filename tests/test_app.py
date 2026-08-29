@@ -234,6 +234,9 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("drawTask(t, baseY, false, xs[i], i)", source)
         self.assertIn("所有节点保持在线的横轴上，只改变横向位置", source)
         self.assertIn("state.canvasTaskPositions.set(t.id, { x: cx, y });", source)
+        self.assertIn("const roundedSquareAttrs =", source)
+        self.assertIn('const node = svgEl("rect", {', source)
+        self.assertNotIn("trianglePoints(", source)
 
     def test_authentication_is_required(self):
         self.cookie = None

@@ -451,13 +451,13 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .task-label.t-name { font-weight: 600; fill: #24292f; }
 .task-label.t-meta { fill: #57606a; }
 .task-node.health-overdue { stroke: #cf222e; stroke-width: 4; }
-.task-node.health-soon { stroke: #d4a72c; stroke-width: 4; }
+.task-node.health-soon { stroke: none; }
 .task-node.health-stale { stroke: #8250df; stroke-width: 4; }
 .dependency-line {
-  stroke: #57606a; stroke-width: 1.6; stroke-dasharray: 6 5;
+  stroke: #57606a; stroke-width: 1.2; stroke-dasharray: 6 5;
   opacity: .78; pointer-events: stroke;
 }
-.dependency-line:hover { stroke-width: 2.2; opacity: 1; }
+.dependency-line:hover { stroke-width: 1.8; opacity: 1; }
 .dependency-preview { stroke: #0969da; stroke-width: 2; opacity: .95; pointer-events: none; }
 .dependency-arrow-head { fill: #57606a; }
 .task-node.dependency-target { filter: drop-shadow(0 0 5px rgba(9, 105, 218, .9)); }

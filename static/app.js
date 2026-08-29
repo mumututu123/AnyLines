@@ -1231,11 +1231,13 @@ function renderCanvas() {
     return Math.max(x(t.start_date), lineStart);
   };
 
-  const trianglePoints = (cx, cy, size) => {
-    const halfWidth = Math.sqrt(3) * size / 2;
-    return `${cx},${cy - size} ${cx + halfWidth},${cy + size / 2} ` +
-      `${cx - halfWidth},${cy + size / 2}`;
-  };
+  const roundedSquareAttrs = (cx, cy, halfSize) => ({
+    x: cx - halfSize,
+    y: cy - halfSize,
+    width: halfSize * 2,
+    height: halfSize * 2,
+    rx: Math.min(5, halfSize / 2),
+  });
 
   const canvasPointFromClient = (clientX, clientY) => {
     const rect = svg.getBoundingClientRect();
@@ -1323,8 +1325,8 @@ function renderCanvas() {
 
     const health = taskHealth(t);
     const selectedTask = state.selectedTaskId === t.id;
-    const node = svgEl("polygon", {
-      points: trianglePoints(cx, y, selectedTask ? 12 : 9),
+    const node = svgEl("rect", {
+      ...roundedSquareAttrs(cx, y, selectedTask ? 12 : 9),
       "data-task-id": t.id,
       class: `task-node ${statusClass(t.status)} ${health.className}` +
         (hasActiveCanvasFilter ? " filter-match" : ""),
@@ -1423,15 +1425,15 @@ function renderCanvas() {
       for (const task of arr) {
         state.canvasTaskPositions.set(task.id, { x: cx, y: baseY });
       }
-      /* 底层错位三角形暗示"这是一叠节点" */
-      const backNode = svgEl("polygon", {
-        points: trianglePoints(cx + 3, baseY + 3, 13),
+      /* 底层错位圆角正方形暗示"这是一叠节点" */
+      const backNode = svgEl("rect", {
+        ...roundedSquareAttrs(cx + 3, baseY + 3, 13),
         class: `task-node ${statusClass(st)} ${clusterHealth}` +
           (hasActiveCanvasFilter ? " filter-match" : ""),
         opacity: .35,
       }, g);
-      const node = svgEl("polygon", {
-        points: trianglePoints(cx, baseY, 13),
+      const node = svgEl("rect", {
+        ...roundedSquareAttrs(cx, baseY, 13),
         class: `task-node ${statusClass(st)} ${clusterHealth}` +
           (hasActiveCanvasFilter ? " filter-match" : ""),
       }, g);
