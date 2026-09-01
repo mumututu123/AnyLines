@@ -151,6 +151,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(b'id="workspace-select"', body)
         self.assertIn(b'id="btn-workspaces"', body)
         self.assertIn(b'id="btn-view-dashboard"', body)
+        self.assertIn(b'id="btn-my-todos"', body)
+        self.assertIn(b'id="my-todo-count"', body)
         self.assertIn(b'id="dashboard-view"', body)
         self.assertIn(b'id="image-lightbox"', body)
         self.assertNotIn(b'id="btn-workspace-create"', body)
@@ -167,6 +169,27 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(state["priority_enum"], ["低", "中", "高", "紧急"])
         self.assertEqual(state["status_colors"]["进行中"], "#0969da")
         self.assertEqual(state["owners"], ["系统管理员"])
+
+    def test_personal_todo_entry_count_and_statistics(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn("function personalTodoTasks()", source)
+        self.assertIn("ownerNames.has((task.owner || \"\").trim()) && !isDone(task)", source)
+        self.assertIn("function renderMyTodoEntry()", source)
+        self.assertIn('badge.textContent = count > 99 ? "99+" : String(count)', source)
+        self.assertIn("function openMyTodoModal()", source)
+        for label in ("待办总数", "已超期", "有风险", "7天内到期", "被前置阻塞"):
+            with self.subTest(statistic=label):
+                self.assertIn(label, source)
+        self.assertIn('$("#btn-my-todos").onclick = openMyTodoModal', source)
+
+        status, body = self.request("GET", "/static/style.css")
+        self.assertEqual(status, 200)
+        styles = body.decode("utf-8")
+        self.assertIn(".my-todos-entry {", styles)
+        self.assertIn(".my-todo-count {", styles)
+        self.assertIn(".my-todo-summary {", styles)
 
     def test_canvas_merge_uses_rounded_polyline(self):
         status, body = self.request("GET", "/static/app.js")
@@ -280,7 +303,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("const downstream = collect(taskId, dependentsByTask)", source)
         self.assertIn("is-focus-dimmed", source)
         self.assertIn("primaryHealthBadge", source)
-        self.assertIn('if (health.overdue) return ["超", "overdue", "超期"]', source)
+        self.assertIn('if (health.overdue) return ["!", "overdue", "超期"]', source)
         self.assertIn('if (health.risk) return ["险", "risk", "风险"]', source)
         self.assertIn('transform: `translate(${cx} ${cy})`', source)
         self.assertIn("CANVAS_OVERVIEW_MAX_ZOOM = 0.7", source)

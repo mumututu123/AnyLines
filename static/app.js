@@ -525,6 +525,35 @@ function renderCanvasLegend() {
   }
 }
 
+function currentAccountDisplayName() {
+  return (state.user?.display_name || state.user?.username || "当前账号").trim();
+}
+
+function currentAccountOwnerNames() {
+  const ownerName = (state.user?.display_name || state.user?.username || "").trim();
+  return new Set(ownerName ? [ownerName] : []);
+}
+
+function personalTodoTasks() {
+  const ownerNames = currentAccountOwnerNames();
+  if (!ownerNames.size) return [];
+  return state.tasks.filter((task) =>
+    ownerNames.has((task.owner || "").trim()) && !isDone(task)
+  );
+}
+
+function renderMyTodoEntry() {
+  const button = $("#btn-my-todos");
+  const badge = $("#my-todo-count");
+  if (!button || !badge) return;
+  const count = personalTodoTasks().length;
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.classList.toggle("is-zero", count === 0);
+  button.classList.toggle("has-todos", count > 0);
+  button.title = `我的待办：${count} 个未闭环事务`;
+  button.setAttribute("aria-label", `查看我的待办，当前 ${count} 个未闭环事务`);
+}
+
 function renderToolbar() {
   const archived = isWorkspaceArchived();
   const sel = state.selectedLineId ? lineById(state.selectedLineId) : null;
@@ -550,6 +579,7 @@ function renderToolbar() {
       : "未选中任何对象");
   renderDependencyFocusPanel(dependencyFocus);
   renderCanvasLegend();
+  renderMyTodoEntry();
 }
 
 function setSelectOptions(sel, values, allText, selected) {
@@ -1267,6 +1297,43 @@ function openTaskListModal(title, tasks) {
     body.appendChild(tableWrap);
   }, async () => true);
 }
+
+function openMyTodoModal() {
+  const tasks = personalTodoTasks();
+  const healthItems = tasks.map((task) => ({ task, health: taskHealth(task) }));
+  const blockedCount = tasks.filter((task) => prerequisiteIds(task.id).some((id) => {
+    const prerequisite = taskById(id);
+    return prerequisite && !isDone(prerequisite);
+  })).length;
+  const metrics = [
+    ["待办总数", tasks.length, "total"],
+    ["已超期", healthItems.filter(({ health }) => health.overdue).length, "overdue"],
+    ["有风险", healthItems.filter(({ health }) => health.risk).length, "risk"],
+    ["7天内到期", healthItems.filter(({ health }) => health.soon).length, "soon"],
+    ["被前置阻塞", blockedCount, "blocked"],
+  ];
+
+  openTaskListModal(`${currentAccountDisplayName()}的个人待办`, tasks);
+  const body = $("#modal-body");
+  const intro = document.createElement("div");
+  intro.className = "my-todo-intro";
+  intro.textContent = `按当前账号责任人和未闭环状态统计 · ${state.currentWorkspace?.name || "当前项目"}`;
+  const summary = document.createElement("div");
+  summary.className = "my-todo-summary";
+  for (const [label, value, kind] of metrics) {
+    const item = document.createElement("div");
+    item.className = `my-todo-stat my-todo-stat-${kind}`;
+    const number = document.createElement("strong");
+    number.textContent = value;
+    const text = document.createElement("span");
+    text.textContent = label;
+    item.append(number, text);
+    summary.appendChild(item);
+  }
+  body.prepend(intro, summary);
+}
+
+$("#btn-my-todos").onclick = openMyTodoModal;
 
 /* ============================================================== 画布视图 */
 const CV = {
