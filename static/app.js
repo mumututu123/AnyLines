@@ -5,7 +5,8 @@ const $ = (sel) => document.querySelector(sel);
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = {
-  lines: [], tasks: [], dependencies: [], taskImages: [], canUndo: false, canRedo: false,
+  lines: [], tasks: [], dependencies: [], taskImages: [], taskAttachments: [],
+  canUndo: false, canRedo: false,
   statusEnum: [], statusColors: {},
   priorityEnum: [], owners: [], today: "", dashboardSnapshots: [],
   user: null, workspaces: [], currentWorkspace: null,
@@ -40,6 +41,9 @@ const DEFAULT_STATUS_COLORS = {
 const TASK_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_TASK_IMAGES = 8;
 const MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_TASK_ATTACHMENTS = 8;
+const MAX_TASK_ATTACHMENT_BYTES = 5 * 1024 * 1024;
+const MAX_TASK_ATTACHMENTS_BYTES = 20 * 1024 * 1024;
 const MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024;
 
 /* ---------------------------------------------- 界面偏好记忆 (localStorage) */
@@ -253,6 +257,7 @@ function resetWorkspaceState() {
   state.hiddenBranchIds.clear();
   state.dependencies = [];
   state.taskImages = [];
+  state.taskAttachments = [];
   state.dashboardSnapshots = [];
   state.pan = { x: 0, y: 0 };
   state.filters = { q: "", line: "", owner: "", status: "", priority: "", due: "" };
@@ -433,6 +438,7 @@ async function reload() {
   state.tasks = d.tasks;
   state.dependencies = d.dependencies || [];
   state.taskImages = d.task_images || [];
+  state.taskAttachments = d.task_attachments || [];
   state.canUndo = d.can_undo;
   state.canRedo = d.can_redo;
   state.statusEnum = d.status_enum;
@@ -2785,6 +2791,8 @@ function saveTaskCreateDraft(body, fallbackLineId, openingDraftKey) {
   const prerequisiteIds = selectedDependencyIds(body);
   const images = body._contentImages || [];
   const imageReadPromises = body._imageReadPromises || [];
+  const attachments = body._contentAttachments || [];
+  const attachmentReadPromises = body._attachmentReadPromises || [];
   state.taskCreateDrafts.set(key, {
     name: body._name.value,
     content: body._content.value,
@@ -2799,12 +2807,15 @@ function saveTaskCreateDraft(body, fallbackLineId, openingDraftKey) {
     riskReason: body._risk.value,
     images,
     imageReadPromises,
+    attachments,
+    attachmentReadPromises,
     moreOpen: Boolean(body._more?.open),
   });
   const hasEnteredContent = [
     body._name.value, body._content.value, body._goal.value,
     body._next.value, body._risk.value,
-  ].some((value) => value.trim()) || prerequisiteIds.length > 0 || images.length > 0;
+  ].some((value) => value.trim()) || prerequisiteIds.length > 0 ||
+    images.length > 0 || attachments.length > 0;
   if (hasEnteredContent) toast("已暂存当前事务内容");
 }
 
@@ -2816,12 +2827,29 @@ function discardTaskCreateDraft(body, fallbackLineId, openingDraftKey) {
   if (currentKey) state.taskCreateDrafts.delete(currentKey);
 }
 
+function autoResizeTaskContent(textarea) {
+  if (!textarea) return;
+  textarea.style.height = "auto";
+  const maxHeight = Math.max(180, Math.floor(window.innerHeight * .45));
+  const targetHeight = Math.min(Math.max(textarea.scrollHeight, 120), maxHeight);
+  textarea.style.height = `${targetHeight}px`;
+  textarea.style.overflowY = textarea.scrollHeight > maxHeight ? "auto" : "hidden";
+}
+
+function formatAttachmentSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function createTaskContentEditor(body, task, draft = null) {
   const editor = document.createElement("div");
   editor.className = "task-content-editor";
   const textarea = document.createElement("textarea");
+  textarea.className = "task-content-textarea";
   textarea.value = task ? task.content : (draft?.content || "");
-  textarea.placeholder = "填写事务内容；可在此直接粘贴图片";
+  textarea.placeholder = "填写事务内容；可粘贴图片或拖入附件";
+  textarea.addEventListener("input", () => autoResizeTaskContent(textarea));
   const hint = document.createElement("div");
   hint.className = "task-content-hint";
   hint.textContent = `支持粘贴 PNG、JPEG、GIF、WebP 图片，单张不超过 5MB，最多 ${MAX_TASK_IMAGES} 张；单击图片可放大浏览`;
@@ -2837,6 +2865,20 @@ function createTaskContentEditor(body, task, draft = null) {
   let pendingImageCount = 0;
   body._contentImages = contentImages;
   body._imageReadPromises = imageReadPromises;
+  const contentAttachments = task ? state.taskAttachments
+    .filter((attachment) => attachment.task_id === task.id)
+    .map((attachment) => ({
+      id: attachment.id,
+      name: attachment.filename,
+      type: attachment.mime_type,
+      size: attachment.size,
+      url: `/api/task-attachments/${attachment.id}`,
+    })) : (draft?.attachments || []);
+  const attachmentReadPromises = [...(draft?.attachmentReadPromises || [])];
+  let pendingAttachmentCount = 0;
+  let pendingAttachmentBytes = 0;
+  body._contentAttachments = contentAttachments;
+  body._attachmentReadPromises = attachmentReadPromises;
 
   const renderImages = () => {
     gallery.innerHTML = "";
@@ -2923,10 +2965,162 @@ function createTaskContentEditor(body, task, draft = null) {
     }
   });
 
+  const attachmentZone = document.createElement("div");
+  attachmentZone.className = "task-attachment-drop-zone";
+  attachmentZone.tabIndex = 0;
+  attachmentZone.setAttribute("role", "button");
+  attachmentZone.setAttribute("aria-label", "拖拽或选择事务附件");
+  const attachmentPrompt = document.createElement("span");
+  attachmentPrompt.className = "task-attachment-prompt";
+  attachmentPrompt.textContent = "拖拽附件到事务内容区域，或点击选择文件";
+  const attachmentInput = input("file");
+  attachmentInput.className = "hidden";
+  attachmentInput.multiple = true;
+  const attachmentList = document.createElement("div");
+  attachmentList.className = "task-attachment-list";
+  attachmentList.setAttribute("aria-live", "polite");
+  attachmentZone.appendChild(attachmentPrompt);
+  attachmentZone.appendChild(attachmentInput);
+  attachmentZone.appendChild(attachmentList);
+
+  const renderAttachments = () => {
+    attachmentList.innerHTML = "";
+    for (const [index, attachment] of contentAttachments.entries()) {
+      const row = document.createElement("div");
+      row.className = "task-attachment-item";
+      const name = attachment.id ? document.createElement("a") :
+        document.createElement("span");
+      name.className = "task-attachment-name";
+      name.textContent = attachment.name;
+      name.title = attachment.name;
+      if (attachment.id) {
+        name.href = attachment.url;
+        name.download = attachment.name;
+        name.setAttribute("aria-label", `下载附件 ${attachment.name}`);
+      }
+      const meta = document.createElement("span");
+      meta.className = "task-attachment-meta";
+      meta.textContent = attachment.id ? formatAttachmentSize(attachment.size) :
+        `${formatAttachmentSize(attachment.size)} · 待保存`;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "task-attachment-remove";
+      remove.textContent = "移除";
+      remove.setAttribute("aria-label", `移除附件 ${attachment.name}`);
+      remove.onclick = (event) => {
+        event.stopPropagation();
+        contentAttachments.splice(index, 1);
+        renderAttachments();
+      };
+      row.append(name, meta, remove);
+      attachmentList.appendChild(row);
+    }
+    attachmentPrompt.textContent = contentAttachments.length || pendingAttachmentCount ?
+      `附件 ${contentAttachments.length + pendingAttachmentCount}/${MAX_TASK_ATTACHMENTS} · 可继续拖入或点击添加` :
+      "拖拽附件到事务内容区域，或点击选择文件";
+  };
+
+  const addAttachments = (files) => {
+    let rejectedByCount = false;
+    for (const file of files) {
+      if (contentAttachments.length + pendingAttachmentCount >= MAX_TASK_ATTACHMENTS) {
+        rejectedByCount = true;
+        break;
+      }
+      if (!file.size) {
+        toast(`附件“${file.name}”为空，未添加`);
+        continue;
+      }
+      if (file.size > MAX_TASK_ATTACHMENT_BYTES) {
+        toast(`附件“${file.name}”超过 5MB，未添加`);
+        continue;
+      }
+      const currentBytes = contentAttachments.reduce(
+        (total, attachment) => total + (attachment.size || 0), 0
+      );
+      if (currentBytes + pendingAttachmentBytes + file.size >
+          MAX_TASK_ATTACHMENTS_BYTES) {
+        toast("单个事务的附件总大小不能超过 20MB");
+        continue;
+      }
+      pendingAttachmentCount += 1;
+      pendingAttachmentBytes += file.size;
+      renderAttachments();
+      const pending = new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          pendingAttachmentCount -= 1;
+          pendingAttachmentBytes -= file.size;
+          contentAttachments.push({
+            name: file.name,
+            type: file.type || "application/octet-stream",
+            size: file.size,
+            data_url: reader.result,
+          });
+          renderAttachments();
+          resolve();
+        };
+        reader.onerror = () => {
+          pendingAttachmentCount -= 1;
+          pendingAttachmentBytes -= file.size;
+          toast(`附件“${file.name}”读取失败，请重试`);
+          renderAttachments();
+          resolve();
+        };
+        reader.readAsDataURL(file);
+      });
+      attachmentReadPromises.push(pending);
+    }
+    if (rejectedByCount) {
+      toast(`每个事务最多可添加 ${MAX_TASK_ATTACHMENTS} 个附件`);
+    }
+  };
+
+  const hasDraggedFiles = (event) =>
+    [...(event.dataTransfer?.types || [])].includes("Files");
+  editor.addEventListener("dragenter", (event) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    editor.classList.add("is-attachment-dragover");
+  });
+  editor.addEventListener("dragover", (event) => {
+    if (!hasDraggedFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    editor.classList.add("is-attachment-dragover");
+  });
+  editor.addEventListener("dragleave", (event) => {
+    if (!editor.contains(event.relatedTarget)) {
+      editor.classList.remove("is-attachment-dragover");
+    }
+  });
+  editor.addEventListener("drop", (event) => {
+    if (!event.dataTransfer?.files?.length) return;
+    event.preventDefault();
+    editor.classList.remove("is-attachment-dragover");
+    addAttachments([...event.dataTransfer.files]);
+  });
+  attachmentZone.onclick = (event) => {
+    if (event.target !== attachmentZone && event.target !== attachmentPrompt) return;
+    attachmentInput.click();
+  };
+  attachmentZone.onkeydown = (event) => {
+    if (event.target !== attachmentZone) return;
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    attachmentInput.click();
+  };
+  attachmentInput.onchange = () => {
+    addAttachments([...attachmentInput.files]);
+    attachmentInput.value = "";
+  };
+
   editor.appendChild(textarea);
   editor.appendChild(hint);
   editor.appendChild(gallery);
+  editor.appendChild(attachmentZone);
   renderImages();
+  renderAttachments();
   if (imageReadPromises.length) {
     Promise.all(imageReadPromises).then(renderImages);
   }
@@ -3072,7 +3266,10 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
     },
     async () => {
       const body = $("#modal-body");
-      await Promise.all(body._imageReadPromises || []);
+      await Promise.all([
+        ...(body._imageReadPromises || []),
+        ...(body._attachmentReadPromises || []),
+      ]);
       const payload = {
         name: body._name.value.trim(),
         content: body._content.value,
@@ -3087,6 +3284,11 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         prerequisite_ids: selectedDependencyIds(body),
         images: body._contentImages.map((image) => image.id ?
           { id: image.id } : { data_url: image.data_url }),
+        attachments: body._contentAttachments.map((attachment) => attachment.id ?
+          { id: attachment.id } : {
+            name: attachment.name,
+            data_url: attachment.data_url,
+          }),
       };
       const requiredFields = [
         ["事务名", body._name], ["事务内容", body._content],
@@ -3112,7 +3314,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
       } else {
         await api(`/api/tasks/${task.id}`, "PATCH", payload);
       }
-      reload();
+      await reload();
     },
     isNew ? {
       onBackdropClose: () => saveTaskCreateDraft(
@@ -3123,6 +3325,9 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
       ),
     } : {}
   );
+  if (task) {
+    requestAnimationFrame(() => autoResizeTaskContent($("#modal-body")._content));
+  }
 }
 
 function openWorkspaceModal() {

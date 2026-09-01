@@ -843,7 +843,16 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .task-import-drop-zone strong { margin-top: 8px; color: #24292f; font-size: 14px; }
 .task-import-drop-zone span:last-child { margin-top: 4px; color: #57606a; font-size: 12px; }
 .import-dialog-note { margin: 12px 0 0; color: #6e7781; font-size: 12px; line-height: 1.5; }
-.task-content-editor { display: flex; flex-direction: column; gap: 6px; }
+.task-content-editor {
+  display: flex; flex-direction: column; gap: 6px; border-radius: 7px;
+  transition: background-color .15s, box-shadow .15s;
+}
+.task-content-editor.is-attachment-dragover {
+  background: #ddf4ff; box-shadow: 0 0 0 3px rgba(9, 105, 218, .2);
+}
+#modal-body .task-content-textarea {
+  min-height: 96px; max-height: 45vh; resize: vertical; line-height: 1.55;
+}
 .task-content-hint { color: #6e7781; font-size: 11px; line-height: 1.4; }
 .task-image-gallery {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px;
@@ -867,6 +876,34 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   line-height: 20px; cursor: pointer;
 }
 #modal-body .task-image-remove:hover { background: #ffebe9; }
+.task-attachment-drop-zone {
+  padding: 9px; border: 1px dashed #afb8c1; border-radius: 7px;
+  background: #f6f8fa; cursor: pointer;
+}
+.task-attachment-drop-zone:hover, .task-attachment-drop-zone:focus-visible {
+  outline: none; border-color: #0969da; background: #eef6ff;
+}
+.task-attachment-prompt {
+  display: block; color: #57606a; font-size: 11px; line-height: 1.4;
+}
+.task-attachment-list { display: grid; gap: 5px; margin-top: 7px; }
+.task-attachment-list:empty { display: none; }
+.task-attachment-item {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center; gap: 7px; min-height: 30px; padding: 4px 6px;
+  border: 1px solid #d8dee4; border-radius: 5px; background: #fff;
+}
+.task-attachment-name {
+  min-width: 0; overflow: hidden; color: #0969da; font-size: 12px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.task-attachment-item > span.task-attachment-name { color: #24292f; }
+.task-attachment-meta { color: #8c959f; font-size: 10px; white-space: nowrap; }
+#modal-body .task-attachment-remove {
+  width: auto; padding: 3px 6px; border: 0; background: transparent;
+  color: #cf222e; font-size: 11px; cursor: pointer;
+}
+#modal-body .task-attachment-remove:hover { text-decoration: underline; }
 
 #image-lightbox {
   position: fixed; inset: 0; z-index: 300; display: grid;

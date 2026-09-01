@@ -40,6 +40,10 @@ TASK_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 MAX_TASK_IMAGES = 8
 MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TASK_IMAGES_BYTES = 20 * 1024 * 1024
+MAX_TASK_ATTACHMENTS = 8
+MAX_TASK_ATTACHMENT_BYTES = 5 * 1024 * 1024
+MAX_TASK_ATTACHMENTS_BYTES = 20 * 1024 * 1024
+MAX_ATTACHMENT_FILENAME_LENGTH = 180
 MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024
 MAX_TASK_IMPORT_ROWS = 2000
 MAX_LINE_IMPORT_ROWS = 2000
@@ -118,7 +122,7 @@ TASK_IMPORT_COLUMNS = (
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config.update(
     DATABASE=os.environ.get("ANYLINE_DB_PATH", DB_PATH),
-    MAX_CONTENT_LENGTH=28 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=64 * 1024 * 1024,
     SECRET_KEY=os.environ.get(
         "ANYLINE_SECRET_KEY", "anyline-local-secret-change-in-production"
     ),
@@ -191,6 +195,15 @@ def init_db(db_path=None):
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_id INTEGER NOT NULL,
             task_id      INTEGER NOT NULL,
+            mime_type    TEXT NOT NULL,
+            data         BLOB NOT NULL,
+            created_at   TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_attachments (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id INTEGER NOT NULL,
+            task_id      INTEGER NOT NULL,
+            filename     TEXT NOT NULL,
             mime_type    TEXT NOT NULL,
             data         BLOB NOT NULL,
             created_at   TEXT NOT NULL
@@ -331,6 +344,10 @@ def init_db(db_path=None):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_images_task "
         "ON task_images(workspace_id,task_id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_attachments_task "
+        "ON task_attachments(workspace_id,task_id)"
     )
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_members_user ON workspace_members(user_id)"
@@ -1161,6 +1178,11 @@ def purge_deleted(db):
         (workspace_id, workspace_id),
     )
     db.execute(
+        "DELETE FROM task_attachments WHERE workspace_id=? AND task_id IN "
+        "(SELECT id FROM tasks WHERE workspace_id=? AND deleted=1)",
+        (workspace_id, workspace_id),
+    )
+    db.execute(
         "DELETE FROM tasks WHERE deleted=1 AND workspace_id=?", (workspace_id,)
     )
     db.execute(
@@ -1190,6 +1212,16 @@ def current_workspace_snapshot(db, workspace_id):
             }
             for row in db.execute(
                 "SELECT * FROM task_images WHERE workspace_id=? ORDER BY id",
+                (workspace_id,),
+            )
+        ],
+        "task_attachments": [
+            {
+                **{key: row[key] for key in row.keys() if key != "data"},
+                "data": base64.b64encode(row["data"]).decode("ascii"),
+            }
+            for row in db.execute(
+                "SELECT * FROM task_attachments WHERE workspace_id=? ORDER BY id",
                 (workspace_id,),
             )
         ],
@@ -1238,9 +1270,12 @@ def restore_snapshot(db, snapshot):
     workspace_id = current_workspace_id()
     db.execute("DELETE FROM task_dependencies WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_images WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM task_attachments WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
-    for table in ("lines", "tasks", "task_images", "task_dependencies"):
+    for table in (
+        "lines", "tasks", "task_images", "task_attachments", "task_dependencies"
+    ):
         rows = snapshot.get(table, [])
         if not isinstance(rows, list):
             raise ApiError("撤销数据已损坏", 500)
@@ -1251,7 +1286,7 @@ def restore_snapshot(db, snapshot):
             if not isinstance(row, dict) or not set(row).issubset(valid_columns):
                 raise ApiError("撤销数据已损坏", 500)
             row = dict(row)
-            if table == "task_images":
+            if table in {"task_images", "task_attachments"}:
                 try:
                     row["data"] = base64.b64decode(row["data"], validate=True)
                 except (KeyError, TypeError, ValueError, binascii.Error):
@@ -1380,6 +1415,102 @@ def replace_task_images(db, workspace_id, task_id, image_changes):
                 (workspace_id, task_id, mime_type, image_data,
                  date.today().isoformat())
                 for mime_type, image_data in new_images
+            ],
+        )
+
+
+def validate_task_attachments(db, workspace_id, task_id, value):
+    """校验事务附件描述，返回需保留的附件 ID 和待新增附件。"""
+    if not isinstance(value, list):
+        raise ApiError("事务附件必须是数组")
+    if len(value) > MAX_TASK_ATTACHMENTS:
+        raise ApiError(f"每个事务最多可添加 {MAX_TASK_ATTACHMENTS} 个附件")
+
+    existing_ids = []
+    new_attachments = []
+    total_bytes = 0
+    for item in value:
+        if not isinstance(item, dict):
+            raise ApiError("事务附件格式错误")
+        if "id" in item:
+            attachment_id = required_id(item["id"], "附件 id")
+            if task_id is None:
+                raise ApiError("新建事务不能引用已有附件")
+            if attachment_id in existing_ids:
+                raise ApiError("事务附件不能重复")
+            row = db.execute(
+                "SELECT length(data) AS size FROM task_attachments "
+                "WHERE id=? AND task_id=? AND workspace_id=?",
+                (attachment_id, task_id, workspace_id),
+            ).fetchone()
+            if not row:
+                raise ApiError("事务附件不存在", 404)
+            existing_ids.append(attachment_id)
+            total_bytes += row["size"]
+            continue
+
+        filename = item.get("name")
+        if not isinstance(filename, str):
+            raise ApiError("附件名称不能为空")
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1].strip()
+        if not filename or any(ord(char) < 32 for char in filename):
+            raise ApiError("附件名称无效")
+        if len(filename) > MAX_ATTACHMENT_FILENAME_LENGTH:
+            raise ApiError(
+                f"附件名称不能超过 {MAX_ATTACHMENT_FILENAME_LENGTH} 个字符"
+            )
+
+        data_url = item.get("data_url")
+        if not isinstance(data_url, str) or "," not in data_url:
+            raise ApiError("事务附件格式错误")
+        header, encoded = data_url.split(",", 1)
+        if not header.startswith("data:") or not header.endswith(";base64"):
+            raise ApiError("事务附件格式错误")
+        mime_type = header[5:-7].strip().lower() or "application/octet-stream"
+        if len(mime_type) > 200 or "/" not in mime_type or any(
+                char in mime_type for char in "\r\n"):
+            raise ApiError("附件类型无效")
+        try:
+            attachment_data = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error):
+            raise ApiError("事务附件数据无效")
+        if not attachment_data:
+            raise ApiError("事务附件不能为空")
+        if len(attachment_data) > MAX_TASK_ATTACHMENT_BYTES:
+            raise ApiError("单个事务附件不能超过 5MB")
+        total_bytes += len(attachment_data)
+        new_attachments.append((filename, mime_type, attachment_data))
+
+    if total_bytes > MAX_TASK_ATTACHMENTS_BYTES:
+        raise ApiError("单个事务的附件总大小不能超过 20MB")
+    return existing_ids, new_attachments
+
+
+def replace_task_attachments(db, workspace_id, task_id, attachment_changes):
+    existing_ids, new_attachments = attachment_changes
+    if existing_ids:
+        marks = ",".join("?" for _ in existing_ids)
+        db.execute(
+            f"DELETE FROM task_attachments WHERE workspace_id=? AND task_id=? "
+            f"AND id NOT IN ({marks})",
+            [workspace_id, task_id] + existing_ids,
+        )
+    else:
+        db.execute(
+            "DELETE FROM task_attachments WHERE workspace_id=? AND task_id=?",
+            (workspace_id, task_id),
+        )
+    if new_attachments:
+        db.executemany(
+            "INSERT INTO task_attachments("
+            "workspace_id,task_id,filename,mime_type,data,created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            [
+                (
+                    workspace_id, task_id, filename, mime_type,
+                    attachment_data, date.today().isoformat(),
+                )
+                for filename, mime_type, attachment_data in new_attachments
             ],
         )
 
@@ -1754,6 +1885,7 @@ def delete_workspace(workspace_id):
 
     db.execute("DELETE FROM task_dependencies WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_images WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM task_attachments WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM workspace_meta WHERE workspace_id=?", (workspace_id,))
@@ -2003,6 +2135,17 @@ def api_state():
         "ORDER BY image.id",
         (workspace_id, workspace_id, workspace_id),
     )]
+    task_attachments = [dict(r) for r in db.execute(
+        "SELECT attachment.id,attachment.task_id,attachment.filename,"
+        "attachment.mime_type,length(attachment.data) AS size "
+        "FROM task_attachments attachment "
+        "JOIN tasks task ON task.id=attachment.task_id "
+        "JOIN lines line ON line.id=task.line_id "
+        "WHERE attachment.workspace_id=? AND task.workspace_id=? "
+        "AND line.workspace_id=? AND task.deleted=0 AND line.deleted=0 "
+        "ORDER BY attachment.id",
+        (workspace_id, workspace_id, workspace_id),
+    )]
     dashboard_snapshots = update_dashboard_snapshot(
         db, workspace_id, tasks, dependencies
     )
@@ -2011,6 +2154,7 @@ def api_state():
         "tasks": tasks,
         "dependencies": dependencies,
         "task_images": task_images,
+        "task_attachments": task_attachments,
         "can_undo": has_undo(db),
         "can_redo": has_redo(db),
         "status_enum": statuses,
@@ -2039,6 +2183,31 @@ def task_image(image_id):
     response = send_file(
         BytesIO(row["data"]), mimetype=row["mime_type"],
         as_attachment=False, max_age=0,
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.route("/api/task-attachments/<int:attachment_id>")
+def task_attachment(attachment_id):
+    db = get_db()
+    workspace_id = current_workspace_id()
+    row = db.execute(
+        "SELECT attachment.filename,attachment.mime_type,attachment.data "
+        "FROM task_attachments attachment "
+        "JOIN tasks task ON task.id=attachment.task_id "
+        "JOIN lines line ON line.id=task.line_id "
+        "WHERE attachment.id=? AND attachment.workspace_id=? "
+        "AND task.workspace_id=? AND line.workspace_id=? "
+        "AND task.deleted=0 AND line.deleted=0",
+        (attachment_id, workspace_id, workspace_id, workspace_id),
+    ).fetchone()
+    if not row:
+        raise ApiError("事务附件不存在", 404)
+    response = send_file(
+        BytesIO(row["data"]), mimetype=row["mime_type"], as_attachment=True,
+        download_name=row["filename"], max_age=0,
     )
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Cache-Control"] = "private, no-store"
@@ -2585,6 +2754,9 @@ def create_task():
     image_changes = validate_task_images(
         db, workspace_id, None, d.get("images", [])
     )
+    attachment_changes = validate_task_attachments(
+        db, workspace_id, None, d.get("attachments", [])
+    )
     if status == "已闭环":
         ensure_dependencies_closed(db, workspace_id, prerequisite_ids)
     try:
@@ -2609,6 +2781,9 @@ def create_task():
         db, workspace_id, cur.lastrowid, prerequisite_ids
     )
     replace_task_images(db, workspace_id, cur.lastrowid, image_changes)
+    replace_task_attachments(
+        db, workspace_id, cur.lastrowid, attachment_changes
+    )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
 
@@ -2662,6 +2837,11 @@ def update_task(tid):
         image_changes = validate_task_images(
             db, workspace_id, tid, d["images"]
         )
+    attachment_changes = None
+    if "attachments" in d:
+        attachment_changes = validate_task_attachments(
+            db, workspace_id, tid, d["attachments"]
+        )
 
     fields, vals = [], []
     for k in ("line_id", "name", "content", "goal", "owner", "priority",
@@ -2710,7 +2890,8 @@ def update_task(tid):
     if final_status == "已闭环":
         ensure_dependencies_closed(db, workspace_id, final_prerequisite_ids)
 
-    if fields or prerequisite_ids is not None or image_changes is not None:
+    if (fields or prerequisite_ids is not None or image_changes is not None or
+            attachment_changes is not None):
         on_edit(db)
         if fields:
             fields.append("updated_at=?")
@@ -2724,6 +2905,10 @@ def update_task(tid):
             replace_task_dependencies(db, workspace_id, tid, prerequisite_ids)
         if image_changes is not None:
             replace_task_images(db, workspace_id, tid, image_changes)
+        if attachment_changes is not None:
+            replace_task_attachments(
+                db, workspace_id, tid, attachment_changes
+            )
         db.commit()
     return jsonify({"ok": True})
 

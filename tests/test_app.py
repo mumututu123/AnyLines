@@ -1099,6 +1099,74 @@ class AnyLineHttpTests(unittest.TestCase):
             lightbox_figure_start:lightbox_figure_end
         ])
 
+    def test_task_attachments_are_downloadable_editable_and_undoable(self):
+        line_id = self.create_line()
+        first_content = "项目附件内容".encode("utf-8")
+        first_data_url = (
+            "data:text/plain;base64," +
+            base64.b64encode(first_content).decode("ascii")
+        )
+        task_id = self.create_task(line_id, attachments=[{
+            "name": "说明文档.txt", "data_url": first_data_url,
+        }])
+
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_attachments"]), 1)
+        attachment = state["task_attachments"][0]
+        self.assertEqual(attachment["task_id"], task_id)
+        self.assertEqual(attachment["filename"], "说明文档.txt")
+        self.assertEqual(attachment["mime_type"], "text/plain")
+        self.assertEqual(attachment["size"], len(first_content))
+        attachment_id = attachment["id"]
+
+        status, content = self.request(
+            "GET", f"/api/task-attachments/{attachment_id}"
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(content, first_content)
+
+        second_content = b"spreadsheet-bytes"
+        second_data_url = (
+            "data:application/octet-stream;base64," +
+            base64.b64encode(second_content).decode("ascii")
+        )
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "attachments": [
+                {"id": attachment_id},
+                {"name": "数据表.xlsx", "data_url": second_data_url},
+            ],
+        })
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_attachments"]), 2)
+
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "attachments": [{"id": attachment_id}],
+        })
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_attachments"]), 1)
+        self.request("POST", "/api/undo")
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(len(state["task_attachments"]), 2)
+
+        status, data = self.request("PATCH", f"/api/tasks/{task_id}", {
+            "attachments": [{"name": "空.txt", "data_url": "data:text/plain;base64,"}],
+        })
+        self.assertEqual(status, 400, data)
+        self.assertIn("不能为空", data["error"])
+
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn("function autoResizeTaskContent(textarea)", source)
+        self.assertIn('textarea.addEventListener("input"', source)
+        self.assertIn('editor.addEventListener("dragover"', source)
+        self.assertIn('editor.addEventListener("drop"', source)
+        self.assertIn("/api/task-attachments/${attachment.id}", source)
+        self.assertIn("...(body._attachmentReadPromises || [])", source)
+        self.assertIn("await reload();", source)
+
     def test_bulk_update_delete_and_undo(self):
         self.add_member("lisi", "李四")
         first_line = self.create_line("第一条线")
@@ -1572,6 +1640,7 @@ class DatabaseMigrationTests(unittest.TestCase):
                 .issubset(task_columns)
             )
             self.assertIn("task_images", table_names)
+            self.assertIn("task_attachments", table_names)
             self.assertIn("dashboard_snapshots", table_names)
             self.assertEqual(task_workspace_id, workspace_id)
             self.assertEqual(admin_count, 1)
