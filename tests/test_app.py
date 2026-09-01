@@ -1028,6 +1028,17 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("for (const l of lineOptions)", source)
         self.assertIn("o.textContent = lineOptionLabel(l, lineOptions)", source)
 
+    def test_table_add_task_builds_line_labels_without_map_callback_arguments(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn(
+            "lines.map((line) => lineOptionLabel(line, lines))", source
+        )
+        self.assertNotIn("lines.map(lineOptionLabel)", source)
+        self.assertIn('$("#btn-table-add").onclick', source)
+        self.assertIn("openTaskModal(null, lineId, true)", source)
+
     def test_task_content_images_are_persisted_served_and_undoable(self):
         line_id = self.create_line()
         png_base64 = (

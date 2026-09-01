@@ -2948,7 +2948,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
         const lines = [...state.lines].sort(
           (a, b) => (rows.get(a.id) ?? 0) - (rows.get(b.id) ?? 0)
         );
-        const baseLabels = lines.map(lineOptionLabel);
+        const baseLabels = lines.map((line) => lineOptionLabel(line, lines));
         const labelCounts = new Map();
         for (const label of baseLabels) {
           labelCounts.set(label, (labelCounts.get(label) || 0) + 1);
