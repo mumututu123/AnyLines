@@ -660,7 +660,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .task-alert-badge { pointer-events: none; }
 .task-alert-badge circle { stroke: #fff; stroke-width: 1; }
 .task-alert-badge text {
-  fill: #fff; font-size: 5px; font-weight: 700; user-select: none;
+  fill: #fff; font-size: 6px; font-weight: 700; user-select: none;
 }
 .task-alert-overdue circle { fill: #cf222e; }
 .task-alert-risk circle { fill: #d97706; }

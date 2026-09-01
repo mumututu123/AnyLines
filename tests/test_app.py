@@ -222,17 +222,22 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         source = body.decode("utf-8")
 
-        self.assertIn("const SAME_DAY_AUTO_SPREAD_ZOOM = 2;", source)
-        self.assertIn("const SAME_DAY_SPREAD_STEP = 8;", source)
+        self.assertIn(
+            "const SAME_DAY_AUTO_SPREAD_ZOOM = CANVAS_DETAIL_MIN_ZOOM;", source
+        )
+        self.assertIn("const SAME_DAY_NODE_DIAMETER = 24;", source)
+        self.assertIn("const SAME_DAY_NODE_GAP = 8;", source)
+        self.assertIn(
+            "const SAME_DAY_SPREAD_STEP = SAME_DAY_NODE_DIAMETER + SAME_DAY_NODE_GAP;",
+            source,
+        )
         self.assertIn(
             "const autoSpreadSameDay = z >= SAME_DAY_AUTO_SPREAD_ZOOM;", source
         )
-        self.assertIn(
-            "const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;", source
-        )
+        self.assertIn("const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;", source)
         self.assertIn("lineGeometry(line).horizontalStart.x", source)
         self.assertIn("drawTask(t, baseY, false, xs[i], i)", source)
-        self.assertIn("所有节点保持在线的横轴上，只改变横向位置", source)
+        self.assertIn("节点均在线上水平排列并留足最大节点直径", source)
         self.assertIn("state.canvasTaskPositions.set(t.id, { x: cx, y });", source)
         self.assertIn("const roundedSquareAttrs =", source)
         self.assertIn('const node = svgEl("rect", {', source)
@@ -257,11 +262,14 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("const upstream = collect(taskId, prerequisitesByTask)", source)
         self.assertIn("const downstream = collect(taskId, dependentsByTask)", source)
         self.assertIn("is-focus-dimmed", source)
-        self.assertIn("healthBadgeItems", source)
+        self.assertIn("primaryHealthBadge", source)
+        self.assertIn('if (health.overdue) return ["!", "overdue", "超期"]', source)
+        self.assertIn('if (health.risk) return ["险", "risk", "风险"]', source)
+        self.assertIn('transform: `translate(${cx} ${cy})`', source)
         self.assertIn("CANVAS_OVERVIEW_MAX_ZOOM = 0.7", source)
         self.assertIn("CANVAS_DETAIL_MIN_ZOOM = 1.5", source)
         self.assertIn('class: "line-task-summary"', source)
-        self.assertIn('density === "detail" || Boolean(dependencyFocus)', source)
+        self.assertIn("const showDependencies = Boolean(dependencyFocus);", source)
         self.assertIn('["#opt-date", "date"]', source)
 
         status, body = self.request("GET", "/static/style.css")
@@ -1008,7 +1016,7 @@ class AnyLineHttpTests(unittest.TestCase):
 
         status, body = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)
-        source = body.decode("utf-8")
+        source = body.decode("utf-8").replace("\r\n", "\n")
         helper_start = source.index("function tableLineOptions()")
         helper_end = source.index("\n}\n", helper_start) + 3
         helper_source = source[helper_start:helper_end]

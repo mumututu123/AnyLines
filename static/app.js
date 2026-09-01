@@ -1320,9 +1320,11 @@ function lineEnd(line) {
  * 同线同天多事务 -> 折叠为一个聚合节点，点击展开/折叠。
  * 簇 key = `${line_id}|${start_date}`；展开状态记录在 state.expandedClusters。
  */
-const FAN_STEP = 30;   // 展开时相邻节点的垂直间距
-const SAME_DAY_AUTO_SPREAD_ZOOM = 2;
-const SAME_DAY_SPREAD_STEP = 8;
+const FAN_STEP = 30;   // 同日节点标签的垂直分层间距
+const SAME_DAY_AUTO_SPREAD_ZOOM = CANVAS_DETAIL_MIN_ZOOM;
+const SAME_DAY_NODE_DIAMETER = 24;  // 选中态节点的最大直径
+const SAME_DAY_NODE_GAP = 8;
+const SAME_DAY_SPREAD_STEP = SAME_DAY_NODE_DIAMETER + SAME_DAY_NODE_GAP;
 
 function clusterKey(t) { return `${t.line_id}|${t.start_date}`; }
 
@@ -1357,7 +1359,10 @@ function renderCanvas() {
   const svg = $("#graph");
   const wrap = $("#canvas-wrap");
   const z = state.zoom;
-  const dependencyFocus = taskDependencyFocus(state.selectedTaskId);
+  const selectedDependencyFocus = taskDependencyFocus(state.selectedTaskId);
+  const dependencyFocus = selectedDependencyFocus &&
+    (selectedDependencyFocus.upstream.size || selectedDependencyFocus.downstream.size)
+    ? selectedDependencyFocus : null;
   const zoomDensity = canvasDensityLevel(z);
   const density = dependencyFocus && zoomDensity === "overview" ? "standard" : zoomDensity;
   updateCanvasDensityIndicator(zoomDensity, Boolean(dependencyFocus));
@@ -1560,9 +1565,22 @@ function renderCanvas() {
       return merge ? merge.end.x : lineGeometry(line).horizontalStart.x;
     })
   );
+  const expandedClusterRight = Math.max(0, ...[...clusters.entries()]
+    .filter(([key, arr]) => arr.length > 1 &&
+      (autoSpreadSameDay || state.expandedClusters.has(key)))
+    .map(([, arr]) => {
+      const line = lineById(arr[0].line_id);
+      if (!line || !rows.has(line.id)) return 0;
+      const lineStartX = lineGeometry(line).horizontalStart.x;
+      const clusterX = Math.max(x(arr[0].start_date), lineStartX);
+      const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;
+      const firstX = Math.max(clusterX - totalSpread / 2, lineStartX);
+      return firstX + totalSpread + 40;
+    }));
   const contentWidth = Math.max(
     x(stop.toISOString().slice(0, 10)) + CV.padR,
     geometryRight + CV.padR,
+    expandedClusterRight + CV.padR,
     900
   );
   const contentHeight = cursorY + 60;
@@ -1781,29 +1799,29 @@ function renderCanvas() {
     return classes.length ? ` ${classes.join(" ")}` : " is-focus-dimmed";
   };
 
-  const healthBadgeItems = (health) => {
-    const badges = [];
-    if (health.overdue) badges.push(["!", "overdue", "超期"]);
-    else if (health.soon) badges.push(["临", "soon", "即将到期"]);
-    if (health.risk) badges.push(["险", "risk", "风险"]);
-    if (health.stale) badges.push(["久", "stale", "状态停留过久"]);
-    return badges;
+  /* 一个节点只显示最高优先级状态：超期 > 风险 > 即将到期 > 状态停留过久。 */
+  const primaryHealthBadge = (health) => {
+    if (health.overdue) return ["!", "overdue", "超期"];
+    if (health.risk) return ["险", "risk", "风险"];
+    if (health.soon) return ["临", "soon", "即将到期"];
+    if (health.stale) return ["久", "stale", "状态停留过久"];
+    return null;
   };
 
-  const drawHealthBadges = (badges, cx, cy, halfSize, parent) => {
-    badges.slice(0, 3).forEach(([symbol, kind, label], index) => {
-      const badge = svgEl("g", {
-        class: `task-alert-badge task-alert-${kind}`,
-        transform: `translate(${cx + halfSize - index * 6} ${cy - halfSize})`,
-      }, parent);
-      svgEl("circle", { cx: 0, cy: 0, r: 4 }, badge);
-      const text = svgEl("text", {
-        x: 0, y: 2.2, "text-anchor": "middle",
-      }, badge);
-      text.textContent = symbol;
-      const title = svgEl("title", {}, badge);
-      title.textContent = label;
-    });
+  const drawHealthBadge = (badgeItem, cx, cy, halfSize, parent) => {
+    if (!badgeItem) return;
+    const [symbol, kind, label] = badgeItem;
+    const badge = svgEl("g", {
+      class: `task-alert-badge task-alert-${kind}`,
+      transform: `translate(${cx} ${cy})`,
+    }, parent);
+    svgEl("circle", { cx: 0, cy: 0, r: Math.min(5.5, halfSize - 2) }, badge);
+    const text = svgEl("text", {
+      x: 0, y: 2.4, "text-anchor": "middle",
+    }, badge);
+    text.textContent = symbol;
+    const title = svgEl("title", {}, badge);
+    title.textContent = label;
   };
 
   const canvasPointFromClient = (clientX, clientY) => {
@@ -1904,7 +1922,7 @@ function renderCanvas() {
         (hasActiveCanvasFilter && filterMatchedTaskIds.has(t.id) ? " filter-match" : ""),
     }, item);
     node.style.fill = statusColor(t.status);
-    drawHealthBadges(healthBadgeItems(health), cx, y, nodeHalfSize, item);
+    drawHealthBadge(primaryHealthBadge(health), cx, y, nodeHalfSize, item);
     state.canvasTaskPositions.set(t.id, { x: cx, y });
     node.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1982,7 +2000,6 @@ function renderCanvas() {
     if (!line || !rows.has(line.id)) continue;
     const baseY = lineY(line.id);
     const cx = nodeX(arr[0]);
-    const color = colorOf(line);
 
     /* 单事务：直接画 */
     if (arr.length === 1) {
@@ -2002,13 +2019,6 @@ function renderCanvas() {
     if (!expanded) {
       /* ---- 折叠态：一个聚合节点，颜色 = 最不成熟的状态 ---- */
       const st = leastMatureStatus(arr);
-      const hs = arr.map(taskHealth);
-      const clusterHealth = {
-        overdue: hs.some((h) => h.overdue),
-        soon: hs.some((h) => h.soon),
-        risk: hs.some((h) => h.risk),
-        stale: hs.some((h) => h.stale),
-      };
       const g = svgEl("g", {
         class: `cluster-node${taskFocusClass(arr.map((task) => task.id))}`,
       }, gTasks);
@@ -2030,7 +2040,6 @@ function renderCanvas() {
       }, g);
       backNode.style.fill = statusColor(st);
       node.style.fill = statusColor(st);
-      drawHealthBadges(healthBadgeItems(clusterHealth), cx, baseY, 13, g);
       /* 数量徽标 */
       const badge = svgEl("text", {
         x: cx, y: baseY + 3.5, "text-anchor": "middle", class: "cluster-count",
@@ -2060,27 +2069,19 @@ function renderCanvas() {
         e.textContent = parts.join(" · ");
       }
     } else {
-      if (autoSpreadSameDay) {
-        /* 高倍率自动展开：所有节点保持在线的横轴上，只改变横向位置。 */
-        const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;
-        const firstX = Math.max(
-          cx - totalSpread / 2,
-          lineGeometry(line).horizontalStart.x
-        );
-        const xs = arr.map((_, i) => firstX + i * SAME_DAY_SPREAD_STEP);
-        arr.forEach((t, i) => drawTask(t, baseY, false, xs[i], i));
-      } else {
-        /* 低倍率手动展开：沿用垂直扇出，并保留折叠按钮。 */
-        const ys = arr.map((_, i) => baseY + fanDy(i));
-        svgEl("line", {
-          x1: cx, y1: Math.min(...ys), x2: cx, y2: Math.max(...ys),
-          stroke: color, "stroke-width": 1.2, "stroke-dasharray": "2 2", opacity: .55,
-        }, gTasks);
-        arr.forEach((t, i) => drawTask(t, ys[i], true));
-        const topY = Math.min(...ys) - 16;
+      /* 手动或详细密度自动展开时，节点均在线上水平排列并留足最大节点直径。 */
+      const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;
+      const firstX = Math.max(
+        cx - totalSpread / 2,
+        lineGeometry(line).horizontalStart.x
+      );
+      const xs = arr.map((_, i) => firstX + i * SAME_DAY_SPREAD_STEP);
+      arr.forEach((t, i) => drawTask(t, baseY, false, xs[i], i));
+      if (!autoSpreadSameDay) {
         const g = svgEl("g", { class: "cluster-node" }, gTasks);
         const tx = svgEl("text", {
-          x: cx, y: topY + 3.5, "text-anchor": "middle", class: "cluster-hint",
+          x: firstX + totalSpread + 18, y: baseY + 3.5,
+          "text-anchor": "start", class: "cluster-hint",
         }, g);
         tx.textContent = "▾ 折叠";
         const title = svgEl("title", {}, g);
@@ -2149,7 +2150,8 @@ function renderCanvas() {
       x2: to.x - ux * 10, y2: to.y - uy * 10,
     };
   };
-  const showDependencies = density === "detail" || Boolean(dependencyFocus);
+  /* 各密度下默认隐藏依赖线；仅聚焦有前置或后续关系的事务时显示。 */
+  const showDependencies = Boolean(dependencyFocus);
   for (const dependency of showDependencies ? state.dependencies : []) {
     const from = state.canvasTaskPositions.get(dependency.dependent_task_id);
     const to = state.canvasTaskPositions.get(dependency.prerequisite_task_id);
