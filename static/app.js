@@ -15,7 +15,7 @@ const state = {
   selectedTaskIds: new Set(),
   view: "canvas",
   show: { name: true, status: true, dur: true, owner: true, date: true },
-  expandedClusters: new Set(),   // 已展开的同天多事务簇 key: "lineId|date"
+  focusedClusterKey: null,       // 临时局部放大的同天多事务簇
   hiddenBranchIds: new Set(),    // 画布中已折叠的支线（支线自身及其后代隐藏）
   canvasTaskPositions: new Map(),
   zoom: 1,                       // 画布缩放倍数 (Ctrl+滚轮)
@@ -253,7 +253,7 @@ function resetWorkspaceState() {
   state.selectedLineId = null;
   state.selectedTaskId = null;
   state.selectedTaskIds.clear();
-  state.expandedClusters.clear();
+  state.focusedClusterKey = null;
   state.hiddenBranchIds.clear();
   state.dependencies = [];
   state.taskImages = [];
@@ -1323,8 +1323,8 @@ function lineEnd(line) {
 }
 
 /*
- * 同线同天多事务 -> 折叠为一个聚合节点，点击展开/折叠。
- * 簇 key = `${line_id}|${start_date}`；展开状态记录在 state.expandedClusters。
+ * 同线同天多事务在标准密度下聚合显示，在详细密度下自动水平排开。
+ * 簇 key = `${line_id}|${start_date}`。
  */
 const FAN_STEP = 30;   // 同日节点标签的垂直分层间距
 const SAME_DAY_AUTO_SPREAD_ZOOM = CANVAS_DETAIL_MIN_ZOOM;
@@ -1361,9 +1361,188 @@ function fanDy(i) {
   return Math.ceil(i / 2) * (i % 2 === 1 ? -1 : 1) * FAN_STEP;
 }
 
+function clearClusterFocusPresentation() {
+  const wrap = $("#canvas-wrap");
+  wrap?.classList.remove("cluster-focus-active");
+  wrap?.querySelector(".cluster-focus-lens")?.remove();
+  $("#graph .cluster-focus-anchor-layer")?.remove();
+}
+
+function dismissClusterFocus({ rerender = true, restoreFocus = false } = {}) {
+  const key = state.focusedClusterKey;
+  if (!key) return false;
+  state.focusedClusterKey = null;
+  clearClusterFocusPresentation();
+  if (rerender && state.view === "canvas") {
+    render();
+    if (restoreFocus) {
+      requestAnimationFrame(() => {
+        const trigger = [...document.querySelectorAll(".cluster-focus-node")]
+          .find((element) => element.dataset.clusterKey === key);
+        trigger?.focus();
+      });
+    }
+  }
+  return true;
+}
+
+function renderClusterFocusLens({ key, tasks, line, anchorX, anchorY }) {
+  const wrap = $("#canvas-wrap");
+  if (!wrap || !tasks.length) return;
+  wrap.querySelector(".cluster-focus-lens")?.remove();
+  wrap.classList.add("cluster-focus-active");
+
+  const lens = document.createElement("section");
+  lens.className = "cluster-focus-lens";
+  lens.setAttribute("aria-label", `${line.name} ${tasks[0].start_date} 同日事务聚焦`);
+  lens.dataset.clusterKey = key;
+
+  const heading = document.createElement("div");
+  heading.className = "cluster-focus-heading";
+  const titleBlock = document.createElement("div");
+  const eyebrow = document.createElement("div");
+  eyebrow.className = "cluster-focus-eyebrow";
+  eyebrow.textContent = "局部聚焦";
+  const title = document.createElement("strong");
+  title.textContent = `${line.name} · ${tasks[0].start_date}`;
+  const subtitle = document.createElement("span");
+  subtitle.textContent = `${tasks.length} 个同日事务 · 画布倍率保持不变`;
+  titleBlock.append(eyebrow, title, subtitle);
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "cluster-focus-close";
+  close.setAttribute("aria-label", "取消局部聚焦");
+  close.title = "取消聚焦（Esc）";
+  close.textContent = "×";
+  close.onclick = () => dismissClusterFocus({ restoreFocus: true });
+  heading.append(titleBlock, close);
+
+  const cards = document.createElement("div");
+  cards.className = "cluster-focus-cards";
+  const refreshSelectedCard = () => {
+    for (const card of cards.querySelectorAll(".cluster-focus-card")) {
+      const selected = Number(card.dataset.taskId) === state.selectedTaskId;
+      card.classList.toggle("selected", selected);
+      card.setAttribute("aria-pressed", String(selected));
+    }
+  };
+  for (const task of tasks) {
+    const card = document.createElement("article");
+    card.className = "cluster-focus-card";
+    card.dataset.taskId = task.id;
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-label", `选择事务 ${task.name}`);
+    card.style.setProperty("--task-color", statusColor(task.status));
+
+    const cardTop = document.createElement("div");
+    cardTop.className = "cluster-focus-card-top";
+    const node = document.createElement("i");
+    node.className = "cluster-focus-task-node";
+    const name = document.createElement("strong");
+    name.textContent = task.name;
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "cluster-focus-edit";
+    edit.textContent = "编辑";
+    edit.setAttribute("aria-label", `编辑事务 ${task.name}`);
+    edit.onclick = (event) => {
+      event.stopPropagation();
+      state.selectedLineId = line.id;
+      state.selectedTaskId = task.id;
+      dismissClusterFocus({ rerender: false });
+      renderToolbar();
+      openTaskModal(task);
+    };
+    cardTop.append(node, name, edit);
+
+    const meta = document.createElement("div");
+    meta.className = "cluster-focus-card-meta";
+    const status = document.createElement("span");
+    status.className = "cluster-focus-status";
+    status.textContent = task.status;
+    const owner = document.createElement("span");
+    owner.textContent = task.owner ? `@${task.owner}` : "未指定责任人";
+    meta.append(status, owner);
+
+    const dates = document.createElement("div");
+    dates.className = "cluster-focus-card-dates";
+    dates.textContent = `${task.start_date} → ${task.end_date || task.start_date}`;
+    const health = taskHealth(task).labels[0];
+    if (health) {
+      const alert = document.createElement("span");
+      alert.className = `cluster-focus-health ${health[1]}`;
+      alert.textContent = health[0];
+      dates.appendChild(alert);
+    }
+    card.append(cardTop, meta, dates);
+
+    const selectTask = () => {
+      state.selectedLineId = line.id;
+      state.selectedTaskId = task.id;
+      refreshSelectedCard();
+      renderToolbar();
+    };
+    card.addEventListener("click", selectTask);
+    card.addEventListener("dblclick", () => {
+      selectTask();
+      dismissClusterFocus({ rerender: false });
+      openTaskModal(task);
+    });
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        selectTask();
+      }
+    });
+    cards.appendChild(card);
+  }
+
+  const footer = document.createElement("div");
+  footer.className = "cluster-focus-footer";
+  const hint = document.createElement("span");
+  hint.textContent = "单击选择 · 双击编辑 · Esc 退出";
+  footer.appendChild(hint);
+  lens.append(heading, cards, footer);
+
+  const lensWidth = Math.min(Math.max(360, Math.min(tasks.length, 3) * 210),
+    Math.max(240, wrap.clientWidth - 32));
+  cards.style.maxHeight = `${Math.min(420, Math.max(120, wrap.clientHeight - 170))}px`;
+  lens.style.width = `${lensWidth}px`;
+  lens.style.visibility = "hidden";
+  wrap.appendChild(lens);
+  refreshSelectedCard();
+
+  const anchorContentX = state.pan.x + anchorX * state.zoom;
+  const anchorContentY = state.pan.y + anchorY * state.zoom;
+  const margin = 16;
+  const lensHeight = lens.offsetHeight;
+  const visibleLeft = wrap.scrollLeft + margin;
+  const visibleRight = wrap.scrollLeft + wrap.clientWidth - margin;
+  const visibleTop = wrap.scrollTop + margin;
+  const visibleBottom = wrap.scrollTop + wrap.clientHeight - margin;
+  const left = Math.max(visibleLeft,
+    Math.min(anchorContentX - lensWidth / 2, visibleRight - lensWidth));
+  const roomAbove = anchorContentY - visibleTop;
+  const placement = roomAbove >= lensHeight + 34 ? "above" : "below";
+  const preferredTop = placement === "above" ?
+    anchorContentY - lensHeight - 30 : anchorContentY + 30;
+  const top = Math.max(visibleTop,
+    Math.min(preferredTop, Math.max(visibleTop, visibleBottom - lensHeight)));
+  const pointerX = Math.max(28, Math.min(anchorContentX - left, lensWidth - 28));
+  lens.dataset.placement = placement;
+  lens.style.setProperty("--focus-anchor-x", `${pointerX}px`);
+  lens.style.left = `${left}px`;
+  lens.style.top = `${top}px`;
+  lens.style.visibility = "visible";
+  requestAnimationFrame(() => lens.classList.add("is-open"));
+  close.focus({ preventScroll: true });
+}
+
 function renderCanvas() {
   const svg = $("#graph");
   const wrap = $("#canvas-wrap");
+  clearClusterFocusPresentation();
   const z = state.zoom;
   const selectedDependencyFocus = taskDependencyFocus(state.selectedTaskId);
   const dependencyFocus = selectedDependencyFocus &&
@@ -1453,19 +1632,19 @@ function renderCanvas() {
   const x = (dateStr) =>
     CV.padL + ((parseDate(dateStr) - start) / 86400000) * CV.pxPerDay;
 
-  /* 同线同天分簇；清理已失效的展开记录 */
+  /* 同线同天分簇；标准密度聚合，详细密度自动水平排开。 */
   const clusters = buildClusters(canvasTasks);
-  for (const k of [...state.expandedClusters]) {
-    if (!clusters.has(k) || clusters.get(k).length < 2) {
-      state.expandedClusters.delete(k);
-    }
+  let focusedClusterTasks = state.focusedClusterKey ?
+    clusters.get(state.focusedClusterKey) : null;
+  if (!focusedClusterTasks || focusedClusterTasks.length < 2 || autoSpreadSameDay) {
+    state.focusedClusterKey = null;
+    focusedClusterTasks = null;
   }
 
-  /* 每条线的泳道高度按已展开节点或高倍率标签的最大分层量自适应。 */
+  /* 详细密度下，泳道高度按自动排开后的标签最大分层量自适应。 */
   const lineMaxFan = new Map();
-  for (const [k, arr] of clusters) {
-    if (arr.length < 2 ||
-        (!autoSpreadSameDay && !state.expandedClusters.has(k))) continue;
+  for (const arr of clusters.values()) {
+    if (arr.length < 2 || !autoSpreadSameDay) continue;
     const lid = arr[0].line_id;
     const fan = Math.abs(fanDy(arr.length - 1));
     lineMaxFan.set(lid, Math.max(lineMaxFan.get(lid) || 0, fan));
@@ -1572,8 +1751,7 @@ function renderCanvas() {
     })
   );
   const expandedClusterRight = Math.max(0, ...[...clusters.entries()]
-    .filter(([key, arr]) => arr.length > 1 &&
-      (autoSpreadSameDay || state.expandedClusters.has(key)))
+    .filter(([, arr]) => arr.length > 1 && autoSpreadSameDay)
     .map(([, arr]) => {
       const line = lineById(arr[0].line_id);
       if (!line || !rows.has(line.id)) return 0;
@@ -2013,16 +2191,7 @@ function renderCanvas() {
       continue;
     }
 
-    const manuallyExpanded = state.expandedClusters.has(key);
-    const expanded = manuallyExpanded || autoSpreadSameDay;
-    const toggle = (e) => {
-      e.stopPropagation();
-      if (expanded) state.expandedClusters.delete(key);
-      else state.expandedClusters.add(key);
-      renderCanvas();
-    };
-
-    if (!expanded) {
+    if (!autoSpreadSameDay) {
       /* ---- 折叠态：一个聚合节点，颜色 = 最不成熟的状态 ---- */
       const st = leastMatureStatus(arr);
       const g = svgEl("g", {
@@ -2041,8 +2210,11 @@ function renderCanvas() {
       }, g);
       const node = svgEl("rect", {
         ...roundedSquareAttrs(cx, baseY, 13),
-        class: `task-node ${statusClass(st)}` +
+        class: `task-node cluster-focus-node ${statusClass(st)}` +
           (hasActiveCanvasFilter && clusterMatchesFilter ? " filter-match" : ""),
+        role: "button", tabindex: 0,
+        "aria-label": `${arr[0].start_date} 同天 ${arr.length} 个事务，局部放大查看`,
+        "data-cluster-key": key,
       }, g);
       backNode.style.fill = statusColor(st);
       node.style.fill = statusColor(st);
@@ -2051,18 +2223,25 @@ function renderCanvas() {
         x: cx, y: baseY + 3.5, "text-anchor": "middle", class: "cluster-count",
       }, g);
       badge.textContent = arr.length;
-      /* 展开提示徽标 */
-      const hint = svgEl("text", {
-        x: cx + 13, y: baseY - 9, class: "cluster-hint",
-      }, g);
-      hint.textContent = "▸ 展开";
 
       const title = svgEl("title", {}, node);
       title.textContent =
-        `${arr[0].start_date} 同天 ${arr.length} 个事务（单击展开）\n` +
+        `${arr[0].start_date} 同天 ${arr.length} 个事务（单击临时聚焦）\n` +
         arr.map((t) => `· ${t.name}【${t.status}】${t.owner ? " @" + t.owner : ""}`).join("\n");
 
-      g.addEventListener("click", toggle);
+      /* 顶层重叠节点负责临时聚焦，标准密度不再提供手动展开/折叠。 */
+      const openFocus = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        state.focusedClusterKey = key;
+        state.selectedLineId = line.id;
+        state.selectedTaskId = null;
+        render();
+      };
+      node.addEventListener("click", openFocus);
+      node.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") openFocus(event);
+      });
 
       /* 折叠态标签：显示"N项"及最不成熟状态 */
       const parts = [];
@@ -2075,7 +2254,7 @@ function renderCanvas() {
         e.textContent = parts.join(" · ");
       }
     } else {
-      /* 手动或详细密度自动展开时，节点均在线上水平排列并留足最大节点直径。 */
+      /* 详细密度下自动水平排开，并留足最大节点直径。 */
       const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;
       const firstX = Math.max(
         cx - totalSpread / 2,
@@ -2083,17 +2262,6 @@ function renderCanvas() {
       );
       const xs = arr.map((_, i) => firstX + i * SAME_DAY_SPREAD_STEP);
       arr.forEach((t, i) => drawTask(t, baseY, false, xs[i], i));
-      if (!autoSpreadSameDay) {
-        const g = svgEl("g", { class: "cluster-node" }, gTasks);
-        const tx = svgEl("text", {
-          x: firstX + totalSpread + 18, y: baseY + 3.5,
-          "text-anchor": "start", class: "cluster-hint",
-        }, g);
-        tx.textContent = "▾ 折叠";
-        const title = svgEl("title", {}, g);
-        title.textContent = "折叠同天事务";
-        g.addEventListener("click", toggle);
-      }
     }
   }
 
@@ -2184,9 +2352,34 @@ function renderCanvas() {
     title.textContent = `${dependent?.name || "事务"} 依赖 ${prerequisite?.name || "事务"}`;
   }
 
+  if (focusedClusterTasks) {
+    const focusedLine = lineById(focusedClusterTasks[0].line_id);
+    if (focusedLine && rows.has(focusedLine.id)) {
+      const anchorX = nodeX(focusedClusterTasks[0]);
+      const anchorY = lineY(focusedLine.id);
+      const anchorLayer = svgEl("g", {
+        class: "cluster-focus-anchor-layer", "aria-hidden": "true",
+      }, root);
+      svgEl("circle", {
+        cx: anchorX, cy: anchorY, r: 20, class: "cluster-focus-anchor-halo",
+      }, anchorLayer);
+      svgEl("circle", {
+        cx: anchorX, cy: anchorY, r: 14, class: "cluster-focus-anchor-ring",
+      }, anchorLayer);
+      renderClusterFocusLens({
+        key: state.focusedClusterKey,
+        tasks: focusedClusterTasks,
+        line: focusedLine,
+        anchorX,
+        anchorY,
+      });
+    }
+  }
+
   /* 点击空白取消选中 */
   svg.onclick = (e) => {
     if (e.target === svg) {
+      state.focusedClusterKey = null;
       state.selectedLineId = null;
       state.selectedTaskId = null;
       render();
@@ -2489,7 +2682,7 @@ function locateTask(id) {
   state.selectedTaskId = id;
   state.selectedLineId = t.line_id;
   const sameDay = state.tasks.filter((x) => x.line_id === t.line_id && x.start_date === t.start_date);
-  if (sameDay.length > 1) state.expandedClusters.add(clusterKey(t));
+  state.focusedClusterKey = sameDay.length > 1 ? clusterKey(t) : null;
   switchView("canvas");
   setTimeout(() => scrollToCanvasTask(id), 0);
 }
@@ -2498,6 +2691,11 @@ function scrollToCanvasTask(id) {
   const pos = state.canvasTaskPositions.get(id);
   if (!pos) return;
   centerCanvasPoint(pos.x, pos.y);
+  const focusedCard = document.querySelector(`.cluster-focus-card[data-task-id="${id}"]`);
+  if (focusedCard) {
+    focusedCard.focus({ preventScroll: true });
+    return;
+  }
   requestAnimationFrame(() => emphasizeCanvasTask(id));
 }
 
@@ -3706,6 +3904,7 @@ $("#btn-logout").onclick = async () => {
 
 function switchView(v) {
   closeTableCellPreview();
+  if (v !== "canvas") dismissClusterFocus({ rerender: false });
   state.view = v;
   $("#btn-view-dashboard").classList.toggle("active", v === "dashboard");
   $("#btn-view-dashboard").setAttribute("aria-pressed", String(v === "dashboard"));
@@ -4241,6 +4440,7 @@ function goToToday() {
 }
 $("#btn-today").onclick = goToToday;
 $("#btn-fit").onclick = () => {
+  dismissClusterFocus({ rerender: false });
   state.zoom = 1;
   state.pan = { x: 0, y: 0 };
   savePrefs();
@@ -4308,6 +4508,7 @@ window.addEventListener("resize", () => {
 wrap.addEventListener("wheel", (e) => {
   if (!e.ctrlKey) return;          // 仅 Ctrl+滚轮触发缩放
   e.preventDefault();
+  dismissClusterFocus({ rerender: false });
   const old = state.zoom;
   const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
   const next = Math.min(4, Math.max(0.25, old * factor));
@@ -4353,13 +4554,15 @@ function activateDrag() {
 
 wrap.addEventListener("pointerdown", (e) => {
   if (e.pointerType === "mouse" && e.button !== 0) return;
+  if (e.target.closest?.(".cluster-focus-lens")) return;
+  const clusterFocusDismissed = dismissClusterFocus({ rerender: false });
   if (!$("#canvas-root")) return;
   if (drag) return;
   drag = {
     pointerId: e.pointerId,
     startX: e.clientX, startY: e.clientY,
     panX: state.pan.x, panY: state.pan.y,
-    active: false, downAt: Date.now(),
+    active: false, downAt: Date.now(), clusterFocusDismissed,
   };
   drag.timer = setTimeout(activateDrag, DRAG_HOLD_MS);
 });
@@ -4381,6 +4584,7 @@ wrap.addEventListener("pointermove", (e) => {
 
 function finishDrag(e) {
   if (!drag || e.pointerId !== drag.pointerId) return;
+  const rerenderAfterDrag = drag.active && drag.clusterFocusDismissed;
   clearTimeout(drag.timer);
   if (drag.active) {
     /* 拖拽刚结束时抑制本次 click，避免误触选中/取消选中 */
@@ -4392,6 +4596,7 @@ function finishDrag(e) {
     wrap.releasePointerCapture(e.pointerId);
   }
   drag = null;
+  if (rerenderAfterDrag) renderCanvas();
 }
 
 window.addEventListener("pointerup", finishDrag);
@@ -4413,6 +4618,11 @@ document.addEventListener("keydown", async (e) => {
     else if (e.key === "ArrowRight") moveTaskImageViewer(1);
     else return;
     e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape" && state.focusedClusterKey) {
+    e.preventDefault();
+    dismissClusterFocus({ restoreFocus: true });
     return;
   }
   if (e.key === "Escape") {
