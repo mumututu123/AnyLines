@@ -912,6 +912,14 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 #modal.modal-wide { width: min(760px, calc(100vw - 32px)); }
 #modal.task-list-modal { width: min(960px, calc(100vw - 32px)); }
+#modal.my-todo-modal {
+  display: flex; flex-direction: column; width: min(960px, calc(100vw - 32px));
+  height: min(680px, calc(100vh - 32px)); max-height: none; overflow: hidden;
+}
+#modal.my-todo-modal #modal-header, #modal.my-todo-modal #modal-btns { flex: 0 0 auto; }
+#modal.my-todo-modal #modal-body {
+  display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow: hidden;
+}
 #modal-header {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; margin-bottom: 14px;
@@ -935,22 +943,37 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   margin-bottom: 10px; color: #57606a; font-size: 12px;
 }
 .my-todo-summary {
-  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px;
-  margin-bottom: 14px;
+  display: flex; flex: 0 0 auto; gap: 8px; margin-bottom: 14px;
+  padding: 2px 2px 8px; overflow-x: auto;
 }
 .my-todo-stat {
-  display: grid; gap: 4px; min-width: 0; padding: 11px 12px;
-  border: 1px solid #d8dee4; border-top: 3px solid #0969da; border-radius: 8px;
-  background: #f6fbff;
+  --todo-status-color: #0969da;
+  display: grid; flex: 1 0 126px; gap: 4px; min-width: 126px; padding: 11px 12px;
+  border: 1px solid #d8dee4; border-top: 3px solid var(--todo-status-color); border-radius: 8px;
+  background: #fff; color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: border-color .15s, box-shadow .15s, transform .15s;
 }
-.my-todo-stat strong { color: #0969da; font-size: 22px; line-height: 1; }
+.my-todo-stat strong { color: var(--todo-status-color); font-size: 22px; line-height: 1; }
 .my-todo-stat span { overflow: hidden; color: #57606a; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.my-todo-stat-overdue { border-top-color: #cf222e; background: #fff8f7; }
-.my-todo-stat-overdue strong { color: #cf222e; }
-.my-todo-stat-risk, .my-todo-stat-soon { border-top-color: #bf8700; background: #fffdf0; }
-.my-todo-stat-risk strong, .my-todo-stat-soon strong { color: #9a6700; }
-.my-todo-stat-blocked { border-top-color: #8250df; background: #fbf7ff; }
-.my-todo-stat-blocked strong { color: #8250df; }
+.my-todo-stat-overdue { --todo-status-color: #cf222e; }
+.my-todo-stat-risk, .my-todo-stat-soon { --todo-status-color: #bf8700; }
+.my-todo-stat-blocked { --todo-status-color: #8250df; }
+.my-todo-stat:hover { border-color: var(--todo-status-color); transform: translateY(-1px); }
+.my-todo-stat:focus-visible { outline: 2px solid var(--todo-status-color); outline-offset: 2px; }
+.my-todo-stat.active {
+  border-color: var(--todo-status-color); background: color-mix(in srgb, var(--todo-status-color) 8%, white);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--todo-status-color) 18%, transparent);
+}
+.my-todo-list-section { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+.my-todo-list-heading {
+  display: flex; flex: 0 0 auto; align-items: baseline; justify-content: space-between;
+  gap: 12px; margin-bottom: 8px;
+}
+.my-todo-list-heading strong { font-size: 13px; }
+.my-todo-list-heading span { color: #8c959f; font-size: 11px; }
+.my-todo-list-container { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.my-todo-list-container > .task-list-empty { height: 100%; }
+.dashboard-task-list-wrap.my-todo-list-wrap { height: 100%; max-height: none; overflow-y: auto; }
 .dashboard-task-list-wrap {
   max-height: min(58vh, 560px); overflow: auto; border: 1px solid #d8dee4; border-radius: 6px;
 }
@@ -971,8 +994,8 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .dashboard-task-alert { color: #cf222e; font-weight: 650; }
 .task-list-empty { padding: 44px 20px; }
 @media (max-width: 700px) {
-  .my-todo-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .my-todo-stat-total { grid-column: 1 / -1; }
+  #modal.my-todo-modal { width: calc(100vw - 20px); height: calc(100vh - 20px); padding: 16px; }
+  .my-todo-stat { flex-basis: 112px; min-width: 112px; }
 }
 .import-error-summary {
   margin-bottom: 12px; padding: 10px 12px; border-left: 3px solid #cf222e;

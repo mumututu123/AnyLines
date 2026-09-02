@@ -178,10 +178,14 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("ownerNames.has((task.owner || \"\").trim()) && !isDone(task)", source)
         self.assertIn("function renderMyTodoEntry()", source)
         self.assertIn('badge.textContent = count > 99 ? "99+" : String(count)', source)
-        self.assertIn("function openMyTodoModal()", source)
+        self.assertIn("function openMyTodoModal(", source)
         for label in ("待办总数", "已超期", "有风险", "7天内到期", "被前置阻塞"):
             with self.subTest(statistic=label):
                 self.assertIn(label, source)
+        self.assertIn("function renderTaskListTable(", source)
+        self.assertIn("item.onclick = () => activateFilter(filter, item)", source)
+        self.assertIn('row.setAttribute("aria-label", `查看事务详情：${task.name}`)', source)
+        self.assertIn('onClosed: () => openMyTodoModal(selected.key, listScrollTop)', source)
         self.assertIn('$("#btn-my-todos").onclick = openMyTodoModal', source)
 
         status, body = self.request("GET", "/static/style.css")
@@ -190,6 +194,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(".my-todos-entry {", styles)
         self.assertIn(".my-todo-count {", styles)
         self.assertIn(".my-todo-summary {", styles)
+        self.assertIn("#modal.my-todo-modal {", styles)
+        self.assertIn(".dashboard-task-list-wrap.my-todo-list-wrap {", styles)
 
     def test_canvas_merge_uses_rounded_polyline(self):
         status, body = self.request("GET", "/static/app.js")

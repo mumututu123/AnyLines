@@ -1206,20 +1206,16 @@ function renderDashboardExceptions(tasks, dependency) {
   container.appendChild(wrap);
 }
 
-function openTaskListModal(title, tasks) {
+function renderTaskListTable(container, tasks, emptyText = "暂无符合条件的事务", options = {}) {
   const taskList = [...tasks].sort(compareTasks);
-  openModal(`${title}（${taskList.length}）`, (body) => {
-    $("#modal").classList.add("modal-wide", "task-list-modal");
-    $("#modal-ok").classList.add("hidden");
-    $("#modal-cancel").textContent = "关闭";
-
-    if (!taskList.length) {
-      const empty = document.createElement("div");
-      empty.className = "dashboard-empty task-list-empty";
-      empty.textContent = "暂无符合条件的事务";
-      body.appendChild(empty);
-      return;
-    }
+  container.innerHTML = "";
+  if (!taskList.length) {
+    const empty = document.createElement("div");
+    empty.className = "dashboard-empty task-list-empty";
+    empty.textContent = emptyText;
+    container.appendChild(empty);
+    return;
+  }
 
     const tableWrap = document.createElement("div");
     tableWrap.className = "dashboard-task-list-wrap";
@@ -1240,8 +1236,8 @@ function openTaskListModal(title, tasks) {
       const row = document.createElement("tr");
       row.tabIndex = 0;
       row.setAttribute("role", "button");
-      row.setAttribute("aria-label", `编辑事务 ${task.name}`);
-      const openEditor = () => openTaskModal(task);
+      row.setAttribute("aria-label", `查看事务详情：${task.name}`);
+      const openEditor = () => options.onTaskOpen ? options.onTaskOpen(task) : openTaskModal(task);
       row.onclick = openEditor;
       row.onkeydown = (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -1294,43 +1290,105 @@ function openTaskListModal(title, tasks) {
     }
     table.appendChild(tbody);
     tableWrap.appendChild(table);
-    body.appendChild(tableWrap);
+    container.appendChild(tableWrap);
+}
+
+function openTaskListModal(title, tasks) {
+  const taskList = [...tasks].sort(compareTasks);
+  openModal(`${title}（${taskList.length}）`, (body) => {
+    $("#modal").classList.add("modal-wide", "task-list-modal");
+    $("#modal-ok").classList.add("hidden");
+    $("#modal-cancel").textContent = "关闭";
+    renderTaskListTable(body, taskList);
   }, async () => true);
 }
 
-function openMyTodoModal() {
+function openMyTodoModal(initialFilterKey = "total", initialListScrollTop = 0) {
+  if (typeof initialFilterKey !== "string") initialFilterKey = "total";
   const tasks = personalTodoTasks();
   const healthItems = tasks.map((task) => ({ task, health: taskHealth(task) }));
-  const blockedCount = tasks.filter((task) => prerequisiteIds(task.id).some((id) => {
+  const blockedTasks = tasks.filter((task) => prerequisiteIds(task.id).some((id) => {
     const prerequisite = taskById(id);
     return prerequisite && !isDone(prerequisite);
-  })).length;
-  const metrics = [
-    ["待办总数", tasks.length, "total"],
-    ["已超期", healthItems.filter(({ health }) => health.overdue).length, "overdue"],
-    ["有风险", healthItems.filter(({ health }) => health.risk).length, "risk"],
-    ["7天内到期", healthItems.filter(({ health }) => health.soon).length, "soon"],
-    ["被前置阻塞", blockedCount, "blocked"],
+  }));
+  const filters = [
+    { key: "total", label: "待办总数", tasks },
+    { key: "overdue", label: "已超期", tasks: healthItems.filter(({ health }) => health.overdue).map(({ task }) => task) },
+    { key: "risk", label: "有风险", tasks: healthItems.filter(({ health }) => health.risk).map(({ task }) => task) },
+    { key: "soon", label: "7天内到期", tasks: healthItems.filter(({ health }) => health.soon).map(({ task }) => task) },
+    { key: "blocked", label: "被前置阻塞", tasks: blockedTasks },
   ];
 
-  openTaskListModal(`${currentAccountDisplayName()}的个人待办`, tasks);
-  const body = $("#modal-body");
-  const intro = document.createElement("div");
-  intro.className = "my-todo-intro";
-  intro.textContent = `按当前账号责任人和未闭环状态统计 · ${state.currentWorkspace?.name || "当前项目"}`;
-  const summary = document.createElement("div");
-  summary.className = "my-todo-summary";
-  for (const [label, value, kind] of metrics) {
-    const item = document.createElement("div");
-    item.className = `my-todo-stat my-todo-stat-${kind}`;
-    const number = document.createElement("strong");
-    number.textContent = value;
-    const text = document.createElement("span");
-    text.textContent = label;
-    item.append(number, text);
-    summary.appendChild(item);
-  }
-  body.prepend(intro, summary);
+  openModal(`${currentAccountDisplayName()}的个人待办`, (body) => {
+    $("#modal").classList.add("my-todo-modal");
+    $("#modal-ok").classList.add("hidden");
+    $("#modal-cancel").textContent = "关闭";
+
+    const intro = document.createElement("div");
+    intro.className = "my-todo-intro";
+    intro.textContent = `按当前账号责任人和未闭环状态统计 · ${state.currentWorkspace?.name || "当前项目"}`;
+    const summary = document.createElement("div");
+    summary.className = "my-todo-summary";
+    summary.setAttribute("role", "group");
+    summary.setAttribute("aria-label", "按事务状态筛选个人待办");
+
+    const listSection = document.createElement("section");
+    listSection.className = "my-todo-list-section";
+    const listHeading = document.createElement("div");
+    listHeading.className = "my-todo-list-heading";
+    const listTitle = document.createElement("strong");
+    const listHint = document.createElement("span");
+    listHint.textContent = "点击事务行查看详情";
+    listHeading.append(listTitle, listHint);
+    const listContainer = document.createElement("div");
+    listContainer.className = "my-todo-list-container";
+    listSection.append(listHeading, listContainer);
+
+    const activateFilter = (selected, selectedButton, listScrollTop = 0) => {
+      for (const button of summary.querySelectorAll(".my-todo-stat")) {
+        const active = button === selectedButton;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", String(active));
+      }
+      listTitle.textContent = `${selected.label}（${selected.tasks.length}）`;
+      renderTaskListTable(
+        listContainer,
+        selected.tasks,
+        selected.key === "total" ? "当前没有待办事务" : `当前没有“${selected.label}”的待办事务`,
+        {
+          onTaskOpen: (task) => {
+            const listScrollTop = listContainer.querySelector(".my-todo-list-wrap")?.scrollTop || 0;
+            openTaskModal(task, null, false, {
+              onClosed: () => openMyTodoModal(selected.key, listScrollTop),
+            });
+          },
+        }
+      );
+      const listWrap = listContainer.querySelector(".dashboard-task-list-wrap");
+      listWrap?.classList.add("my-todo-list-wrap");
+      if (listWrap) listWrap.scrollTop = listScrollTop;
+    };
+
+    filters.forEach((filter, index) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.className = `my-todo-stat my-todo-stat-${filter.key}`;
+      item.setAttribute("aria-pressed", "false");
+      item.setAttribute("aria-label", `${filter.label} ${filter.tasks.length} 项，点击筛选`);
+      const number = document.createElement("strong");
+      number.textContent = filter.tasks.length;
+      const text = document.createElement("span");
+      text.textContent = filter.label;
+      item.append(number, text);
+      item.onclick = () => activateFilter(filter, item);
+      summary.appendChild(item);
+    });
+    body.append(intro, summary, listSection);
+    const selectedIndex = Math.max(0, filters.findIndex((filter) => filter.key === initialFilterKey));
+    requestAnimationFrame(() => activateFilter(
+      filters[selectedIndex], summary.children[selectedIndex], initialListScrollTop
+    ));
+  }, async () => true);
 }
 
 $("#btn-my-todos").onclick = openMyTodoModal;
@@ -2792,7 +2850,7 @@ function centerCanvasPoint(x, y = null) {
 /* ============================================================== 弹窗 */
 function openModal(title, bodyBuilder, onOk, options = {}) {
   $("#modal-title").textContent = title;
-  $("#modal").classList.remove("modal-wide", "task-list-modal");
+  $("#modal").classList.remove("modal-wide", "task-list-modal", "my-todo-modal");
   $("#modal-ok").textContent = "确定";
   $("#modal-ok").classList.remove("hidden", "danger");
   $("#modal-cancel").textContent = "取消";
@@ -2803,21 +2861,25 @@ function openModal(title, bodyBuilder, onOk, options = {}) {
   bodyBuilder(body);
   const mask = $("#modal-mask");
   mask._onBackdropClose = options.onBackdropClose || null;
+  mask._onClosed = options.onClosed || null;
   mask.classList.remove("hidden");
-  const close = () => {
+  const close = (reason) => {
     mask.classList.add("hidden");
     mask._onBackdropClose = null;
+    const onClosed = mask._onClosed;
+    mask._onClosed = null;
+    if (onClosed) onClosed(reason);
   };
   $("#modal-cancel").onclick = () => {
     if (options.onCancel) options.onCancel();
-    close();
+    close("cancel");
   };
   $("#modal-ok").onclick = async () => {
     const ok = $("#modal-ok");
     if (ok.disabled) return;
     ok.disabled = true;
     try {
-      if (await onOk() !== false) close();
+      if (await onOk() !== false) close("ok");
     } catch (_error) {
       // api() 已显示具体错误，保留弹窗方便修改后重试。
     } finally {
@@ -2829,9 +2891,12 @@ function openModal(title, bodyBuilder, onOk, options = {}) {
 $("#modal-mask").onclick = (event) => {
   if (event.button === 0 && event.target === event.currentTarget) {
     const onBackdropClose = event.currentTarget._onBackdropClose;
+    const onClosed = event.currentTarget._onClosed;
     event.currentTarget.classList.add("hidden");
     event.currentTarget._onBackdropClose = null;
+    event.currentTarget._onClosed = null;
     if (onBackdropClose) onBackdropClose();
+    if (onClosed) onClosed("backdrop");
   }
 };
 
@@ -3393,7 +3458,7 @@ function createTaskContentEditor(body, task, draft = null) {
 }
 
 /* 新建/编辑事务 */
-function openTaskModal(task, lineId = null, allowLineSelection = false) {
+function openTaskModal(task, lineId = null, allowLineSelection = false, options = {}) {
   if (!ensureWorkspaceEditable()) return;
   const isNew = !task;
   const openingDraftKey = isNew ? taskCreateDraftKey(lineId) : null;
@@ -3523,7 +3588,8 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
           await api(`/api/tasks/${task.id}`, "DELETE");
           $("#modal-mask").classList.add("hidden");
           toast("已删除事务，可按 Ctrl+Z 撤销");
-          reload();
+          await reload();
+          if (options.onClosed) options.onClosed("delete");
         };
         $("#modal-header-tools").appendChild(del);
       }
@@ -3581,14 +3647,17 @@ function openTaskModal(task, lineId = null, allowLineSelection = false) {
       }
       await reload();
     },
-    isNew ? {
-      onBackdropClose: () => saveTaskCreateDraft(
-        $("#modal-body"), lineId, openingDraftKey
-      ),
-      onCancel: () => discardTaskCreateDraft(
-        $("#modal-body"), lineId, openingDraftKey
-      ),
-    } : {}
+    {
+      ...(isNew ? {
+        onBackdropClose: () => saveTaskCreateDraft(
+          $("#modal-body"), lineId, openingDraftKey
+        ),
+        onCancel: () => discardTaskCreateDraft(
+          $("#modal-body"), lineId, openingDraftKey
+        ),
+      } : {}),
+      onClosed: options.onClosed,
+    }
   );
   if (task) {
     requestAnimationFrame(() => autoResizeTaskContent($("#modal-body")._content));
@@ -4693,7 +4762,7 @@ document.addEventListener("keydown", async (e) => {
     return;
   }
   if (e.key === "Escape") {
-    $("#modal-mask").classList.add("hidden");
+    if (!$("#modal-mask").classList.contains("hidden")) $("#modal-cancel").click();
     return;
   }
   if (!document.body.classList.contains("authenticated") || state.view !== "canvas") return;
