@@ -191,26 +191,27 @@ body.authenticated #login-view { display: none; }
 .dashboard-entry:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
 .dashboard-entry.active { border-color: #0969da; background: #0969da; color: #fff; }
 .my-todos-entry {
-  position: relative; display: inline-flex; align-items: center; gap: 7px;
-  min-height: 34px; padding: 6px 13px; border: 1px solid #0550ae; border-radius: 7px;
-  background: linear-gradient(135deg, #0969da, #0550ae); color: #fff;
-  font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer;
-  box-shadow: 0 3px 9px rgba(9, 105, 218, .24);
-  transition: transform .14s ease, box-shadow .14s ease, background .14s ease;
+  position: relative; display: grid; place-items: center; flex: 0 0 auto;
+  width: 32px; height: 32px; padding: 0; border: 1px solid #b6d7fe; border-radius: 6px;
+  background: #f6faff; color: #0969da;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(31, 35, 40, .1);
+  transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease, background .14s ease;
 }
+.my-todos-entry svg { display: block; }
 .my-todos-entry:hover {
-  background: linear-gradient(135deg, #218bff, #0969da);
-  box-shadow: 0 5px 14px rgba(9, 105, 218, .32); transform: translateY(-1px);
+  border-color: #54aeff; background: #ddf4ff;
+  box-shadow: 0 3px 9px rgba(9, 105, 218, .2); transform: translateY(-1px);
 }
 .my-todos-entry:focus-visible { outline: 2px solid #0969da; outline-offset: 3px; }
 .my-todo-count {
-  position: absolute; top: -8px; right: -9px; display: grid; place-items: center;
-  min-width: 22px; height: 22px; padding: 0 5px; border: 2px solid #fff; border-radius: 999px;
+  position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center;
+  min-width: 20px; height: 20px; padding: 0 4px; border: 2px solid #fff; border-radius: 999px;
   background: #cf222e; color: #fff; font-size: 10px; font-weight: 800; line-height: 1;
   box-shadow: 0 2px 6px rgba(31, 35, 40, .28);
 }
 .my-todo-count.is-zero { background: #6e7781; }
-.my-todos-entry.has-todos { box-shadow: 0 3px 10px rgba(9, 105, 218, .3); }
+.my-todos-entry.has-todos { border-color: #80ccff; background: #eef8ff; }
 .view-btn {
   border: none; background: #fff; padding: 6px 14px; cursor: pointer; font-size: 13px;
 }

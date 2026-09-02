@@ -153,6 +153,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(b'id="btn-view-dashboard"', body)
         self.assertIn(b'id="btn-my-todos"', body)
         self.assertIn(b'id="my-todo-count"', body)
+        self.assertNotIn(b'<span>\xe6\x88\x91\xe7\x9a\x84\xe5\xbe\x85\xe5\x8a\x9e</span>', body)
         self.assertIn(b'id="dashboard-view"', body)
         self.assertIn(b'id="image-lightbox"', body)
         self.assertNotIn(b'id="btn-workspace-create"', body)
