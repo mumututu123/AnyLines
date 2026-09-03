@@ -1263,10 +1263,26 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 #modal-body .collaboration-heading button.following { background: #f6f0ff; }
 .comment-composer { padding: 9px; border: 1px solid #d8dee4; border-radius: 7px; background: #f6f8fa; }
+.comment-input-wrap { position: relative; }
 #modal-body .comment-composer textarea { min-height: 68px; background: #fff; }
 .comment-tools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 7px; }
-#modal-body .comment-tools select { width: auto; max-width: 180px; }
 #modal-body .comment-tools button { width: auto; padding: 6px 11px; border: 0; border-radius: 6px; cursor: pointer; }
+.mention-suggestions {
+  position: absolute; z-index: 4; right: 0; bottom: calc(100% + 4px); left: 0;
+  max-height: 220px; overflow-y: auto; padding: 4px; border: 1px solid #afb8c1;
+  border-radius: 7px; background: #fff; box-shadow: 0 8px 24px rgba(66,74,83,.18);
+}
+.mention-suggestions.hidden { display: none; }
+#modal-body .mention-option {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  width: 100%; padding: 7px 9px; border: 0; border-radius: 5px;
+  background: #fff; color: #24292f; font: inherit; text-align: left; cursor: pointer;
+}
+#modal-body .mention-option.active { background: #ddf4ff; }
+.mention-option strong {
+  min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap;
+}
+.mention-option span { flex: 0 0 auto; color: #6e7781; font-size: 11px; }
 .collaboration-timeline { display: grid; gap: 0; margin-top: 12px; }
 .collaboration-item {
   display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 9px;

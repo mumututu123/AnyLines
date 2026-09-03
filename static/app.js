@@ -3569,6 +3569,155 @@ function createTaskContentEditor(body, task, draft = null) {
   return editor;
 }
 
+function createMentionAutocomplete(textarea, members, taskId) {
+  const candidates = (members || []).filter((member) => member.id !== state.user?.id);
+  const displayNameCounts = new Map();
+  for (const member of candidates) {
+    const name = (member.display_name || "").trim();
+    displayNameCounts.set(name, (displayNameCounts.get(name) || 0) + 1);
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "comment-input-wrap";
+  const list = document.createElement("div");
+  list.id = `task-${taskId}-mention-list`;
+  list.className = "mention-suggestions hidden";
+  list.setAttribute("role", "listbox");
+  list.setAttribute("aria-label", "匹配的项目成员");
+  textarea.setAttribute("aria-autocomplete", "list");
+  textarea.setAttribute("aria-controls", list.id);
+  textarea.setAttribute("aria-expanded", "false");
+
+  let matches = [];
+  let activeIndex = 0;
+  let mentionRange = null;
+  let composing = false;
+
+  const close = () => {
+    matches = [];
+    mentionRange = null;
+    list.innerHTML = "";
+    list.classList.add("hidden");
+    textarea.setAttribute("aria-expanded", "false");
+    textarea.removeAttribute("aria-activedescendant");
+  };
+
+  const currentMentionRange = () => {
+    const cursor = textarea.selectionStart;
+    if (cursor === null || cursor !== textarea.selectionEnd) return null;
+    const beforeCursor = textarea.value.slice(0, cursor);
+    const at = beforeCursor.lastIndexOf("@");
+    if (at < 0) return null;
+    const query = beforeCursor.slice(at + 1);
+    if (/\s|@/.test(query)) return null;
+    return { start: at, end: cursor, query };
+  };
+
+  const memberToken = (member) => {
+    const displayName = (member.display_name || "").trim();
+    return displayName && displayNameCounts.get(displayName) === 1 ?
+      displayName : member.username;
+  };
+
+  const choose = (member) => {
+    const range = mentionRange || currentMentionRange();
+    if (!range) return;
+    const token = memberToken(member);
+    const suffix = textarea.value.slice(range.end);
+    const separator = suffix.startsWith(" ") ? "" : " ";
+    textarea.value = textarea.value.slice(0, range.start) +
+      `@${token}${separator}${suffix}`;
+    const cursor = range.start + token.length + 2;
+    textarea.setSelectionRange(cursor, cursor);
+    close();
+    textarea.focus();
+    textarea.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  const paintActive = () => {
+    [...list.children].forEach((option, index) => {
+      const selected = index === activeIndex;
+      option.classList.toggle("active", selected);
+      option.setAttribute("aria-selected", String(selected));
+    });
+    const selected = list.children[activeIndex];
+    if (selected) {
+      textarea.setAttribute("aria-activedescendant", selected.id);
+      selected.scrollIntoView({ block: "nearest" });
+    }
+  };
+
+  const update = () => {
+    const range = currentMentionRange();
+    if (!range) {
+      close();
+      return;
+    }
+    const query = range.query.toLocaleLowerCase("zh-CN");
+    matches = candidates.filter((member) =>
+      (member.display_name || "").toLocaleLowerCase("zh-CN").startsWith(query) ||
+      (member.username || "").toLocaleLowerCase("zh-CN").startsWith(query)
+    ).slice(0, 8);
+    if (!matches.length) {
+      close();
+      return;
+    }
+    mentionRange = range;
+    activeIndex = 0;
+    list.innerHTML = "";
+    matches.forEach((member, index) => {
+      const option = document.createElement("button");
+      option.type = "button";
+      option.id = `${list.id}-option-${index}`;
+      option.className = "mention-option";
+      option.setAttribute("role", "option");
+      const name = document.createElement("strong");
+      name.textContent = member.display_name;
+      const account = document.createElement("span");
+      account.textContent = `@${member.username}`;
+      option.append(name, account);
+      option.onmousedown = (event) => event.preventDefault();
+      option.onclick = () => choose(member);
+      option.onmousemove = () => {
+        activeIndex = index;
+        paintActive();
+      };
+      list.appendChild(option);
+    });
+    list.classList.remove("hidden");
+    textarea.setAttribute("aria-expanded", "true");
+    paintActive();
+  };
+
+  textarea.addEventListener("input", () => {
+    if (!composing) update();
+  });
+  textarea.addEventListener("compositionstart", () => { composing = true; });
+  textarea.addEventListener("compositionend", () => {
+    composing = false;
+    update();
+  });
+  textarea.addEventListener("click", update);
+  textarea.addEventListener("keydown", (event) => {
+    if (list.classList.contains("hidden")) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const offset = event.key === "ArrowDown" ? 1 : -1;
+      activeIndex = (activeIndex + offset + matches.length) % matches.length;
+      paintActive();
+    } else if (event.key === "Enter" || event.key === "Tab") {
+      event.preventDefault();
+      choose(matches[activeIndex]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      close();
+    }
+  });
+  textarea.addEventListener("blur", () => setTimeout(close, 120));
+  wrap.append(textarea, list);
+  return wrap;
+}
+
 function renderTaskCollaboration(panel, task, data) {
   if (!panel.isConnected) return;
   panel.innerHTML = "";
@@ -3598,28 +3747,12 @@ function renderTaskCollaboration(panel, task, data) {
   const textarea = document.createElement("textarea");
   textarea.maxLength = 2000;
   textarea.rows = 3;
-  textarea.placeholder = "写下进展、问题或决策；可使用 @成员 提醒对方";
+  textarea.placeholder = "写下进展、问题或决策；输入 @ 可联想当前空间成员";
+  const inputWrap = createMentionAutocomplete(
+    textarea, data.members || state.collaborationMembers, task.id
+  );
   const tools = document.createElement("div");
   tools.className = "comment-tools";
-  const mention = document.createElement("select");
-  const mentionEmpty = document.createElement("option");
-  mentionEmpty.value = "";
-  mentionEmpty.textContent = "插入 @成员";
-  mention.appendChild(mentionEmpty);
-  for (const member of data.members || state.collaborationMembers) {
-    if (member.id === state.user?.id) continue;
-    const option = document.createElement("option");
-    option.value = member.display_name;
-    option.textContent = member.display_name;
-    mention.appendChild(option);
-  }
-  mention.onchange = () => {
-    if (!mention.value) return;
-    const prefix = textarea.value && !/\s$/.test(textarea.value) ? " " : "";
-    textarea.value += `${prefix}@${mention.value} `;
-    mention.value = "";
-    textarea.focus();
-  };
   const post = document.createElement("button");
   post.type = "button";
   post.className = "primary";
@@ -3641,8 +3774,8 @@ function renderTaskCollaboration(panel, task, data) {
       post.disabled = false;
     }
   };
-  tools.append(mention, post);
-  composer.append(textarea, tools);
+  tools.appendChild(post);
+  composer.append(inputWrap, tools);
 
   const timeline = document.createElement("div");
   timeline.className = "collaboration-timeline";

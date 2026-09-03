@@ -1725,7 +1725,12 @@ class AnyLineHttpTests(unittest.TestCase):
         source = source.decode("utf-8")
         self.assertIn("function openNotificationsModal()", source)
         self.assertIn("function createTaskCollaborationPanel(body, task)", source)
-        self.assertIn("插入 @成员", source)
+        self.assertIn("function createMentionAutocomplete(textarea, members, taskId)", source)
+        self.assertIn('textarea.setAttribute("aria-autocomplete", "list")', source)
+        self.assertIn('.startsWith(query)', source)
+        self.assertIn('event.key === "ArrowDown" || event.key === "ArrowUp"', source)
+        self.assertIn('event.key === "Enter" || event.key === "Tab"', source)
+        self.assertNotIn("插入 @成员", source)
 
 
 class DatabaseMigrationTests(unittest.TestCase):
