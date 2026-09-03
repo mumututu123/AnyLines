@@ -190,7 +190,7 @@ body.authenticated #login-view { display: none; }
 .dashboard-entry:hover { border-color: #0969da; color: #0969da; background: #eef6ff; }
 .dashboard-entry:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
 .dashboard-entry.active { border-color: #0969da; background: #0969da; color: #fff; }
-.my-todos-entry {
+.my-status-entry {
   position: relative; display: grid; place-items: center; flex: 0 0 auto;
   width: 32px; height: 32px; padding: 0; border: 1px solid #b6d7fe; border-radius: 6px;
   background: #f6faff; color: #0969da;
@@ -198,35 +198,23 @@ body.authenticated #login-view { display: none; }
   box-shadow: 0 1px 3px rgba(31, 35, 40, .1);
   transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease, background .14s ease;
 }
-.my-todos-entry svg { display: block; }
-.my-todos-entry:hover {
+.my-status-entry svg { display: block; }
+.my-status-entry:hover {
   border-color: #54aeff; background: #ddf4ff;
   box-shadow: 0 3px 9px rgba(9, 105, 218, .2); transform: translateY(-1px);
 }
-.my-todos-entry:focus-visible { outline: 2px solid #0969da; outline-offset: 3px; }
-.my-todo-count {
+.my-status-entry:focus-visible { outline: 2px solid #0969da; outline-offset: 3px; }
+.my-status-count {
   position: absolute; right: -4px; bottom: -4px; display: grid; place-items: center;
   min-width: 20px; height: 20px; padding: 0 4px; border: 2px solid #fff; border-radius: 999px;
   background: #cf222e; color: #fff; font-size: 10px; font-weight: 800; line-height: 1;
   box-shadow: 0 2px 6px rgba(31, 35, 40, .28);
 }
-.my-todo-count.is-zero { background: #6e7781; }
-.my-todos-entry.has-todos { border-color: #80ccff; background: #eef8ff; }
-.notification-entry {
-  position: relative; display: grid; place-items: center; flex: 0 0 auto;
-  width: 32px; height: 32px; padding: 0; border: 1px solid #d0d7de; border-radius: 6px;
-  background: #fff; color: #57606a; cursor: pointer;
-}
-.notification-entry:hover, .notification-entry.has-unread {
+.my-status-count.is-zero { background: #6e7781; }
+.my-status-entry.has-todos { border-color: #80ccff; background: #eef8ff; }
+.my-status-entry.has-unread {
   border-color: #8250df; background: #f6f0ff; color: #6639ba;
 }
-.notification-entry:focus-visible { outline: 2px solid #8250df; outline-offset: 2px; }
-.notification-count {
-  position: absolute; right: -5px; bottom: -5px; display: grid; place-items: center;
-  min-width: 19px; height: 19px; padding: 0 4px; border: 2px solid #fff; border-radius: 999px;
-  background: #cf222e; color: #fff; font-size: 10px; font-weight: 800; line-height: 1;
-}
-.notification-count.is-zero { display: none; }
 .view-btn {
   border: none; background: #fff; padding: 6px 14px; cursor: pointer; font-size: 13px;
 }
@@ -947,14 +935,35 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 #modal.modal-wide { width: min(760px, calc(100vw - 32px)); }
 #modal.task-list-modal { width: min(960px, calc(100vw - 32px)); }
-#modal.my-todo-modal {
+#modal.my-status-modal {
   display: flex; flex-direction: column; width: min(960px, calc(100vw - 32px));
   height: min(680px, calc(100vh - 32px)); max-height: none; overflow: hidden;
 }
-#modal.my-todo-modal #modal-header, #modal.my-todo-modal #modal-btns { flex: 0 0 auto; }
-#modal.my-todo-modal #modal-body {
+#modal.my-status-modal #modal-header, #modal.my-status-modal #modal-btns { flex: 0 0 auto; }
+#modal.my-status-modal #modal-body {
   display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow: hidden;
 }
+.my-status-tabs {
+  display: flex; flex: 0 0 auto; gap: 4px; margin-bottom: 14px;
+  padding: 4px; border-radius: 8px; background: #f6f8fa;
+}
+#modal-body .my-status-tabs button {
+  flex: 1; padding: 8px 12px; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: #57606a; font: inherit; font-weight: 650; cursor: pointer;
+}
+#modal-body .my-status-tabs button.active {
+  border-color: #d0d7de; background: #fff; color: #0969da;
+  box-shadow: 0 1px 3px rgba(31, 35, 40, .1);
+}
+.my-status-content {
+  display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column;
+}
+.my-status-notification-toolbar {
+  display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 10px; color: #57606a; font-size: 12px;
+}
+.my-status-notification-list { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.my-status-notification-list .notification-list { height: 100%; max-height: none; }
 #modal-header {
   display: flex; align-items: center; justify-content: space-between;
   gap: 12px; margin-bottom: 14px;
@@ -1029,7 +1038,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .dashboard-task-alert { color: #cf222e; font-weight: 650; }
 .task-list-empty { padding: 44px 20px; }
 @media (max-width: 700px) {
-  #modal.my-todo-modal { width: calc(100vw - 20px); height: calc(100vh - 20px); padding: 16px; }
+  #modal.my-status-modal { width: calc(100vw - 20px); height: calc(100vh - 20px); padding: 16px; }
   .my-todo-stat { flex-basis: 112px; min-width: 112px; }
 }
 .import-error-summary {

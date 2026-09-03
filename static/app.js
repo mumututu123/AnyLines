@@ -550,29 +550,21 @@ function personalTodoTasks() {
   );
 }
 
-function renderMyTodoEntry() {
-  const button = $("#btn-my-todos");
-  const badge = $("#my-todo-count");
+function renderMyStatusEntry() {
+  const button = $("#btn-my-status");
+  const badge = $("#my-status-count");
   if (!button || !badge) return;
-  const count = personalTodoTasks().length;
+  const todoCount = personalTodoTasks().length;
+  const unreadCount = state.unreadNotifications || 0;
+  const count = todoCount + unreadCount;
   badge.textContent = count > 99 ? "99+" : String(count);
   badge.classList.toggle("is-zero", count === 0);
-  button.classList.toggle("has-todos", count > 0);
-  button.title = `我的待办：${count} 个未闭环事务`;
-  button.setAttribute("aria-label", `查看我的待办，当前 ${count} 个未闭环事务`);
-}
-
-function renderNotificationEntry() {
-  const button = $("#btn-notifications");
-  const badge = $("#notification-count");
-  if (!button || !badge) return;
-  const count = state.unreadNotifications || 0;
-  badge.textContent = count > 99 ? "99+" : String(count);
-  badge.classList.toggle("is-zero", count === 0);
-  button.classList.toggle("has-unread", count > 0);
-  button.title = count ? `协作通知：${count} 条未读` : "协作通知：暂无未读";
-  button.setAttribute("aria-label", count ?
-    `查看协作通知，当前 ${count} 条未读` : "查看协作通知，暂无未读");
+  button.classList.toggle("has-todos", todoCount > 0);
+  button.classList.toggle("has-unread", unreadCount > 0);
+  button.title = `我的情况：待办 ${todoCount} 项 · 未读通知 ${unreadCount} 条`;
+  button.setAttribute(
+    "aria-label", `查看我的情况，待办 ${todoCount} 项，未读通知 ${unreadCount} 条`
+  );
 }
 
 function collaborationTime(value) {
@@ -584,10 +576,11 @@ function collaborationTime(value) {
   });
 }
 
-async function loadNotifications(container) {
+async function loadNotifications(container, options = {}) {
   const data = await api("/api/notifications");
   state.unreadNotifications = data.unread_count || 0;
-  renderNotificationEntry();
+  renderMyStatusEntry();
+  options.onUnreadChanged?.(state.unreadNotifications);
   if (!container.isConnected) return;
   container.innerHTML = "";
   const notifications = data.notifications || [];
@@ -623,7 +616,8 @@ async function loadNotifications(container) {
       if (!notice.read_at) {
         const result = await api(`/api/notifications/${notice.id}/read`, "POST");
         state.unreadNotifications = result.unread_count || 0;
-        renderNotificationEntry();
+        renderMyStatusEntry();
+        options.onUnreadChanged?.(state.unreadNotifications);
       }
       if (!notice.task_available) {
         row.classList.remove("unread");
@@ -635,24 +629,21 @@ async function loadNotifications(container) {
         toast("关联事务当前不可见");
         return;
       }
-      openTaskModal(task, task.line_id);
+      if (options.onTaskOpen) options.onTaskOpen(task, list.scrollTop);
+      else openTaskModal(task, task.line_id);
     };
     list.appendChild(row);
   }
   container.appendChild(list);
+  if (options.scrollTop) list.scrollTop = options.scrollTop;
 }
 
-function openNotificationsModal() {
-  openModal("协作通知", (body) => {
-    const loading = document.createElement("div");
-    loading.className = "notification-empty";
-    loading.textContent = "正在加载通知…";
-    body.appendChild(loading);
-    loadNotifications(body).catch(() => {});
-  }, async () => true);
-  $("#modal").classList.add("modal-wide");
-  $("#modal-ok").classList.add("hidden");
-  $("#modal-cancel").textContent = "关闭";
+function renderMyNotificationsPanel(container, options = {}) {
+  container.innerHTML = "";
+  const toolbar = document.createElement("div");
+  toolbar.className = "my-status-notification-toolbar";
+  const summary = document.createElement("span");
+  summary.textContent = `当前 ${state.unreadNotifications || 0} 条未读通知`;
   const markAll = document.createElement("button");
   markAll.type = "button";
   markAll.className = "notification-read-all";
@@ -661,11 +652,28 @@ function openNotificationsModal() {
   markAll.onclick = async () => {
     await api("/api/notifications/read-all", "POST");
     state.unreadNotifications = 0;
-    renderNotificationEntry();
+    renderMyStatusEntry();
+    options.onUnreadChanged?.(0);
     markAll.disabled = true;
-    await loadNotifications($("#modal-body"));
+    summary.textContent = "当前 0 条未读通知";
+    await loadNotifications(listHost, options);
   };
-  $("#modal-header-tools").appendChild(markAll);
+  toolbar.append(summary, markAll);
+  const listHost = document.createElement("div");
+  listHost.className = "my-status-notification-list";
+  const loading = document.createElement("div");
+  loading.className = "notification-empty";
+  loading.textContent = "正在加载通知…";
+  listHost.appendChild(loading);
+  container.append(toolbar, listHost);
+  loadNotifications(listHost, {
+    ...options,
+    onUnreadChanged: (count) => {
+      summary.textContent = `当前 ${count} 条未读通知`;
+      markAll.disabled = count === 0;
+      options.onUnreadChanged?.(count);
+    },
+  }).catch(() => {});
 }
 
 function renderToolbar() {
@@ -694,8 +702,7 @@ function renderToolbar() {
       : "未选中任何对象");
   renderDependencyFocusPanel(dependencyFocus);
   renderCanvasLegend();
-  renderMyTodoEntry();
-  renderNotificationEntry();
+  renderMyStatusEntry();
 }
 
 function setSelectOptions(sel, values, allText, selected) {
@@ -1419,8 +1426,7 @@ function openTaskListModal(title, tasks) {
   }, async () => true);
 }
 
-function openMyTodoModal(initialFilterKey = "total", initialListScrollTop = 0) {
-  if (typeof initialFilterKey !== "string") initialFilterKey = "total";
+function renderMyTodoPanel(container, initialFilterKey = "total", initialListScrollTop = 0) {
   const tasks = personalTodoTasks();
   const healthItems = tasks.map((task) => ({ task, health: taskHealth(task) }));
   const blockedTasks = tasks.filter((task) => prerequisiteIds(task.id).some((id) => {
@@ -1435,79 +1441,137 @@ function openMyTodoModal(initialFilterKey = "total", initialListScrollTop = 0) {
     { key: "blocked", label: "被前置阻塞", tasks: blockedTasks },
   ];
 
-  openModal(`${currentAccountDisplayName()}的个人待办`, (body) => {
-    $("#modal").classList.add("my-todo-modal");
+  const intro = document.createElement("div");
+  intro.className = "my-todo-intro";
+  intro.textContent = `按当前账号责任人和未闭环状态统计 · ${state.currentWorkspace?.name || "当前项目"}`;
+  const summary = document.createElement("div");
+  summary.className = "my-todo-summary";
+  summary.setAttribute("role", "group");
+  summary.setAttribute("aria-label", "按事务状态筛选个人待办");
+
+  const listSection = document.createElement("section");
+  listSection.className = "my-todo-list-section";
+  const listHeading = document.createElement("div");
+  listHeading.className = "my-todo-list-heading";
+  const listTitle = document.createElement("strong");
+  const listHint = document.createElement("span");
+  listHint.textContent = "点击事务行查看详情";
+  listHeading.append(listTitle, listHint);
+  const listContainer = document.createElement("div");
+  listContainer.className = "my-todo-list-container";
+  listSection.append(listHeading, listContainer);
+
+  const activateFilter = (selected, selectedButton, listScrollTop = 0) => {
+    for (const button of summary.querySelectorAll(".my-todo-stat")) {
+      const active = button === selectedButton;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", String(active));
+    }
+    listTitle.textContent = `${selected.label}（${selected.tasks.length}）`;
+    renderTaskListTable(
+      listContainer,
+      selected.tasks,
+      selected.key === "total" ? "当前没有待办事务" : `当前没有“${selected.label}”的待办事务`,
+      {
+        onTaskOpen: (task) => {
+          const listScrollTop = listContainer.querySelector(".my-todo-list-wrap")?.scrollTop || 0;
+          openTaskModal(task, null, false, {
+            onClosed: () => openMyStatusModal("todos", selected.key, listScrollTop),
+          });
+        },
+      }
+    );
+    const listWrap = listContainer.querySelector(".dashboard-task-list-wrap");
+    listWrap?.classList.add("my-todo-list-wrap");
+    if (listWrap) listWrap.scrollTop = listScrollTop;
+  };
+
+  filters.forEach((filter) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = `my-todo-stat my-todo-stat-${filter.key}`;
+    item.setAttribute("aria-pressed", "false");
+    item.setAttribute("aria-label", `${filter.label} ${filter.tasks.length} 项，点击筛选`);
+    const number = document.createElement("strong");
+    number.textContent = filter.tasks.length;
+    const text = document.createElement("span");
+    text.textContent = filter.label;
+    item.append(number, text);
+    item.onclick = () => activateFilter(filter, item);
+    summary.appendChild(item);
+  });
+  container.append(intro, summary, listSection);
+  const selectedIndex = Math.max(
+    0, filters.findIndex((filter) => filter.key === initialFilterKey)
+  );
+  requestAnimationFrame(() => activateFilter(
+    filters[selectedIndex], summary.children[selectedIndex], initialListScrollTop
+  ));
+}
+
+function openMyStatusModal(
+  initialSection = "todos", initialFilterKey = "total",
+  initialListScrollTop = 0, initialNotificationScrollTop = 0
+) {
+  if (typeof initialSection !== "string") initialSection = "todos";
+  openModal("我的情况", (body) => {
+    $("#modal").classList.add("my-status-modal");
     $("#modal-ok").classList.add("hidden");
     $("#modal-cancel").textContent = "关闭";
-
-    const intro = document.createElement("div");
-    intro.className = "my-todo-intro";
-    intro.textContent = `按当前账号责任人和未闭环状态统计 · ${state.currentWorkspace?.name || "当前项目"}`;
-    const summary = document.createElement("div");
-    summary.className = "my-todo-summary";
-    summary.setAttribute("role", "group");
-    summary.setAttribute("aria-label", "按事务状态筛选个人待办");
-
-    const listSection = document.createElement("section");
-    listSection.className = "my-todo-list-section";
-    const listHeading = document.createElement("div");
-    listHeading.className = "my-todo-list-heading";
-    const listTitle = document.createElement("strong");
-    const listHint = document.createElement("span");
-    listHint.textContent = "点击事务行查看详情";
-    listHeading.append(listTitle, listHint);
-    const listContainer = document.createElement("div");
-    listContainer.className = "my-todo-list-container";
-    listSection.append(listHeading, listContainer);
-
-    const activateFilter = (selected, selectedButton, listScrollTop = 0) => {
-      for (const button of summary.querySelectorAll(".my-todo-stat")) {
-        const active = button === selectedButton;
-        button.classList.toggle("active", active);
-        button.setAttribute("aria-pressed", String(active));
-      }
-      listTitle.textContent = `${selected.label}（${selected.tasks.length}）`;
-      renderTaskListTable(
-        listContainer,
-        selected.tasks,
-        selected.key === "total" ? "当前没有待办事务" : `当前没有“${selected.label}”的待办事务`,
-        {
-          onTaskOpen: (task) => {
-            const listScrollTop = listContainer.querySelector(".my-todo-list-wrap")?.scrollTop || 0;
-            openTaskModal(task, null, false, {
-              onClosed: () => openMyTodoModal(selected.key, listScrollTop),
-            });
-          },
-        }
-      );
-      const listWrap = listContainer.querySelector(".dashboard-task-list-wrap");
-      listWrap?.classList.add("my-todo-list-wrap");
-      if (listWrap) listWrap.scrollTop = listScrollTop;
+    const tabs = document.createElement("div");
+    tabs.className = "my-status-tabs";
+    tabs.setAttribute("role", "tablist");
+    const todoTab = document.createElement("button");
+    const notificationTab = document.createElement("button");
+    for (const [button, section] of [
+      [todoTab, "todos"], [notificationTab, "notifications"],
+    ]) {
+      button.type = "button";
+      button.dataset.section = section;
+      button.setAttribute("role", "tab");
+    }
+    const updateTabCounts = () => {
+      todoTab.textContent = `我的待办（${personalTodoTasks().length}）`;
+      notificationTab.textContent = `协作通知（${state.unreadNotifications || 0} 未读）`;
     };
+    updateTabCounts();
+    tabs.append(todoTab, notificationTab);
+    const content = document.createElement("div");
+    content.className = "my-status-content";
+    body.append(tabs, content);
 
-    filters.forEach((filter, index) => {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = `my-todo-stat my-todo-stat-${filter.key}`;
-      item.setAttribute("aria-pressed", "false");
-      item.setAttribute("aria-label", `${filter.label} ${filter.tasks.length} 项，点击筛选`);
-      const number = document.createElement("strong");
-      number.textContent = filter.tasks.length;
-      const text = document.createElement("span");
-      text.textContent = filter.label;
-      item.append(number, text);
-      item.onclick = () => activateFilter(filter, item);
-      summary.appendChild(item);
-    });
-    body.append(intro, summary, listSection);
-    const selectedIndex = Math.max(0, filters.findIndex((filter) => filter.key === initialFilterKey));
-    requestAnimationFrame(() => activateFilter(
-      filters[selectedIndex], summary.children[selectedIndex], initialListScrollTop
-    ));
+    const activateSection = (section) => {
+      const activeSection = section === "notifications" ? "notifications" : "todos";
+      for (const button of [todoTab, notificationTab]) {
+        const active = button.dataset.section === activeSection;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      }
+      content.className = `my-status-content my-status-${activeSection}`;
+      content.innerHTML = "";
+      if (activeSection === "todos") {
+        renderMyTodoPanel(content, initialFilterKey, initialListScrollTop);
+      } else {
+        renderMyNotificationsPanel(content, {
+          scrollTop: initialNotificationScrollTop,
+          onUnreadChanged: updateTabCounts,
+          onTaskOpen: (task, scrollTop) => openTaskModal(
+            task, task.line_id, false, {
+              onClosed: () => openMyStatusModal(
+                "notifications", initialFilterKey, initialListScrollTop, scrollTop
+              ),
+            }
+          ),
+        });
+      }
+    };
+    todoTab.onclick = () => activateSection("todos");
+    notificationTab.onclick = () => activateSection("notifications");
+    activateSection(initialSection);
   }, async () => true);
 }
 
-$("#btn-my-todos").onclick = openMyTodoModal;
+$("#btn-my-status").onclick = () => openMyStatusModal();
 
 /* ============================================================== 画布视图 */
 const CV = {
@@ -3083,7 +3147,9 @@ function centerCanvasPoint(x, y = null) {
 /* ============================================================== 弹窗 */
 function openModal(title, bodyBuilder, onOk, options = {}) {
   $("#modal-title").textContent = title;
-  $("#modal").classList.remove("modal-wide", "task-list-modal", "my-todo-modal");
+  $("#modal").classList.remove(
+    "modal-wide", "task-list-modal", "my-todo-modal", "my-status-modal"
+  );
   $("#modal-ok").textContent = "确定";
   $("#modal-ok").classList.remove("hidden", "danger");
   $("#modal-cancel").textContent = "取消";
@@ -4725,7 +4791,6 @@ $("#workspace-select").onchange = async (event) => {
   }
 };
 $("#account-trigger").onclick = toggleAccountMenu;
-$("#btn-notifications").onclick = openNotificationsModal;
 document.addEventListener("click", (event) => {
   if (!$("#account-bar").contains(event.target)) closeAccountMenu();
 });
@@ -5574,7 +5639,7 @@ async function pollNotificationCount() {
     if (!response.ok) return;
     const data = await response.json();
     state.unreadNotifications = data.unread_count || 0;
-    renderNotificationEntry();
+    renderMyStatusEntry();
   } catch (_error) {
     // 后台轮询静默失败，不打断用户当前操作。
   }
