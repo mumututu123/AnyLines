@@ -129,6 +129,19 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 201, data)
         return data["id"]
 
+    def create_milestone(self, line_id, task_ids=None, **overrides):
+        payload = {
+            "line_id": line_id,
+            "name": "阶段验收",
+            "target_description": "确认阶段目标已经达成",
+            "milestone_date": (self.today + timedelta(days=5)).isoformat(),
+            "acceptance_task_ids": task_ids or [],
+        }
+        payload.update(overrides)
+        status, data = self.request("POST", "/api/milestones", payload)
+        self.assertEqual(status, 201, data)
+        return data["id"]
+
     def add_member(self, username, display_name, role="member"):
         workspace_id = self.request(
             "GET", "/api/auth/session"
@@ -612,6 +625,138 @@ class AnyLineHttpTests(unittest.TestCase):
         })
         self.assertEqual(status, 400)
         self.assertIn("#RRGGBB", data["error"])
+
+    def test_milestone_crud_acceptance_and_task_delete_guard(self):
+        line_id = self.create_line()
+        first_task = self.create_task(line_id, "完成方案")
+        second_task = self.create_task(line_id, "通过评审", status="已闭环")
+        milestone_id = self.create_milestone(
+            line_id, [first_task, second_task], name="方案冻结"
+        )
+
+        status, state = self.request("GET", "/api/state")
+        self.assertEqual(status, 200, state)
+        self.assertEqual(state["milestones"], [{
+            "id": milestone_id,
+            "line_id": line_id,
+            "name": "方案冻结",
+            "target_description": "确认阶段目标已经达成",
+            "milestone_date": (self.today + timedelta(days=5)).isoformat(),
+            "updated_at": self.today.isoformat(),
+            "acceptance_task_ids": [first_task, second_task],
+        }])
+
+        status, data = self.request("DELETE", f"/api/tasks/{first_task}")
+        self.assertEqual(status, 409, data)
+        self.assertIn("验收条件", data["error"])
+        new_date = (self.today + timedelta(days=9)).isoformat()
+        status, data = self.request(
+            "PATCH", f"/api/milestones/{milestone_id}", {
+                "name": "方案验收",
+                "target_description": "验收全部设计材料",
+                "milestone_date": new_date,
+                "acceptance_task_ids": [second_task],
+            },
+        )
+        self.assertEqual(status, 200, data)
+        status, _ = self.request("DELETE", f"/api/tasks/{first_task}")
+        self.assertEqual(status, 200)
+
+        status, data = self.request("DELETE", f"/api/milestones/{milestone_id}")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["milestones"], [])
+        status, data = self.request("POST", "/api/undo")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["milestones"][0]["name"], "方案验收")
+        self.assertEqual(state["milestones"][0]["acceptance_task_ids"], [second_task])
+
+    def test_milestone_validation_archive_and_canvas_ui(self):
+        line_id = self.create_line()
+        task_id = self.create_task(line_id)
+        yesterday = (self.today - timedelta(days=1)).isoformat()
+        base = {
+            "line_id": line_id,
+            "name": "节点",
+            "target_description": "目标",
+            "milestone_date": yesterday,
+            "acceptance_task_ids": [task_id],
+        }
+        status, _ = self.request("POST", "/api/milestones", base)
+        self.assertEqual(status, 400)
+        for invalid_ids in ([task_id, task_id], [999999], [str(task_id)]):
+            payload = {**base, "milestone_date": self.today.isoformat(),
+                       "acceptance_task_ids": invalid_ids}
+            status, _ = self.request("POST", "/api/milestones", payload)
+            self.assertIn(status, {400, 404})
+        status, _ = self.request("POST", "/api/milestones", {
+            **base, "milestone_date": "2026/09/03",
+        })
+        self.assertEqual(status, 400)
+
+        milestone_id = self.create_milestone(line_id, [task_id])
+        status, _ = self.request(
+            "PATCH", f"/api/lines/{line_id}", {
+                "fork_date": (self.today + timedelta(days=6)).isoformat(),
+            },
+        )
+        self.assertEqual(status, 400)
+        workspace_id = self.request(
+            "GET", "/api/auth/session"
+        )[1]["current_workspace"]["id"]
+        self.request("POST", f"/api/workspaces/{workspace_id}/archive")
+        status, _ = self.request(
+            "PATCH", f"/api/milestones/{milestone_id}", {"name": "不可修改"}
+        )
+        self.assertEqual(status, 409)
+
+        status, page = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="btn-add-milestone"', page)
+        _, script = self.request("GET", "/static/app.js")
+        source = script.decode("utf-8")
+        self.assertIn("function openMilestoneModal(", source)
+        self.assertIn("function milestoneModalDraft(body)", source)
+        self.assertIn("Number(selected.has(b.id)) - Number(selected.has(a.id))", source)
+        self.assertIn("if (value && !names.includes(value)) names.push(value)", source)
+        self.assertIn("const owner = ownerInput(candidate.owner, true)", source)
+        self.assertIn('owner.className = "milestone-acceptance-owner"', source)
+        self.assertIn('option.addEventListener("dblclick"', source)
+        self.assertIn('event.target.closest?.(".milestone-acceptance-checkbox")', source)
+        self.assertIn("onClosed: () => {", source)
+        self.assertIn("openMilestoneModal(currentMilestone, line.id, savedDraft)", source)
+        self.assertIn("function fivePointStarPoints(", source)
+        self.assertIn("function milestoneStatusBands(tasks)", source)
+        self.assertIn("28 * band.ratio", source)
+        self.assertIn("rect.style.fill = statusColor(band.status)", source)
+        self.assertIn('"clip-path": `url(#${clipId})`', source)
+        self.assertIn('class: "milestone-node"', source)
+        _, styles = self.request("GET", "/static/style.css")
+        style_source = styles.decode("utf-8")
+        self.assertIn(".milestone-node {", style_source)
+        self.assertIn("fill: none; stroke: #d4a72c", style_source)
+
+    def test_line_delete_restores_its_milestones_with_same_batch(self):
+        main_id = self.create_line()
+        branch_id = self.create_line("支线", parent_id=main_id)
+        task_id = self.create_task(branch_id)
+        milestone_id = self.create_milestone(branch_id, [task_id])
+        status, data = self.request("DELETE", f"/api/lines/{main_id}")
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["milestones"], [])
+        _, trash = self.request("GET", "/api/trash")
+        batch = trash["batches"][0]
+        self.assertEqual(batch["milestone_count"], 1)
+        self.assertIn(milestone_id, [item["id"] for item in trash["milestones"]])
+        status, data = self.request(
+            "POST", "/api/trash/restore", {"batch": batch["batch"]}
+        )
+        self.assertEqual(status, 200, data)
+        _, state = self.request("GET", "/api/state")
+        self.assertEqual(state["milestones"][0]["id"], milestone_id)
+        self.assertEqual(state["milestones"][0]["acceptance_task_ids"], [task_id])
 
     def test_line_crud_and_date_rules(self):
         yesterday = (self.today - timedelta(days=1)).isoformat()
@@ -1797,6 +1942,8 @@ class DatabaseMigrationTests(unittest.TestCase):
             )
             self.assertIn("task_images", table_names)
             self.assertIn("task_attachments", table_names)
+            self.assertIn("milestones", table_names)
+            self.assertIn("milestone_tasks", table_names)
             self.assertIn("dashboard_snapshots", table_names)
             self.assertIn("task_followers", table_names)
             self.assertIn("task_comments", table_names)

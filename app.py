@@ -192,6 +192,25 @@ def init_db(db_path=None):
             PRIMARY KEY(workspace_id,dependent_task_id,prerequisite_task_id),
             CHECK(dependent_task_id <> prerequisite_task_id)
         );
+        CREATE TABLE IF NOT EXISTS milestones (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id       INTEGER NOT NULL,
+            line_id            INTEGER NOT NULL,
+            name               TEXT NOT NULL,
+            target_description TEXT NOT NULL DEFAULT '',
+            milestone_date     TEXT NOT NULL,
+            deleted            INTEGER NOT NULL DEFAULT 0,
+            del_batch          INTEGER,
+            deleted_at         TEXT,
+            created_at         TEXT NOT NULL,
+            updated_at         TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS milestone_tasks (
+            workspace_id INTEGER NOT NULL,
+            milestone_id INTEGER NOT NULL,
+            task_id      INTEGER NOT NULL,
+            PRIMARY KEY(workspace_id,milestone_id,task_id)
+        );
         CREATE TABLE IF NOT EXISTS task_images (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
             workspace_id INTEGER NOT NULL,
@@ -378,6 +397,14 @@ def init_db(db_path=None):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_dependencies_prerequisite "
         "ON task_dependencies(workspace_id,prerequisite_task_id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_milestones_workspace_line "
+        "ON milestones(workspace_id,line_id,deleted,milestone_date)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_milestone_tasks_task "
+        "ON milestone_tasks(workspace_id,task_id,milestone_id)"
     )
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_task_images_task "
@@ -1149,6 +1176,7 @@ CURRENT_WORKSPACE_WRITE_ENDPOINTS = {
     "create_task", "update_task", "task_dependency", "delete_task",
     "import_tasks", "bulk_tasks", "undo", "redo", "restore_trash", "purge_trash",
     "add_task_comment", "follow_task", "unfollow_task",
+    "create_milestone", "update_milestone", "delete_milestone",
 }
 
 
@@ -1416,6 +1444,12 @@ def purge_deleted(db):
     """物理删除所有软删除的行, 并清空相关撤销状态。"""
     workspace_id = current_workspace_id()
     db.execute(
+        "DELETE FROM milestone_tasks WHERE workspace_id=? AND ("
+        "milestone_id IN (SELECT id FROM milestones WHERE workspace_id=? AND deleted=1) "
+        "OR task_id IN (SELECT id FROM tasks WHERE workspace_id=? AND deleted=1))",
+        (workspace_id, workspace_id, workspace_id),
+    )
+    db.execute(
         "DELETE FROM task_dependencies WHERE workspace_id=? AND ("
         "dependent_task_id IN (SELECT id FROM tasks WHERE workspace_id=? AND deleted=1) "
         "OR prerequisite_task_id IN (SELECT id FROM tasks WHERE workspace_id=? AND deleted=1))",
@@ -1443,6 +1477,9 @@ def purge_deleted(db):
         (workspace_id, workspace_id),
     )
     db.execute(
+        "DELETE FROM milestones WHERE deleted=1 AND workspace_id=?", (workspace_id,)
+    )
+    db.execute(
         "DELETE FROM tasks WHERE deleted=1 AND workspace_id=?", (workspace_id,)
     )
     db.execute(
@@ -1460,6 +1497,13 @@ def current_workspace_snapshot(db, workspace_id):
         )],
         "tasks": [dict(row) for row in db.execute(
             "SELECT * FROM tasks WHERE workspace_id=? ORDER BY id", (workspace_id,)
+        )],
+        "milestones": [dict(row) for row in db.execute(
+            "SELECT * FROM milestones WHERE workspace_id=? ORDER BY id", (workspace_id,)
+        )],
+        "milestone_tasks": [dict(row) for row in db.execute(
+            "SELECT * FROM milestone_tasks WHERE workspace_id=? "
+            "ORDER BY milestone_id,task_id", (workspace_id,)
         )],
         "task_dependencies": [dict(row) for row in db.execute(
             "SELECT * FROM task_dependencies WHERE workspace_id=? "
@@ -1529,12 +1573,15 @@ def has_redo(db):
 def restore_snapshot(db, snapshot):
     workspace_id = current_workspace_id()
     db.execute("DELETE FROM task_dependencies WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM milestone_tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_images WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_attachments WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM milestones WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
     for table in (
-        "lines", "tasks", "task_images", "task_attachments", "task_dependencies"
+        "lines", "tasks", "milestones", "task_images", "task_attachments",
+        "task_dependencies", "milestone_tasks"
     ):
         rows = snapshot.get(table, [])
         if not isinstance(rows, list):
@@ -1876,7 +1923,8 @@ def replace_task_dependencies(db, workspace_id, dependent_task_id, prerequisite_
     )
 
 
-def ensure_tasks_not_required(db, workspace_id, task_ids):
+def ensure_tasks_not_required(
+        db, workspace_id, task_ids, excluded_milestone_ids=None):
     if not task_ids:
         return
     marks = ",".join("?" * len(task_ids))
@@ -1896,6 +1944,64 @@ def ensure_tasks_not_required(db, workspace_id, task_ids):
             f"事务“{row['prerequisite_name']}”仍被“{row['dependent_name']}”依赖，不能删除",
             409,
         )
+    excluded_milestone_ids = list(excluded_milestone_ids or [])
+    milestone_params = [workspace_id, workspace_id] + task_ids
+    excluded_clause = ""
+    if excluded_milestone_ids:
+        excluded_marks = ",".join("?" * len(excluded_milestone_ids))
+        excluded_clause = f" AND milestone.id NOT IN ({excluded_marks})"
+        milestone_params.extend(excluded_milestone_ids)
+    milestone = db.execute(
+        f"SELECT milestone.name AS milestone_name,task.name AS task_name "
+        f"FROM milestone_tasks relation "
+        f"JOIN milestones milestone ON milestone.id=relation.milestone_id "
+        f"JOIN tasks task ON task.id=relation.task_id "
+        f"WHERE relation.workspace_id=? AND milestone.workspace_id=? "
+        f"AND milestone.deleted=0 AND relation.task_id IN ({marks})"
+        f"{excluded_clause} LIMIT 1",
+        milestone_params,
+    ).fetchone()
+    if milestone:
+        raise ApiError(
+            f"事务“{milestone['task_name']}”仍是里程碑“{milestone['milestone_name']}”"
+            "的验收条件，不能删除",
+            409,
+        )
+
+
+def milestone_task_id_list(value):
+    if not isinstance(value, list) or not all(
+            isinstance(item, int) and not isinstance(item, bool) for item in value):
+        raise ApiError("验收事务必须是整数数组")
+    if len(value) != len(set(value)):
+        raise ApiError("验收事务不能包含重复项")
+    return value
+
+
+def validate_milestone_tasks(db, workspace_id, task_ids):
+    task_ids = milestone_task_id_list(task_ids)
+    if task_ids:
+        marks = ",".join("?" * len(task_ids))
+        rows = db.execute(
+            f"SELECT id FROM tasks WHERE workspace_id=? AND deleted=0 "
+            f"AND id IN ({marks})",
+            [workspace_id] + task_ids,
+        ).fetchall()
+        if len(rows) != len(task_ids):
+            raise ApiError("部分验收事务不存在或已删除", 404)
+    return task_ids
+
+
+def replace_milestone_tasks(db, workspace_id, milestone_id, task_ids):
+    db.execute(
+        "DELETE FROM milestone_tasks WHERE workspace_id=? AND milestone_id=?",
+        (workspace_id, milestone_id),
+    )
+    db.executemany(
+        "INSERT INTO milestone_tasks(workspace_id,milestone_id,task_id) "
+        "VALUES(?,?,?)",
+        [(workspace_id, milestone_id, task_id) for task_id in task_ids],
+    )
 
 
 def get_statuses(db):
@@ -2144,12 +2250,14 @@ def delete_workspace(workspace_id):
         raise ApiError("至少需要保留一个可访问的项目空间", 409)
 
     db.execute("DELETE FROM task_dependencies WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM milestone_tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_images WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_attachments WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_followers WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_comments WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_activities WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM notifications WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM milestones WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM workspace_meta WHERE workspace_id=?", (workspace_id,))
@@ -2397,6 +2505,34 @@ def api_state():
         "ORDER BY d.dependent_task_id,d.prerequisite_task_id",
         (workspace_id, workspace_id, workspace_id),
     )]
+    milestone_rows = [dict(r) for r in db.execute(
+        "SELECT milestone.id,milestone.line_id,milestone.name,"
+        "milestone.target_description,milestone.milestone_date,"
+        "milestone.updated_at FROM milestones milestone "
+        "JOIN lines line ON line.id=milestone.line_id "
+        "WHERE milestone.workspace_id=? AND line.workspace_id=? "
+        "AND milestone.deleted=0 AND line.deleted=0 "
+        "ORDER BY milestone.milestone_date,milestone.id",
+        (workspace_id, workspace_id),
+    )]
+    milestone_task_ids = {}
+    for relation in db.execute(
+        "SELECT relation.milestone_id,relation.task_id "
+        "FROM milestone_tasks relation "
+        "JOIN milestones milestone ON milestone.id=relation.milestone_id "
+        "JOIN tasks task ON task.id=relation.task_id "
+        "WHERE relation.workspace_id=? AND milestone.workspace_id=? "
+        "AND task.workspace_id=? AND milestone.deleted=0 AND task.deleted=0 "
+        "ORDER BY relation.milestone_id,relation.task_id",
+        (workspace_id, workspace_id, workspace_id),
+    ):
+        milestone_task_ids.setdefault(relation["milestone_id"], []).append(
+            relation["task_id"]
+        )
+    for milestone in milestone_rows:
+        milestone["acceptance_task_ids"] = milestone_task_ids.get(
+            milestone["id"], []
+        )
     task_images = [dict(r) for r in db.execute(
         "SELECT image.id,image.task_id,image.mime_type "
         "FROM task_images image "
@@ -2431,6 +2567,7 @@ def api_state():
     return jsonify({
         "lines": lines,
         "tasks": tasks,
+        "milestones": milestone_rows,
         "dependencies": dependencies,
         "task_images": task_images,
         "task_attachments": task_attachments,
@@ -3093,6 +3230,12 @@ def update_line(lid):
     ).fetchone()
     if task["first_date"] and task["first_date"] < new_fork:
         return jsonify({"error": "起始日期不能晚于线上已有事务的起始日期"}), 400
+    milestone = db.execute(
+        "SELECT MIN(milestone_date) AS first_date FROM milestones "
+        "WHERE line_id=? AND workspace_id=? AND deleted=0", (lid, workspace_id)
+    ).fetchone()
+    if milestone["first_date"] and milestone["first_date"] < new_fork:
+        return jsonify({"error": "起始日期不能晚于线上已有里程碑日期"}), 400
 
     fields, vals = [], []
     for k in ("name", "description", "color", "fork_date", "merge_date"):
@@ -3142,7 +3285,14 @@ def delete_line(lid):
         f"AND line_id IN ({marks})",
         [workspace_id] + ids,
     )]
-    ensure_tasks_not_required(db, workspace_id, task_ids)
+    milestone_ids = [row["id"] for row in db.execute(
+        f"SELECT id FROM milestones WHERE workspace_id=? AND deleted=0 "
+        f"AND line_id IN ({marks})",
+        [workspace_id] + ids,
+    )]
+    ensure_tasks_not_required(
+        db, workspace_id, task_ids, excluded_milestone_ids=milestone_ids
+    )
     on_edit(db)
     batch = new_batch(db)
     today = date.today().isoformat()
@@ -3155,6 +3305,136 @@ def delete_line(lid):
         f"UPDATE tasks SET deleted=1, del_batch=?, deleted_at=? WHERE deleted=0 "
         f"AND workspace_id=? AND line_id IN ({marks})",
         [batch, today, workspace_id] + ids,
+    )
+    db.execute(
+        f"UPDATE milestones SET deleted=1, del_batch=?, deleted_at=? "
+        f"WHERE deleted=0 AND workspace_id=? AND line_id IN ({marks})",
+        [batch, today, workspace_id] + ids,
+    )
+    db.commit()
+    return jsonify({"ok": True, "can_undo": True})
+
+
+# ----- milestones
+@app.route("/api/milestones", methods=["POST"])
+def create_milestone():
+    d = json_object()
+    name = text_field(d, "name", "里程碑名称").strip()
+    target_description = text_field(
+        d, "target_description", "里程碑目标描述"
+    ).strip()
+    milestone_date = text_field(d, "milestone_date", "里程碑日期").strip()
+    if not name:
+        raise ApiError("里程碑名称不能为空")
+    if not target_description:
+        raise ApiError("里程碑目标描述不能为空")
+    if not milestone_date:
+        raise ApiError("里程碑日期不能为空")
+    try:
+        parse_iso_date(milestone_date, "里程碑日期")
+    except ValueError as error:
+        raise ApiError(str(error))
+    line_id = required_id(d.get("line_id"), "line_id")
+    db = get_db()
+    workspace_id = current_workspace_id()
+    line = db.execute(
+        "SELECT id,fork_date FROM lines WHERE id=? AND workspace_id=? AND deleted=0",
+        (line_id, workspace_id),
+    ).fetchone()
+    if not line:
+        raise ApiError("所属线不存在", 404)
+    if milestone_date < line["fork_date"]:
+        raise ApiError("里程碑日期不能早于所属线的起始日期")
+    task_ids = validate_milestone_tasks(
+        db, workspace_id, d.get("acceptance_task_ids", [])
+    )
+    today = date.today().isoformat()
+    on_edit(db)
+    cursor = db.execute(
+        "INSERT INTO milestones(workspace_id,line_id,name,target_description,"
+        "milestone_date,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+        (workspace_id, line_id, name, target_description, milestone_date, today, today),
+    )
+    replace_milestone_tasks(db, workspace_id, cursor.lastrowid, task_ids)
+    db.commit()
+    return jsonify({"id": cursor.lastrowid}), 201
+
+
+@app.route("/api/milestones/<int:milestone_id>", methods=["PATCH"])
+def update_milestone(milestone_id):
+    d = json_object()
+    db = get_db()
+    workspace_id = current_workspace_id()
+    milestone = db.execute(
+        "SELECT * FROM milestones WHERE id=? AND workspace_id=? AND deleted=0",
+        (milestone_id, workspace_id),
+    ).fetchone()
+    if not milestone:
+        raise ApiError("里程碑不存在", 404)
+    name = text_field(d, "name", "里程碑名称", milestone["name"]).strip()
+    target_description = text_field(
+        d, "target_description", "里程碑目标描述",
+        milestone["target_description"],
+    ).strip()
+    milestone_date = text_field(
+        d, "milestone_date", "里程碑日期", milestone["milestone_date"]
+    ).strip()
+    if not name:
+        raise ApiError("里程碑名称不能为空")
+    if not target_description:
+        raise ApiError("里程碑目标描述不能为空")
+    if not milestone_date:
+        raise ApiError("里程碑日期不能为空")
+    try:
+        parse_iso_date(milestone_date, "里程碑日期")
+    except ValueError as error:
+        raise ApiError(str(error))
+    line = db.execute(
+        "SELECT fork_date FROM lines WHERE id=? AND workspace_id=? AND deleted=0",
+        (milestone["line_id"], workspace_id),
+    ).fetchone()
+    if not line:
+        raise ApiError("所属线不存在", 404)
+    if milestone_date < line["fork_date"]:
+        raise ApiError("里程碑日期不能早于所属线的起始日期")
+    if "acceptance_task_ids" in d:
+        task_ids = validate_milestone_tasks(
+            db, workspace_id, d["acceptance_task_ids"]
+        )
+    else:
+        task_ids = [row["task_id"] for row in db.execute(
+            "SELECT task_id FROM milestone_tasks WHERE workspace_id=? "
+            "AND milestone_id=? ORDER BY task_id",
+            (workspace_id, milestone_id),
+        )]
+    on_edit(db)
+    db.execute(
+        "UPDATE milestones SET name=?,target_description=?,milestone_date=?,"
+        "updated_at=? WHERE id=? AND workspace_id=?",
+        (name, target_description, milestone_date, date.today().isoformat(),
+         milestone_id, workspace_id),
+    )
+    replace_milestone_tasks(db, workspace_id, milestone_id, task_ids)
+    db.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/milestones/<int:milestone_id>", methods=["DELETE"])
+def delete_milestone(milestone_id):
+    db = get_db()
+    workspace_id = current_workspace_id()
+    milestone = db.execute(
+        "SELECT id FROM milestones WHERE id=? AND workspace_id=? AND deleted=0",
+        (milestone_id, workspace_id),
+    ).fetchone()
+    if not milestone:
+        raise ApiError("里程碑不存在", 404)
+    on_edit(db)
+    batch = new_batch(db)
+    db.execute(
+        "UPDATE milestones SET deleted=1,del_batch=?,deleted_at=? "
+        "WHERE id=? AND workspace_id=?",
+        (batch, date.today().isoformat(), milestone_id, workspace_id),
     )
     db.commit()
     return jsonify({"ok": True, "can_undo": True})
@@ -3827,6 +4107,10 @@ def undo():
         "UPDATE tasks SET deleted=0, del_batch=NULL, deleted_at=NULL "
         "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
     )
+    db.execute(
+        "UPDATE milestones SET deleted=0, del_batch=NULL, deleted_at=NULL "
+        "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
+    )
     set_meta(db, "undo_batch", None)
     db.commit()
     return jsonify({"ok": True})
@@ -3873,12 +4157,17 @@ def trash():
         "del_batch,deleted_at FROM tasks WHERE workspace_id=? AND deleted=1 "
         "ORDER BY deleted_at DESC,id DESC", (workspace_id,)
     )]
+    milestone_rows = [dict(r) for r in db.execute(
+        "SELECT id,line_id,name,milestone_date,del_batch,deleted_at "
+        "FROM milestones WHERE workspace_id=? AND deleted=1 "
+        "ORDER BY deleted_at DESC,id DESC", (workspace_id,)
+    )]
     batches = {}
     for row in line_rows:
         b = str(row["del_batch"])
         batches.setdefault(b, {
             "batch": row["del_batch"], "deleted_at": row["deleted_at"],
-            "line_count": 0, "task_count": 0, "names": [],
+            "line_count": 0, "task_count": 0, "milestone_count": 0, "names": [],
         })
         batches[b]["line_count"] += 1
         batches[b]["names"].append(row["name"])
@@ -3886,9 +4175,17 @@ def trash():
         b = str(row["del_batch"])
         batches.setdefault(b, {
             "batch": row["del_batch"], "deleted_at": row["deleted_at"],
-            "line_count": 0, "task_count": 0, "names": [],
+            "line_count": 0, "task_count": 0, "milestone_count": 0, "names": [],
         })
         batches[b]["task_count"] += 1
+        batches[b]["names"].append(row["name"])
+    for row in milestone_rows:
+        b = str(row["del_batch"])
+        batches.setdefault(b, {
+            "batch": row["del_batch"], "deleted_at": row["deleted_at"],
+            "line_count": 0, "task_count": 0, "milestone_count": 0, "names": [],
+        })
+        batches[b]["milestone_count"] += 1
         batches[b]["names"].append(row["name"])
     return jsonify({
         "batches": sorted(
@@ -3898,6 +4195,7 @@ def trash():
         ),
         "lines": line_rows,
         "tasks": task_rows,
+        "milestones": milestone_rows,
     })
 
 
@@ -3912,8 +4210,10 @@ def restore_trash():
     workspace_id = current_workspace_id()
     found = db.execute(
         "SELECT 1 FROM lines WHERE workspace_id=? AND del_batch=? AND deleted=1 "
-        "UNION SELECT 1 FROM tasks WHERE workspace_id=? AND del_batch=? AND deleted=1",
-        (workspace_id, batch, workspace_id, batch),
+        "UNION SELECT 1 FROM tasks WHERE workspace_id=? AND del_batch=? AND deleted=1 "
+        "UNION SELECT 1 FROM milestones WHERE workspace_id=? AND del_batch=? "
+        "AND deleted=1",
+        (workspace_id, batch, workspace_id, batch, workspace_id, batch),
     ).fetchone()
     if not found:
         return jsonify({"error": "未找到该删除批次"}), 404
@@ -3940,7 +4240,25 @@ def restore_trash():
         "AND prerequisite.deleted=1 AND prerequisite.del_batch<>? LIMIT 1",
         (workspace_id, workspace_id, batch, batch),
     ).fetchone()
-    if blocked_line or blocked_task or blocked_dependency:
+    blocked_milestone_line = db.execute(
+        "SELECT milestone.id FROM milestones milestone JOIN lines line "
+        "ON line.id=milestone.line_id WHERE milestone.workspace_id=? "
+        "AND line.workspace_id=? AND milestone.deleted=1 "
+        "AND milestone.del_batch=? AND line.deleted=1 AND line.del_batch<>? LIMIT 1",
+        (workspace_id, workspace_id, batch, batch),
+    ).fetchone()
+    blocked_milestone_task = db.execute(
+        "SELECT milestone.id FROM milestones milestone "
+        "JOIN milestone_tasks relation ON relation.milestone_id=milestone.id "
+        "AND relation.workspace_id=milestone.workspace_id "
+        "JOIN tasks task ON task.id=relation.task_id "
+        "WHERE milestone.workspace_id=? AND task.workspace_id=? "
+        "AND milestone.deleted=1 AND milestone.del_batch=? "
+        "AND task.deleted=1 AND task.del_batch<>? LIMIT 1",
+        (workspace_id, workspace_id, batch, batch),
+    ).fetchone()
+    if (blocked_line or blocked_task or blocked_dependency or
+            blocked_milestone_line or blocked_milestone_task):
         return jsonify({"error": "请先恢复该批次依赖的所属线或前置事务"}), 409
     on_edit(db)
     db.execute(
@@ -3949,6 +4267,10 @@ def restore_trash():
     )
     db.execute(
         "UPDATE tasks SET deleted=0, del_batch=NULL, deleted_at=NULL "
+        "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
+    )
+    db.execute(
+        "UPDATE milestones SET deleted=0, del_batch=NULL, deleted_at=NULL "
         "WHERE workspace_id=? AND del_batch=?", (workspace_id, batch)
     )
     if str(get_meta(db, "undo_batch")) == str(batch):

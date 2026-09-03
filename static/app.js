@@ -5,7 +5,8 @@ const $ = (sel) => document.querySelector(sel);
 const SVGNS = "http://www.w3.org/2000/svg";
 
 const state = {
-  lines: [], tasks: [], dependencies: [], taskImages: [], taskAttachments: [],
+  lines: [], tasks: [], milestones: [], dependencies: [],
+  taskImages: [], taskAttachments: [],
   canUndo: false, canRedo: false,
   statusEnum: [], statusColors: {},
   priorityEnum: [], owners: [], collaborationMembers: [],
@@ -257,6 +258,7 @@ function resetWorkspaceState() {
   state.focusedClusterKey = null;
   state.hiddenBranchIds.clear();
   state.dependencies = [];
+  state.milestones = [];
   state.taskImages = [];
   state.taskAttachments = [];
   state.collaborationMembers = [];
@@ -439,6 +441,7 @@ async function reload() {
   const d = await api("/api/state");
   state.lines = d.lines;
   state.tasks = d.tasks;
+  state.milestones = d.milestones || [];
   state.dependencies = d.dependencies || [];
   state.taskImages = d.task_images || [];
   state.taskAttachments = d.task_attachments || [];
@@ -676,6 +679,7 @@ function renderToolbar() {
   $("#btn-add-mainline").disabled = archived;
   $("#btn-add-branch").disabled = archived || !sel;
   $("#btn-add-task").disabled = archived || !sel;
+  $("#btn-add-milestone").disabled = archived || !sel;
   $("#btn-merge").disabled = archived || !sel || sel.parent_id === null || sel.merge_date;
   $("#btn-toggle-children").disabled = !children.length;
   $("#btn-toggle-children").textContent =
@@ -1531,6 +1535,30 @@ function svgEl(tag, attrs, parent) {
   return el;
 }
 
+function fivePointStarPoints(cx, cy, outerRadius = 14, innerRadius = 6.2) {
+  return Array.from({ length: 10 }, (_, index) => {
+    const radius = index % 2 === 0 ? outerRadius : innerRadius;
+    const angle = -Math.PI / 2 + index * Math.PI / 5;
+    return `${cx + Math.cos(angle) * radius},${cy + Math.sin(angle) * radius}`;
+  }).join(" ");
+}
+
+function milestoneStatusBands(tasks) {
+  const counts = new Map();
+  for (const task of tasks) {
+    counts.set(task.status, (counts.get(task.status) || 0) + 1);
+  }
+  const orderedStatuses = [
+    ...state.statusEnum.filter((status) => counts.has(status)),
+    ...[...counts.keys()].filter((status) => !state.statusEnum.includes(status)),
+  ];
+  return orderedStatuses.map((status) => ({
+    status,
+    count: counts.get(status),
+    ratio: counts.get(status) / tasks.length,
+  }));
+}
+
 /* 计算每条线的泳道行号：主线在上，支线递归排在父线之后 */
 function assignRows(includeHidden = false) {
   const roots = state.lines.filter((l) => l.parent_id === null);
@@ -1555,6 +1583,11 @@ function lineEnd(line) {
   for (const t of state.tasks.filter((t) => t.line_id === line.id)) {
     if (t.end_date && t.end_date > end) end = t.end_date;
     if (t.start_date > end) end = t.start_date;
+  }
+  for (const milestone of state.milestones.filter(
+    (candidate) => candidate.line_id === line.id
+  )) {
+    if (milestone.milestone_date > end) end = milestone.milestone_date;
   }
   return end;
 }
@@ -2502,6 +2535,94 @@ function renderCanvas() {
     }
   }
 
+  /* ---- 里程碑节点：按验收事务状态占比，以成熟度从低到高填充竖向色带。 ---- */
+  const gMilestones = svgEl("g", { class: "milestone-layer" }, root);
+  for (const milestone of state.milestones) {
+    const line = lineById(milestone.line_id);
+    if (!line || !rows.has(line.id)) continue;
+    const tasks = milestoneAcceptanceTasks(milestone);
+    const done = tasks.filter(isDone).length;
+    const total = tasks.length;
+    const unconfigured = total === 0;
+    const statusBands = milestoneStatusBands(tasks);
+    const cx = Math.max(
+      x(milestone.milestone_date), lineGeometry(line).horizontalStart.x
+    );
+    const cy = lineY(line.id);
+    const item = svgEl("g", {
+      class: "milestone-item",
+      "data-milestone-item-id": milestone.id,
+    }, gMilestones);
+    const starPoints = fivePointStarPoints(cx, cy);
+    if (!unconfigured) {
+      const clipId = `milestone-star-clip-${milestone.id}`;
+      const clip = svgEl("clipPath", { id: clipId }, defs);
+      svgEl("polygon", { points: starPoints }, clip);
+      const bands = svgEl("g", {
+        class: "milestone-status-bands",
+        "clip-path": `url(#${clipId})`,
+        "aria-hidden": "true",
+      }, item);
+      let bandX = cx - 14;
+      statusBands.forEach((band, index) => {
+        const width = index === statusBands.length - 1 ?
+          cx + 14 - bandX : 28 * band.ratio;
+        const rect = svgEl("rect", {
+          x: bandX, y: cy - 14, width, height: 28,
+          class: "milestone-status-band",
+        }, bands);
+        rect.style.fill = statusColor(band.status);
+        bandX += width;
+      });
+    }
+    const node = svgEl("polygon", {
+      points: starPoints,
+      class: "milestone-node" + (unconfigured ? " unconfigured" : ""),
+      role: "button", tabindex: 0,
+      "data-milestone-id": milestone.id,
+      "aria-label": `里程碑 ${milestone.name}，${unconfigured ?
+        "未配置验收条件" : `已完成 ${done}/${total}，状态分布 ${statusBands.map(
+          (band) => `${band.status} ${band.count}项`
+        ).join("，")}`}`,
+    }, item);
+    const title = svgEl("title", {}, node);
+    title.textContent =
+      `${milestone.name}\n日期：${milestone.milestone_date}\n` +
+      `目标：${milestone.target_description}\n` +
+      (unconfigured ? "验收条件：未配置" :
+        `验收进度：${done}/${total}\n状态分布：${statusBands.map(
+          (band) => `${band.status} ${band.count}项`
+        ).join("、")}\n` + tasks.map(
+          (task) => `· ${task.name}【${task.status}】`
+        ).join("\n"));
+    if (density !== "overview") {
+      const label = svgEl("text", {
+        x: cx, y: cy - 21, "text-anchor": "middle",
+        class: "milestone-label",
+      }, item);
+      label.textContent = `${milestone.name} · ${unconfigured ? "未配置" : `${done}/${total}`}`;
+      if (density === "detail") {
+        const dateLabel = svgEl("text", {
+          x: cx, y: cy + 27, "text-anchor": "middle",
+          class: "milestone-label milestone-date-label",
+        }, item);
+        dateLabel.textContent = milestone.milestone_date;
+      }
+    }
+    const edit = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.selectedLineId = line.id;
+      state.selectedTaskId = null;
+      renderToolbar();
+      openMilestoneModal(milestone);
+    };
+    node.addEventListener("click", edit);
+    node.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") edit(event);
+    });
+  }
+
   if (density === "overview") {
     const summaries = svgEl("g", { class: "line-task-summaries" }, root);
     const unit = 1 / z;
@@ -3049,10 +3170,12 @@ function ownerInput(value = "", required = false) {
   empty.textContent = required ? "请选择责任人" : "（不指定）";
   empty.disabled = required;
   sel.appendChild(empty);
-  for (const n of ownerOptions()) {
+  const names = ownerOptions();
+  if (value && !names.includes(value)) names.push(value);
+  for (const n of names) {
     const o = document.createElement("option");
     o.value = n;
-    o.textContent = n;
+    o.textContent = n === value && !state.owners.includes(n) ? `${n}（历史责任人）` : n;
     if (n === value) o.selected = true;
     sel.appendChild(o);
   }
@@ -3117,6 +3240,220 @@ function lineOptionLabel(line, lines = state.lines) {
     parent = parent.parent_id !== null ? linesById.get(parent.parent_id) : null;
   }
   return `${line.parent_id === null ? "主线" : "支线"} · ${names.join(" / ")}`;
+}
+
+function milestoneAcceptanceTasks(milestone) {
+  const ids = new Set(milestone?.acceptance_task_ids || []);
+  return state.tasks.filter((task) => ids.has(task.id));
+}
+
+function createMilestoneAcceptancePicker(body, selectedIds = [], options = {}) {
+  const selected = new Set(selectedIds);
+  const candidates = [...state.tasks].sort(
+    (a, b) => Number(selected.has(b.id)) - Number(selected.has(a.id)) ||
+      a.start_date.localeCompare(b.start_date) || a.id - b.id
+  );
+  const wrapper = document.createElement("div");
+  wrapper.className = "dependency-picker-wrap milestone-acceptance-picker";
+  const toolbar = document.createElement("div");
+  toolbar.className = "dependency-picker-toolbar";
+  const search = input("search");
+  search.className = "dependency-search-input";
+  search.placeholder = "搜索事务名、内容、责任人或所属线";
+  search.autocomplete = "off";
+  search.setAttribute("aria-label", "搜索里程碑验收事务");
+  search.value = options.search || "";
+  const count = document.createElement("span");
+  count.className = "dependency-selected-count";
+  toolbar.append(search, count);
+  wrapper.appendChild(toolbar);
+  const picker = document.createElement("div");
+  picker.className = "dependency-picker";
+  body._milestoneAcceptanceChecks = [];
+  const empty = document.createElement("div");
+  empty.className = "dependency-empty";
+  empty.textContent = candidates.length ? "未找到匹配事务" : "当前空间暂无事务";
+  empty.hidden = Boolean(candidates.length);
+  picker.appendChild(empty);
+  for (const candidate of candidates) {
+    const option = document.createElement("div");
+    option.className = "dependency-option";
+    option.title = "双击编辑此事务";
+    option.setAttribute("role", "group");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = selected.has(candidate.id);
+    const checkboxTarget = document.createElement("label");
+    checkboxTarget.className = "milestone-acceptance-checkbox";
+    checkboxTarget.title = "选择或取消此验收事务";
+    checkboxTarget.appendChild(checkbox);
+    const text = document.createElement("span");
+    text.className = "milestone-acceptance-task";
+    const line = lineById(candidate.line_id);
+    const taskName = document.createElement("strong");
+    taskName.textContent = candidate.name;
+    const taskMeta = document.createElement("span");
+    taskMeta.textContent = line?.name || "未知线";
+    text.append(taskName, taskMeta);
+    const owner = ownerInput(candidate.owner, true);
+    owner.className = "milestone-acceptance-owner";
+    owner.disabled = true;
+    owner.setAttribute("aria-label", `事务“${candidate.name}”的责任人`);
+    owner.title = `责任人：${owner.selectedOptions[0]?.textContent || "未指定责任人"}`;
+    option.setAttribute("aria-label", `${candidate.name}，${owner.title}`);
+    const status = document.createElement("span");
+    status.className = "dependency-status";
+    status.textContent = candidate.status;
+    status.style.color = statusColor(candidate.status);
+    option.append(checkboxTarget, text, owner, status);
+    picker.appendChild(option);
+    body._milestoneAcceptanceChecks.push({
+      checkbox, option, taskId: candidate.id,
+      searchText: [candidate.name, candidate.content, candidate.owner,
+        candidate.goal, candidate.next_action, candidate.status, line?.name]
+        .filter(Boolean).join(" ").toLocaleLowerCase(),
+    });
+    option.addEventListener("dblclick", (event) => {
+      if (event.target.closest?.(".milestone-acceptance-checkbox")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      options.onTaskOpen?.(candidate);
+    });
+  }
+  wrapper.appendChild(picker);
+  body._milestoneAcceptanceSearch = search;
+  body._milestoneAcceptancePicker = picker;
+  const refresh = () => {
+    const keyword = search.value.trim().toLocaleLowerCase();
+    let visible = 0;
+    for (const item of body._milestoneAcceptanceChecks) {
+      const matches = !keyword || item.searchText.includes(keyword);
+      item.option.hidden = !matches;
+      if (matches) visible += 1;
+    }
+    empty.hidden = visible > 0;
+    count.textContent = `已选 ${body._milestoneAcceptanceChecks.filter(
+      (item) => item.checkbox.checked
+    ).length} 项`;
+  };
+  search.oninput = refresh;
+  for (const item of body._milestoneAcceptanceChecks) {
+    item.checkbox.onchange = refresh;
+  }
+  refresh();
+  if (options.scrollTop) {
+    requestAnimationFrame(() => { picker.scrollTop = options.scrollTop; });
+  }
+  field(body, "验收条件（从已有事务中多选）", wrapper);
+}
+
+function selectedMilestoneAcceptanceIds(body) {
+  return (body._milestoneAcceptanceChecks || [])
+    .filter((item) => item.checkbox.checked)
+    .map((item) => item.taskId);
+}
+
+function milestoneModalDraft(body) {
+  return {
+    name: body._name.value,
+    milestoneDate: body._date.value,
+    targetDescription: body._target.value,
+    acceptanceTaskIds: selectedMilestoneAcceptanceIds(body),
+    acceptanceSearch: body._milestoneAcceptanceSearch?.value || "",
+    acceptanceScrollTop: body._milestoneAcceptancePicker?.scrollTop || 0,
+  };
+}
+
+function openMilestoneModal(milestone, lineId = null, draft = null) {
+  if (!ensureWorkspaceEditable()) return;
+  const isNew = !milestone;
+  const line = lineById(isNew ? lineId : milestone.line_id);
+  if (!line) {
+    toast("请先选择一条主线或支线");
+    return;
+  }
+  openModal(isNew ? "新建里程碑" : "编辑里程碑", (body) => {
+    const context = document.createElement("div");
+    context.className = "opt-hint milestone-line-hint";
+    context.textContent = `所属${line.parent_id === null ? "主线" : "支线"}：${line.name}`;
+    body.appendChild(context);
+    body._name = field(body, "里程碑名称",
+      input("text", draft?.name ?? milestone?.name ?? ""), true);
+    body._date = field(body, "里程碑日期",
+      input("date", draft?.milestoneDate ?? milestone?.milestone_date ??
+        (line.fork_date > state.today ? line.fork_date : state.today)), true);
+    body._date.min = line.fork_date;
+    const target = document.createElement("textarea");
+    target.rows = 4;
+    target.value = draft?.targetDescription ?? milestone?.target_description ?? "";
+    target.placeholder = "描述该节点需要达成的业务结果";
+    body._target = field(body, "里程碑目标描述", target, true);
+    createMilestoneAcceptancePicker(
+      body,
+      draft?.acceptanceTaskIds ?? milestone?.acceptance_task_ids ?? [],
+      {
+        search: draft?.acceptanceSearch || "",
+        scrollTop: draft?.acceptanceScrollTop || 0,
+        onTaskOpen: (task) => {
+          const savedDraft = milestoneModalDraft(body);
+          openTaskModal(task, task.line_id, false, {
+            onClosed: () => {
+              const currentMilestone = milestone ?
+                state.milestones.find((item) => item.id === milestone.id) || milestone : null;
+              openMilestoneModal(currentMilestone, line.id, savedDraft);
+            },
+          });
+        },
+      }
+    );
+    const hint = document.createElement("div");
+    hint.className = "opt-hint";
+    hint.textContent = "未选择验收事务也可保存；选择后，全部事务闭环即视为里程碑完成。";
+    body.appendChild(hint);
+    if (!isNew) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "modal-delete-button";
+      remove.textContent = "删除此里程碑";
+      remove.onclick = async () => {
+        if (!confirm(`删除里程碑“${milestone.name}”？删除后可从回收站恢复。`)) return;
+        await api(`/api/milestones/${milestone.id}`, "DELETE");
+        $("#modal-mask").classList.add("hidden");
+        toast("已删除里程碑，可按 Ctrl+Z 撤销");
+        await reload();
+      };
+      $("#modal-header-tools").appendChild(remove);
+    }
+    body._name.focus();
+  }, async () => {
+    const body = $("#modal-body");
+    const payload = {
+      name: body._name.value.trim(),
+      milestone_date: body._date.value,
+      target_description: body._target.value.trim(),
+      acceptance_task_ids: selectedMilestoneAcceptanceIds(body),
+    };
+    if (!payload.name) { toast("里程碑名称不能为空"); body._name.focus(); return false; }
+    if (!payload.milestone_date) { toast("里程碑日期不能为空"); body._date.focus(); return false; }
+    if (!payload.target_description) {
+      toast("里程碑目标描述不能为空"); body._target.focus(); return false;
+    }
+    if (isNew) {
+      const result = await api("/api/milestones", "POST", {
+        ...payload, line_id: line.id,
+      });
+      toast("里程碑已创建");
+      await reload();
+      requestAnimationFrame(() => document.querySelector(
+        `.milestone-node[data-milestone-id="${result.id}"]`
+      )?.focus());
+    } else {
+      await api(`/api/milestones/${milestone.id}`, "PATCH", payload);
+      toast("里程碑已更新");
+      await reload();
+    }
+  });
+  $("#modal").classList.add("modal-wide");
 }
 
 function createDependencyPicker(body, task, selectedIds = [], parent = body) {
@@ -4459,6 +4796,15 @@ function createTaskOnSelectedLine() {
 
 $("#btn-add-branch").onclick = createBranchOnSelectedLine;
 $("#btn-add-task").onclick = createTaskOnSelectedLine;
+$("#btn-add-milestone").onclick = () => {
+  if (!ensureWorkspaceEditable()) return;
+  const line = lineById(state.selectedLineId);
+  if (!line) {
+    toast("请先选择一条主线或支线");
+    return;
+  }
+  openMilestoneModal(null, line.id);
+};
 
 $("#btn-merge").onclick = () => {
   const line = lineById(state.selectedLineId);
@@ -4485,9 +4831,13 @@ async function deleteSelectedLine() {
   const ids = [line.id, ...descendantIds(line.id)];
   const subs = ids.length - 1;
   const n = state.tasks.filter((t) => ids.includes(t.line_id)).length;
+  const milestoneCount = state.milestones.filter(
+    (milestone) => ids.includes(milestone.line_id)
+  ).length;
   if (!confirm(
     `递归删除「${line.name}」？\n将同时删除其所有子支线及事务` +
-    `（全部子支线 ${subs} 条、全部事务 ${n} 个）。\n删除后会进入回收站，可恢复。`)) return;
+    `（全部子支线 ${subs} 条、全部事务 ${n} 个、里程碑 ${milestoneCount} 个）。` +
+    `\n删除后会进入回收站，可恢复。`)) return;
   await api(`/api/lines/${line.id}`, "DELETE");
   state.selectedLineId = null;
   state.selectedTaskId = null;
@@ -4593,7 +4943,8 @@ $("#btn-trash").onclick = async () => {
       const names = (b.names || []).slice(0, 4).join("、");
       info.textContent =
         `批次 ${b.batch} · ${b.deleted_at || "未知日期"} · ` +
-        `线 ${b.line_count} 条 · 事务 ${b.task_count} 个` +
+        `线 ${b.line_count} 条 · 事务 ${b.task_count} 个 · ` +
+        `里程碑 ${b.milestone_count || 0} 个` +
         (names ? ` · ${names}` : "");
       const restore = document.createElement("button");
       restore.textContent = "恢复";
