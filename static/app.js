@@ -43,6 +43,8 @@ const DEFAULT_STATUS_COLORS = {
 const TASK_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
 const MAX_TASK_IMAGES = 8;
 const MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024;
+const AVATAR_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
+const MAX_AVATAR_SOURCE_BYTES = 5 * 1024 * 1024;
 const MAX_TASK_ATTACHMENTS = 8;
 const MAX_TASK_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 const MAX_TASK_ATTACHMENTS_BYTES = 20 * 1024 * 1024;
@@ -217,6 +219,31 @@ function showLoggedOut() {
   $("#login-username").focus();
 }
 
+function renderAccountAvatar() {
+  const displayName = (state.user?.display_name || state.user?.username || "").trim();
+  $("#account-avatar-fallback").textContent =
+    Array.from(displayName)[0]?.toLocaleUpperCase() || "用";
+  const image = $("#account-avatar-image");
+  image.onload = () => image.classList.remove("hidden");
+  image.onerror = () => image.classList.add("hidden");
+  if (state.user?.avatar_url) {
+    image.classList.add("hidden");
+    image.src = state.user.avatar_url;
+  } else {
+    image.classList.add("hidden");
+    image.removeAttribute("src");
+  }
+}
+
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("读取头像文件失败"));
+    reader.readAsDataURL(file);
+  });
+}
+
 function applySession(data) {
   state.user = data.user;
   state.workspaces = data.workspaces || [];
@@ -246,12 +273,13 @@ function applySession(data) {
   $("#btn-statuses").classList.toggle("hidden", isArchived);
   const displayName = (state.user.display_name || state.user.username || "").trim();
   const accountName = state.user.username || displayName;
-  $("#account-avatar").textContent = Array.from(displayName)[0]?.toLocaleUpperCase() || "用";
+  renderAccountAvatar();
   $("#account-trigger").setAttribute("aria-label", `${displayName}，打开账号菜单`);
   $("#current-user").textContent = displayName;
   $("#current-username").textContent = accountName === displayName ? "" : accountName;
   $("#current-username").classList.toggle("hidden", accountName === displayName);
   $("#current-user-role").textContent = isCurrentAdmin ? "管理员" : "普通用户";
+  $("#current-user-role").classList.toggle("admin", isCurrentAdmin);
 }
 
 function isWorkspaceArchived() {
@@ -4821,6 +4849,43 @@ $("#workspace-select").onchange = async (event) => {
   }
 };
 $("#account-trigger").onclick = toggleAccountMenu;
+$("#btn-avatar-edit").onclick = (event) => {
+  event.stopPropagation();
+  const input = $("#avatar-file");
+  input.value = "";
+  input.click();
+};
+$("#avatar-file").onchange = async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  if (!AVATAR_IMAGE_TYPES.has(file.type)) {
+    toast("头像仅支持 PNG、JPEG 或 WebP 格式");
+    return;
+  }
+  if (file.size > MAX_AVATAR_SOURCE_BYTES) {
+    toast("头像源文件不能超过 5MB");
+    return;
+  }
+  const button = $("#btn-avatar-edit");
+  button.disabled = true;
+  button.classList.add("uploading");
+  try {
+    const dataUrl = await readFileAsDataURL(file);
+    const result = await api("/api/auth/avatar", "PUT", { data_url: dataUrl });
+    state.user.avatar_url = result.avatar_url;
+    renderAccountAvatar();
+    closeAccountMenu();
+    toast("头像已更新");
+  } catch (error) {
+    if (!(error instanceof Error) || error.message === "读取头像文件失败") {
+      toast("读取头像文件失败");
+    }
+  } finally {
+    button.disabled = false;
+    button.classList.remove("uploading");
+    event.target.value = "";
+  }
+};
 document.addEventListener("click", (event) => {
   if (!$("#account-bar").contains(event.target)) closeAccountMenu();
 });

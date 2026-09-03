@@ -21,6 +21,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from PIL import Image, ImageOps, UnidentifiedImageError
 from werkzeug.exceptions import HTTPException
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -41,6 +42,11 @@ TASK_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 MAX_TASK_IMAGES = 8
 MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TASK_IMAGES_BYTES = 20 * 1024 * 1024
+AVATAR_IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp"}
+MAX_AVATAR_SOURCE_BYTES = 5 * 1024 * 1024
+MAX_AVATAR_SOURCE_PIXELS = 25_000_000
+AVATAR_SIZE = 256
+MAX_AVATAR_BYTES = 1024 * 1024
 MAX_TASK_ATTACHMENTS = 8
 MAX_TASK_ATTACHMENT_BYTES = 5 * 1024 * 1024
 MAX_TASK_ATTACHMENTS_BYTES = 20 * 1024 * 1024
@@ -336,6 +342,9 @@ def init_db(db_path=None):
     ensure_column(db, "tasks", "updated_at", "TEXT")
     ensure_column(db, "tasks", "workspace_id", "INTEGER")
     ensure_column(db, "users", "managed_by", "INTEGER")
+    ensure_column(db, "users", "avatar_mime", "TEXT")
+    ensure_column(db, "users", "avatar_data", "BLOB")
+    ensure_column(db, "users", "avatar_updated_at", "TEXT")
     ensure_column(db, "workspaces", "archived_at", "TEXT")
     today = date.today().isoformat()
 
@@ -1978,6 +1987,64 @@ def milestone_task_id_list(value):
     return value
 
 
+def prepare_avatar_data(data_url):
+    if not isinstance(data_url, str) or "," not in data_url:
+        raise ApiError("头像数据格式不正确")
+    header, encoded = data_url.split(",", 1)
+    if not header.startswith("data:") or not header.endswith(";base64"):
+        raise ApiError("头像数据格式不正确")
+    declared_mime = header[5:-7].lower()
+    if declared_mime not in AVATAR_IMAGE_TYPES:
+        raise ApiError("头像仅支持 PNG、JPEG 或 WebP 格式")
+    try:
+        source_data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError("头像数据无法解析")
+    if not source_data:
+        raise ApiError("头像文件不能为空")
+    if len(source_data) > MAX_AVATAR_SOURCE_BYTES:
+        raise ApiError("头像源文件不能超过 5MB")
+
+    try:
+        with Image.open(BytesIO(source_data)) as opened:
+            actual_mime = {
+                "PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp",
+            }.get(opened.format)
+            if actual_mime != declared_mime:
+                raise ApiError("头像文件格式与内容不一致")
+            width, height = opened.size
+            if min(width, height) < 64:
+                raise ApiError("头像宽度和高度均不能小于 64 像素")
+            if width * height > MAX_AVATAR_SOURCE_PIXELS:
+                raise ApiError("头像像素尺寸过大")
+            opened.load()
+            source = ImageOps.exif_transpose(opened)
+            has_alpha = "A" in source.getbands() or (
+                source.mode == "P" and "transparency" in source.info
+            )
+            source = source.convert("RGBA" if has_alpha else "RGB")
+            avatar = ImageOps.fit(
+                source, (AVATAR_SIZE, AVATAR_SIZE),
+                method=Image.Resampling.LANCZOS, centering=(0.5, 0.5),
+            )
+            output = BytesIO()
+            if has_alpha:
+                avatar.save(output, format="PNG", optimize=True)
+                mime_type = "image/png"
+            else:
+                avatar.save(output, format="JPEG", quality=88, optimize=True)
+                mime_type = "image/jpeg"
+    except ApiError:
+        raise
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise ApiError("头像不是有效的图片文件")
+
+    avatar_data = output.getvalue()
+    if len(avatar_data) > MAX_AVATAR_BYTES:
+        raise ApiError("处理后的头像文件过大")
+    return mime_type, avatar_data
+
+
 def validate_milestone_tasks(db, workspace_id, task_ids):
     task_ids = milestone_task_id_list(task_ids)
     if task_ids:
@@ -2067,11 +2134,18 @@ def session_payload(db, user):
     if current is None and workspaces:
         current = workspaces[0]
         session["workspace_id"] = current["id"]
+    avatar = db.execute(
+        "SELECT avatar_data IS NOT NULL AS has_avatar,avatar_updated_at "
+        "FROM users WHERE id=?", (user["id"],),
+    ).fetchone()
+    avatar_url = None
+    if avatar and avatar["has_avatar"]:
+        avatar_url = f"/api/auth/avatar?v={avatar['avatar_updated_at'] or ''}"
     return {
         "authenticated": True,
         "user": {
             "id": user["id"], "username": user["username"],
-            "display_name": user["display_name"],
+            "display_name": user["display_name"], "avatar_url": avatar_url,
         },
         "workspaces": workspaces,
         "current_workspace": current,
@@ -3417,6 +3491,37 @@ def update_milestone(milestone_id):
     replace_milestone_tasks(db, workspace_id, milestone_id, task_ids)
     db.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/auth/avatar")
+def auth_avatar():
+    db = get_db()
+    row = db.execute(
+        "SELECT avatar_mime,avatar_data FROM users WHERE id=?", (g.user["id"],),
+    ).fetchone()
+    if not row or not row["avatar_data"]:
+        raise ApiError("尚未设置自定义头像", 404)
+    response = send_file(
+        BytesIO(row["avatar_data"]), mimetype=row["avatar_mime"],
+        as_attachment=False, max_age=0,
+    )
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
+@app.route("/api/auth/avatar", methods=["PUT"])
+def auth_avatar_update():
+    mime_type, avatar_data = prepare_avatar_data(json_object().get("data_url"))
+    changed_at = now_iso()
+    db = get_db()
+    db.execute(
+        "UPDATE users SET avatar_mime=?,avatar_data=?,avatar_updated_at=?,updated_at=? "
+        "WHERE id=?",
+        (mime_type, avatar_data, changed_at, date.today().isoformat(), g.user["id"]),
+    )
+    db.commit()
+    return jsonify({"avatar_url": f"/api/auth/avatar?v={changed_at}"})
 
 
 @app.route("/api/milestones/<int:milestone_id>", methods=["DELETE"])

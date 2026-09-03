@@ -10,6 +10,7 @@ import unittest
 from datetime import date, timedelta
 
 from openpyxl import Workbook, load_workbook
+from PIL import Image
 from werkzeug.serving import make_server
 
 _IMPORT_TEMP_DIR = tempfile.TemporaryDirectory()
@@ -185,6 +186,45 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(state["priority_enum"], ["低", "中", "高", "紧急"])
         self.assertEqual(state["status_colors"]["进行中"], "#0969da")
         self.assertEqual(state["owners"], ["系统管理员"])
+
+    def test_user_can_upload_a_constrained_custom_avatar(self):
+        source = io.BytesIO()
+        Image.new("RGB", (320, 180), (30, 120, 210)).save(source, format="PNG")
+        data_url = "data:image/png;base64," + base64.b64encode(
+            source.getvalue()
+        ).decode("ascii")
+
+        status, result = self.request(
+            "PUT", "/api/auth/avatar", {"data_url": data_url}
+        )
+        self.assertEqual(status, 200, result)
+        self.assertTrue(result["avatar_url"].startswith("/api/auth/avatar?v="))
+
+        status, content = self.request("GET", "/api/auth/avatar")
+        self.assertEqual(status, 200)
+        with Image.open(io.BytesIO(content)) as avatar:
+            self.assertEqual(avatar.size, (256, 256))
+            self.assertEqual(avatar.format, "JPEG")
+
+        status, session_data = self.request("GET", "/api/auth/session")
+        self.assertEqual(status, 200)
+        self.assertEqual(session_data["user"]["avatar_url"], result["avatar_url"])
+
+        tiny = io.BytesIO()
+        Image.new("RGB", (32, 32), "red").save(tiny, format="PNG")
+        tiny_url = "data:image/png;base64," + base64.b64encode(
+            tiny.getvalue()
+        ).decode("ascii")
+        status, error = self.request(
+            "PUT", "/api/auth/avatar", {"data_url": tiny_url}
+        )
+        self.assertEqual(status, 400, error)
+        self.assertIn("64", error["error"])
+
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b'id="btn-avatar-edit"', body)
+        self.assertIn(b'id="avatar-file"', body)
 
     def test_personal_todo_entry_count_and_statistics(self):
         status, body = self.request("GET", "/static/app.js")
