@@ -8,7 +8,8 @@ const state = {
   lines: [], tasks: [], dependencies: [], taskImages: [], taskAttachments: [],
   canUndo: false, canRedo: false,
   statusEnum: [], statusColors: {},
-  priorityEnum: [], owners: [], today: "", dashboardSnapshots: [],
+  priorityEnum: [], owners: [], collaborationMembers: [],
+  unreadNotifications: 0, today: "", dashboardSnapshots: [],
   user: null, workspaces: [], currentWorkspace: null,
   selectedLineId: null,
   selectedTaskId: null,
@@ -258,6 +259,8 @@ function resetWorkspaceState() {
   state.dependencies = [];
   state.taskImages = [];
   state.taskAttachments = [];
+  state.collaborationMembers = [];
+  state.unreadNotifications = 0;
   state.dashboardSnapshots = [];
   state.pan = { x: 0, y: 0 };
   state.filters = { q: "", line: "", owner: "", status: "", priority: "", due: "" };
@@ -445,6 +448,8 @@ async function reload() {
   state.statusColors = d.status_colors || {};
   state.priorityEnum = d.priority_enum || ["低", "中", "高", "紧急"];
   state.owners = d.owners || [];
+  state.collaborationMembers = d.collaboration_members || [];
+  state.unreadNotifications = d.unread_notifications || 0;
   state.today = d.today;
   state.dashboardSnapshots = d.dashboard_snapshots || [];
   for (const id of [...state.hiddenBranchIds]) {
@@ -554,6 +559,112 @@ function renderMyTodoEntry() {
   button.setAttribute("aria-label", `查看我的待办，当前 ${count} 个未闭环事务`);
 }
 
+function renderNotificationEntry() {
+  const button = $("#btn-notifications");
+  const badge = $("#notification-count");
+  if (!button || !badge) return;
+  const count = state.unreadNotifications || 0;
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.classList.toggle("is-zero", count === 0);
+  button.classList.toggle("has-unread", count > 0);
+  button.title = count ? `协作通知：${count} 条未读` : "协作通知：暂无未读";
+  button.setAttribute("aria-label", count ?
+    `查看协作通知，当前 ${count} 条未读` : "查看协作通知，暂无未读");
+}
+
+function collaborationTime(value) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString("zh-CN", {
+    month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+async function loadNotifications(container) {
+  const data = await api("/api/notifications");
+  state.unreadNotifications = data.unread_count || 0;
+  renderNotificationEntry();
+  if (!container.isConnected) return;
+  container.innerHTML = "";
+  const notifications = data.notifications || [];
+  if (!notifications.length) {
+    const empty = document.createElement("div");
+    empty.className = "notification-empty";
+    empty.textContent = "暂无协作通知";
+    container.appendChild(empty);
+    return;
+  }
+  const list = document.createElement("div");
+  list.className = "notification-list";
+  for (const notice of notifications) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `notification-row${notice.read_at ? "" : " unread"}`;
+    const icon = document.createElement("span");
+    icon.className = `notification-kind kind-${notice.kind}`;
+    icon.textContent = {
+      mention: "@", comment: "评", assigned: "派", status_changed: "变",
+      dependency_unblocked: "通", due_soon: "临", overdue: "超",
+    }[notice.kind] || "知";
+    const main = document.createElement("span");
+    main.className = "notification-main";
+    const message = document.createElement("strong");
+    message.textContent = notice.message;
+    const meta = document.createElement("span");
+    meta.textContent = collaborationTime(notice.created_at) +
+      (notice.task_available ? " · 点击查看事务" : " · 事务已删除");
+    main.append(message, meta);
+    row.append(icon, main);
+    row.onclick = async () => {
+      if (!notice.read_at) {
+        const result = await api(`/api/notifications/${notice.id}/read`, "POST");
+        state.unreadNotifications = result.unread_count || 0;
+        renderNotificationEntry();
+      }
+      if (!notice.task_available) {
+        row.classList.remove("unread");
+        toast("关联事务已删除");
+        return;
+      }
+      const task = taskById(notice.task_id);
+      if (!task) {
+        toast("关联事务当前不可见");
+        return;
+      }
+      openTaskModal(task, task.line_id);
+    };
+    list.appendChild(row);
+  }
+  container.appendChild(list);
+}
+
+function openNotificationsModal() {
+  openModal("协作通知", (body) => {
+    const loading = document.createElement("div");
+    loading.className = "notification-empty";
+    loading.textContent = "正在加载通知…";
+    body.appendChild(loading);
+    loadNotifications(body).catch(() => {});
+  }, async () => true);
+  $("#modal").classList.add("modal-wide");
+  $("#modal-ok").classList.add("hidden");
+  $("#modal-cancel").textContent = "关闭";
+  const markAll = document.createElement("button");
+  markAll.type = "button";
+  markAll.className = "notification-read-all";
+  markAll.textContent = "全部标为已读";
+  markAll.disabled = !state.unreadNotifications;
+  markAll.onclick = async () => {
+    await api("/api/notifications/read-all", "POST");
+    state.unreadNotifications = 0;
+    renderNotificationEntry();
+    markAll.disabled = true;
+    await loadNotifications($("#modal-body"));
+  };
+  $("#modal-header-tools").appendChild(markAll);
+}
+
 function renderToolbar() {
   const archived = isWorkspaceArchived();
   const sel = state.selectedLineId ? lineById(state.selectedLineId) : null;
@@ -580,6 +691,7 @@ function renderToolbar() {
   renderDependencyFocusPanel(dependencyFocus);
   renderCanvasLegend();
   renderMyTodoEntry();
+  renderNotificationEntry();
 }
 
 function setSelectOptions(sel, values, allText, selected) {
@@ -3457,6 +3569,136 @@ function createTaskContentEditor(body, task, draft = null) {
   return editor;
 }
 
+function renderTaskCollaboration(panel, task, data) {
+  if (!panel.isConnected) return;
+  panel.innerHTML = "";
+  const heading = document.createElement("div");
+  heading.className = "collaboration-heading";
+  const followerText = document.createElement("span");
+  const followerNames = (data.followers || []).map((item) => item.display_name);
+  followerText.textContent = followerNames.length ?
+    `${followerNames.length} 人关注：${followerNames.join("、")}` : "暂时无人关注";
+  const follow = document.createElement("button");
+  follow.type = "button";
+  follow.className = data.following ? "following" : "";
+  follow.textContent = data.following ? "已关注" : "+ 关注";
+  follow.onclick = async () => {
+    follow.disabled = true;
+    try {
+      await api(`/api/tasks/${task.id}/follow`, data.following ? "DELETE" : "POST");
+      await loadTaskCollaboration(panel, task);
+    } finally {
+      follow.disabled = false;
+    }
+  };
+  heading.append(followerText, follow);
+
+  const composer = document.createElement("div");
+  composer.className = "comment-composer";
+  const textarea = document.createElement("textarea");
+  textarea.maxLength = 2000;
+  textarea.rows = 3;
+  textarea.placeholder = "写下进展、问题或决策；可使用 @成员 提醒对方";
+  const tools = document.createElement("div");
+  tools.className = "comment-tools";
+  const mention = document.createElement("select");
+  const mentionEmpty = document.createElement("option");
+  mentionEmpty.value = "";
+  mentionEmpty.textContent = "插入 @成员";
+  mention.appendChild(mentionEmpty);
+  for (const member of data.members || state.collaborationMembers) {
+    if (member.id === state.user?.id) continue;
+    const option = document.createElement("option");
+    option.value = member.display_name;
+    option.textContent = member.display_name;
+    mention.appendChild(option);
+  }
+  mention.onchange = () => {
+    if (!mention.value) return;
+    const prefix = textarea.value && !/\s$/.test(textarea.value) ? " " : "";
+    textarea.value += `${prefix}@${mention.value} `;
+    mention.value = "";
+    textarea.focus();
+  };
+  const post = document.createElement("button");
+  post.type = "button";
+  post.className = "primary";
+  post.textContent = "发表评论";
+  post.onclick = async () => {
+    const content = textarea.value.trim();
+    if (!content) {
+      toast("评论内容不能为空");
+      textarea.focus();
+      return;
+    }
+    post.disabled = true;
+    try {
+      await api(`/api/tasks/${task.id}/comments`, "POST", { content });
+      textarea.value = "";
+      toast("评论已发送");
+      await loadTaskCollaboration(panel, task);
+    } finally {
+      post.disabled = false;
+    }
+  };
+  tools.append(mention, post);
+  composer.append(textarea, tools);
+
+  const timeline = document.createElement("div");
+  timeline.className = "collaboration-timeline";
+  if (!(data.timeline || []).length) {
+    const empty = document.createElement("div");
+    empty.className = "collaboration-empty";
+    empty.textContent = "暂无协作动态";
+    timeline.appendChild(empty);
+  }
+  for (const item of data.timeline || []) {
+    const row = document.createElement("article");
+    row.className = `collaboration-item ${item.kind}`;
+    const avatar = document.createElement("span");
+    avatar.className = "collaboration-avatar";
+    avatar.textContent = Array.from(item.actor_name || "系")[0] || "系";
+    const content = document.createElement("div");
+    const meta = document.createElement("div");
+    meta.className = "collaboration-meta";
+    const actor = document.createElement("strong");
+    actor.textContent = item.actor_name || "系统";
+    const time = document.createElement("time");
+    time.textContent = collaborationTime(item.created_at);
+    meta.append(actor, time);
+    const detail = document.createElement("div");
+    detail.className = "collaboration-detail";
+    detail.textContent = item.kind === "comment" ? item.detail : item.summary;
+    content.append(meta, detail);
+    row.append(avatar, content);
+    timeline.appendChild(row);
+  }
+  panel.append(heading, composer, timeline);
+}
+
+async function loadTaskCollaboration(panel, task) {
+  const data = await api(`/api/tasks/${task.id}/collaboration`);
+  renderTaskCollaboration(panel, task, data);
+}
+
+function createTaskCollaborationPanel(body, task) {
+  const details = document.createElement("details");
+  details.className = "task-collaboration";
+  const summary = document.createElement("summary");
+  summary.textContent = "协作与动态";
+  const panel = document.createElement("div");
+  panel.className = "task-collaboration-panel";
+  const loading = document.createElement("div");
+  loading.className = "collaboration-empty";
+  loading.textContent = "正在加载协作记录…";
+  panel.appendChild(loading);
+  details.append(summary, panel);
+  body.appendChild(details);
+  loadTaskCollaboration(panel, task).catch(() => {
+    if (panel.isConnected) panel.textContent = "协作记录加载失败，请稍后重试";
+  });
+}
+
 /* 新建/编辑事务 */
 function openTaskModal(task, lineId = null, allowLineSelection = false, options = {}) {
   if (!ensureWorkspaceEditable()) return;
@@ -3552,6 +3794,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
       body._risk = field(more, "风险原因",
         input("text", task ? task.risk_reason : (draft?.riskReason || "")));
       body.appendChild(more);
+      if (!isNew) createTaskCollaborationPanel(body, task);
 
       const syncEndDate = () => {
         body._end.min = body._start.value;
@@ -3660,6 +3903,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
     }
   );
   if (task) {
+    $("#modal").classList.add("modal-wide");
     requestAnimationFrame(() => autoResizeTaskContent($("#modal-body")._content));
   }
 }
@@ -4011,6 +4255,7 @@ $("#workspace-select").onchange = async (event) => {
   }
 };
 $("#account-trigger").onclick = toggleAccountMenu;
+$("#btn-notifications").onclick = openNotificationsModal;
 document.addEventListener("click", (event) => {
   if (!$("#account-bar").contains(event.target)) closeAccountMenu();
 });
@@ -4835,3 +5080,23 @@ async function bootstrap() {
 }
 
 bootstrap();
+
+async function pollNotificationCount() {
+  if (!state.user || document.hidden) return;
+  try {
+    const response = await fetch("/api/notifications", {
+      headers: { "Accept": "application/json" },
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    state.unreadNotifications = data.unread_count || 0;
+    renderNotificationEntry();
+  } catch (_error) {
+    // 后台轮询静默失败，不打断用户当前操作。
+  }
+}
+
+setInterval(pollNotificationCount, 30000);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) pollNotificationCount();
+});

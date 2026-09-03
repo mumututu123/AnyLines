@@ -3,12 +3,13 @@
 """AnyLine —— 在线事务管理网站 (Flask + SQLite)"""
 import json
 import os
+import re
 import sqlite3
 import base64
 import binascii
 from zipfile import BadZipFile
 from io import BytesIO
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from flask import (
     Flask, g, jsonify, request, send_file, send_from_directory, session,
@@ -265,6 +266,43 @@ def init_db(db_path=None):
             status_counts TEXT NOT NULL,
             PRIMARY KEY(workspace_id,snapshot_date)
         );
+        CREATE TABLE IF NOT EXISTS task_followers (
+            workspace_id INTEGER NOT NULL,
+            task_id      INTEGER NOT NULL,
+            user_id      INTEGER NOT NULL,
+            created_at   TEXT NOT NULL,
+            PRIMARY KEY(workspace_id,task_id,user_id)
+        );
+        CREATE TABLE IF NOT EXISTS task_comments (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id INTEGER NOT NULL,
+            task_id      INTEGER NOT NULL,
+            author_id    INTEGER NOT NULL,
+            content      TEXT NOT NULL,
+            created_at   TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_activities (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id INTEGER NOT NULL,
+            task_id      INTEGER NOT NULL,
+            actor_id     INTEGER,
+            event_type   TEXT NOT NULL,
+            summary      TEXT NOT NULL,
+            metadata     TEXT NOT NULL DEFAULT '{}',
+            created_at   TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS notifications (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id INTEGER NOT NULL,
+            user_id      INTEGER NOT NULL,
+            task_id      INTEGER,
+            actor_id     INTEGER,
+            kind         TEXT NOT NULL,
+            message      TEXT NOT NULL,
+            dedupe_key   TEXT,
+            read_at      TEXT,
+            created_at   TEXT NOT NULL
+        );
         """
     )
     ensure_column(db, "lines", "description", "TEXT DEFAULT ''")
@@ -355,6 +393,27 @@ def init_db(db_path=None):
     db.execute(
         "CREATE INDEX IF NOT EXISTS idx_dashboard_snapshots_date "
         "ON dashboard_snapshots(workspace_id,snapshot_date)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_followers_user "
+        "ON task_followers(workspace_id,user_id,task_id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_comments_task "
+        "ON task_comments(workspace_id,task_id,created_at,id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_task_activities_task "
+        "ON task_activities(workspace_id,task_id,created_at,id)"
+    )
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_notifications_user "
+        "ON notifications(workspace_id,user_id,read_at,created_at,id)"
+    )
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe "
+        "ON notifications(workspace_id,user_id,dedupe_key) "
+        "WHERE dedupe_key IS NOT NULL"
     )
     db.execute("UPDATE lines SET updated_at=? WHERE updated_at IS NULL", (today,))
     db.execute("UPDATE tasks SET updated_at=? WHERE updated_at IS NULL", (today,))
@@ -1089,6 +1148,7 @@ CURRENT_WORKSPACE_WRITE_ENDPOINTS = {
     "create_line", "update_line", "delete_line", "import_lines", "import_data",
     "create_task", "update_task", "task_dependency", "delete_task",
     "import_tasks", "bulk_tasks", "undo", "redo", "restore_trash", "purge_trash",
+    "add_task_comment", "follow_task", "unfollow_task",
 }
 
 
@@ -1140,6 +1200,195 @@ def load_authenticated_context():
     return None
 
 
+# ---------------------------------------------------- collaboration helpers
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def active_task(db, workspace_id, task_id):
+    task = db.execute(
+        "SELECT t.* FROM tasks t JOIN lines l ON l.id=t.line_id "
+        "WHERE t.id=? AND t.workspace_id=? AND l.workspace_id=? "
+        "AND t.deleted=0 AND l.deleted=0",
+        (task_id, workspace_id, workspace_id),
+    ).fetchone()
+    if not task:
+        raise ApiError("事务不存在", 404)
+    return task
+
+
+def workspace_member_rows(db, workspace_id):
+    return db.execute(
+        "SELECT u.id,u.username,u.display_name FROM workspace_members m "
+        "JOIN users u ON u.id=m.user_id "
+        "WHERE m.workspace_id=? AND u.active=1 ORDER BY u.display_name,u.id",
+        (workspace_id,),
+    ).fetchall()
+
+
+def owner_user_ids(db, workspace_id, owner):
+    if not owner:
+        return set()
+    return {
+        row["id"] for row in db.execute(
+            "SELECT u.id FROM workspace_members m JOIN users u ON u.id=m.user_id "
+            "WHERE m.workspace_id=? AND u.active=1 AND u.display_name=?",
+            (workspace_id, owner),
+        )
+    }
+
+
+def task_audience_user_ids(db, workspace_id, task_id, owner=None):
+    followers = {
+        row["user_id"] for row in db.execute(
+            "SELECT user_id FROM task_followers WHERE workspace_id=? AND task_id=?",
+            (workspace_id, task_id),
+        )
+    }
+    if owner is None:
+        row = db.execute(
+            "SELECT owner FROM tasks WHERE id=? AND workspace_id=?",
+            (task_id, workspace_id),
+        ).fetchone()
+        owner = row["owner"] if row else ""
+    return followers | owner_user_ids(db, workspace_id, owner)
+
+
+def add_notifications(db, workspace_id, user_ids, kind, message, task_id=None,
+                      actor_id=None, dedupe_key=None):
+    created_at = now_iso()
+    for user_id in set(user_ids) - ({actor_id} if actor_id else set()):
+        db.execute(
+            "INSERT OR IGNORE INTO notifications("
+            "workspace_id,user_id,task_id,actor_id,kind,message,dedupe_key,created_at"
+            ") VALUES(?,?,?,?,?,?,?,?)",
+            (
+                workspace_id, user_id, task_id, actor_id, kind, message,
+                dedupe_key, created_at,
+            ),
+        )
+
+
+def add_task_activity(db, workspace_id, task_id, event_type, summary,
+                      metadata=None, actor_id=None):
+    db.execute(
+        "INSERT INTO task_activities("
+        "workspace_id,task_id,actor_id,event_type,summary,metadata,created_at"
+        ") VALUES(?,?,?,?,?,?,?)",
+        (
+            workspace_id, task_id,
+            g.user["id"] if actor_id is None else actor_id,
+            event_type, summary,
+            json.dumps(metadata or {}, ensure_ascii=False, separators=(",", ":")),
+            now_iso(),
+        ),
+    )
+
+
+def mentioned_user_ids(db, workspace_id, content):
+    mentioned = set()
+    for member in workspace_member_rows(db, workspace_id):
+        tokens = {f"@{member['username']}", f"@{member['display_name']}"}
+        if any(
+            re.search(
+                re.escape(token) + r"(?![A-Za-z0-9_\-\u4e00-\u9fff])",
+                content,
+            )
+            for token in tokens if len(token) > 1
+        ):
+            mentioned.add(member["id"])
+    return mentioned
+
+
+def ensure_due_notifications(db, workspace_id, user_id):
+    today = date.today()
+    rows = db.execute(
+        "SELECT DISTINCT t.id,t.name,t.end_date FROM tasks t "
+        "JOIN lines l ON l.id=t.line_id "
+        "LEFT JOIN users owner ON owner.display_name=t.owner AND owner.active=1 "
+        "LEFT JOIN workspace_members owner_member ON owner_member.user_id=owner.id "
+        "AND owner_member.workspace_id=t.workspace_id "
+        "LEFT JOIN task_followers follower ON follower.workspace_id=t.workspace_id "
+        "AND follower.task_id=t.id AND follower.user_id=? "
+        "WHERE t.workspace_id=? AND l.workspace_id=? AND t.deleted=0 AND l.deleted=0 "
+        "AND t.status NOT IN ('已闭环','已取消') AND t.end_date IS NOT NULL "
+        "AND (owner_member.user_id=? OR follower.user_id=?)",
+        (user_id, workspace_id, workspace_id, user_id, user_id),
+    ).fetchall()
+    for task in rows:
+        try:
+            days_left = (date.fromisoformat(task["end_date"]) - today).days
+        except (TypeError, ValueError):
+            continue
+        if days_left > 7:
+            continue
+        kind = "overdue" if days_left < 0 else "due_soon"
+        if days_left < 0:
+            message = f"事务「{task['name']}」已超期 {-days_left} 天"
+        elif days_left == 0:
+            message = f"事务「{task['name']}」今天到期"
+        else:
+            message = f"事务「{task['name']}」将在 {days_left} 天后到期"
+        add_notifications(
+            db, workspace_id, {user_id}, kind, message, task["id"],
+            dedupe_key=f"{kind}:{task['id']}:{task['end_date']}",
+        )
+
+
+def notify_dependents_unblocked(db, workspace_id, prerequisite_task_id,
+                                prerequisite_name, actor_id):
+    rows = db.execute(
+        "SELECT dependent.id,dependent.name,dependent.owner "
+        "FROM task_dependencies edge "
+        "JOIN tasks dependent ON dependent.id=edge.dependent_task_id "
+        "JOIN lines line ON line.id=dependent.line_id "
+        "WHERE edge.workspace_id=? AND edge.prerequisite_task_id=? "
+        "AND dependent.workspace_id=? AND dependent.deleted=0 AND line.deleted=0 "
+        "AND dependent.status NOT IN ('已闭环','已取消') "
+        "AND NOT EXISTS ("
+        "SELECT 1 FROM task_dependencies remaining "
+        "JOIN tasks prerequisite ON prerequisite.id=remaining.prerequisite_task_id "
+        "WHERE remaining.workspace_id=edge.workspace_id "
+        "AND remaining.dependent_task_id=dependent.id "
+        "AND prerequisite.deleted=0 "
+        "AND prerequisite.status NOT IN ('已闭环','已取消'))",
+        (workspace_id, prerequisite_task_id, workspace_id),
+    ).fetchall()
+    for task in rows:
+        add_notifications(
+            db, workspace_id,
+            task_audience_user_ids(db, workspace_id, task["id"], task["owner"]),
+            "dependency_unblocked",
+            f"前置事务「{prerequisite_name}」已完成，「{task['name']}」可以继续推进",
+            task["id"], actor_id,
+        )
+
+
+def notify_task_if_unblocked(db, workspace_id, task_id, actor_id, message):
+    task = db.execute(
+        "SELECT id,name,owner,status FROM tasks WHERE id=? AND workspace_id=? "
+        "AND deleted=0", (task_id, workspace_id),
+    ).fetchone()
+    if not task or task["status"] in {"已闭环", "已取消"}:
+        return
+    blocked = db.execute(
+        "SELECT 1 FROM task_dependencies edge "
+        "JOIN tasks prerequisite ON prerequisite.id=edge.prerequisite_task_id "
+        "WHERE edge.workspace_id=? AND edge.dependent_task_id=? "
+        "AND prerequisite.deleted=0 "
+        "AND prerequisite.status NOT IN ('已闭环','已取消') LIMIT 1",
+        (workspace_id, task_id),
+    ).fetchone()
+    if not blocked:
+        add_notifications(
+            db, workspace_id,
+            task_audience_user_ids(db, workspace_id, task_id, task["owner"]),
+            "dependency_unblocked", message, task_id, actor_id,
+        )
+
+
 # ------------------------------------------------------------- undo helpers
 def get_meta(db, key):
     row = db.execute(
@@ -1179,6 +1428,17 @@ def purge_deleted(db):
     )
     db.execute(
         "DELETE FROM task_attachments WHERE workspace_id=? AND task_id IN "
+        "(SELECT id FROM tasks WHERE workspace_id=? AND deleted=1)",
+        (workspace_id, workspace_id),
+    )
+    for table in ("task_followers", "task_comments", "task_activities"):
+        db.execute(
+            f"DELETE FROM {table} WHERE workspace_id=? AND task_id IN "
+            "(SELECT id FROM tasks WHERE workspace_id=? AND deleted=1)",
+            (workspace_id, workspace_id),
+        )
+    db.execute(
+        "DELETE FROM notifications WHERE workspace_id=? AND task_id IN "
         "(SELECT id FROM tasks WHERE workspace_id=? AND deleted=1)",
         (workspace_id, workspace_id),
     )
@@ -1886,6 +2146,10 @@ def delete_workspace(workspace_id):
     db.execute("DELETE FROM task_dependencies WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_images WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM task_attachments WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM task_followers WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM task_comments WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM task_activities WHERE workspace_id=?", (workspace_id,))
+    db.execute("DELETE FROM notifications WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM tasks WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM lines WHERE workspace_id=?", (workspace_id,))
     db.execute("DELETE FROM workspace_meta WHERE workspace_id=?", (workspace_id,))
@@ -1996,6 +2260,14 @@ def workspace_member(workspace_id, user_id):
 
     if request.method == "DELETE":
         ensure_not_last_admin()
+        db.execute(
+            "DELETE FROM task_followers WHERE workspace_id=? AND user_id=?",
+            (workspace_id, user_id),
+        )
+        db.execute(
+            "DELETE FROM notifications WHERE workspace_id=? AND user_id=?",
+            (workspace_id, user_id),
+        )
         db.execute(
             "DELETE FROM workspace_members WHERE workspace_id=? AND user_id=?",
             (workspace_id, user_id),
@@ -2149,6 +2421,13 @@ def api_state():
     dashboard_snapshots = update_dashboard_snapshot(
         db, workspace_id, tasks, dependencies
     )
+    ensure_due_notifications(db, workspace_id, g.user["id"])
+    db.commit()
+    unread_notifications = db.execute(
+        "SELECT COUNT(*) AS count FROM notifications "
+        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL",
+        (workspace_id, g.user["id"]),
+    ).fetchone()["count"]
     return jsonify({
         "lines": lines,
         "tasks": tasks,
@@ -2161,9 +2440,177 @@ def api_state():
         "status_colors": get_status_colors(db, statuses),
         "priority_enum": PRIORITY_ENUM,
         "owners": get_workspace_member_names(db, workspace_id),
+        "collaboration_members": [dict(row) for row in workspace_member_rows(
+            db, workspace_id
+        )],
+        "unread_notifications": unread_notifications,
         "today": date.today().isoformat(),
         "dashboard_snapshots": dashboard_snapshots,
     })
+
+
+@app.route("/api/notifications")
+def api_notifications():
+    db = get_db()
+    workspace_id = current_workspace_id()
+    ensure_due_notifications(db, workspace_id, g.user["id"])
+    db.commit()
+    rows = [dict(row) for row in db.execute(
+        "SELECT n.id,n.task_id,n.kind,n.message,n.read_at,n.created_at,"
+        "actor.display_name AS actor_name,t.name AS task_name,"
+        "CASE WHEN t.id IS NOT NULL AND t.deleted=0 AND l.deleted=0 "
+        "THEN 1 ELSE 0 END AS task_available "
+        "FROM notifications n "
+        "LEFT JOIN users actor ON actor.id=n.actor_id "
+        "LEFT JOIN tasks t ON t.id=n.task_id AND t.workspace_id=n.workspace_id "
+        "LEFT JOIN lines l ON l.id=t.line_id AND l.workspace_id=n.workspace_id "
+        "WHERE n.workspace_id=? AND n.user_id=? "
+        "ORDER BY CASE WHEN n.read_at IS NULL THEN 0 ELSE 1 END,n.created_at DESC,n.id DESC "
+        "LIMIT 100",
+        (workspace_id, g.user["id"]),
+    )]
+    unread_count = db.execute(
+        "SELECT COUNT(*) AS count FROM notifications "
+        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL",
+        (workspace_id, g.user["id"]),
+    ).fetchone()["count"]
+    return jsonify({
+        "notifications": rows,
+        "unread_count": unread_count,
+    })
+
+
+@app.route("/api/notifications/read-all", methods=["POST"])
+def read_all_notifications():
+    db = get_db()
+    db.execute(
+        "UPDATE notifications SET read_at=? WHERE workspace_id=? AND user_id=? "
+        "AND read_at IS NULL",
+        (now_iso(), current_workspace_id(), g.user["id"]),
+    )
+    db.commit()
+    return jsonify({"ok": True, "unread_count": 0})
+
+
+@app.route("/api/notifications/<int:notification_id>/read", methods=["POST"])
+def read_notification(notification_id):
+    db = get_db()
+    result = db.execute(
+        "UPDATE notifications SET read_at=COALESCE(read_at,?) "
+        "WHERE id=? AND workspace_id=? AND user_id=?",
+        (now_iso(), notification_id, current_workspace_id(), g.user["id"]),
+    )
+    if result.rowcount == 0:
+        raise ApiError("通知不存在", 404)
+    db.commit()
+    unread_count = db.execute(
+        "SELECT COUNT(*) AS count FROM notifications "
+        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL",
+        (current_workspace_id(), g.user["id"]),
+    ).fetchone()["count"]
+    return jsonify({"ok": True, "unread_count": unread_count})
+
+
+@app.route("/api/tasks/<int:task_id>/collaboration")
+def task_collaboration(task_id):
+    db = get_db()
+    workspace_id = current_workspace_id()
+    active_task(db, workspace_id, task_id)
+    followers = [dict(row) for row in db.execute(
+        "SELECT u.id,u.username,u.display_name FROM task_followers f "
+        "JOIN users u ON u.id=f.user_id "
+        "JOIN workspace_members m ON m.workspace_id=f.workspace_id "
+        "AND m.user_id=f.user_id "
+        "WHERE f.workspace_id=? AND f.task_id=? AND u.active=1 "
+        "ORDER BY u.display_name,u.id",
+        (workspace_id, task_id),
+    )]
+    timeline = [dict(row) for row in db.execute(
+        "SELECT 'comment' AS kind,c.id,c.content AS detail,'' AS summary,"
+        "c.created_at,u.id AS actor_id,u.display_name AS actor_name "
+        "FROM task_comments c JOIN users u ON u.id=c.author_id "
+        "WHERE c.workspace_id=? AND c.task_id=? "
+        "UNION ALL "
+        "SELECT 'activity' AS kind,a.id,'' AS detail,a.summary,"
+        "a.created_at,u.id AS actor_id,"
+        "COALESCE(u.display_name,'系统') AS actor_name "
+        "FROM task_activities a LEFT JOIN users u ON u.id=a.actor_id "
+        "WHERE a.workspace_id=? AND a.task_id=? "
+        "ORDER BY 5 DESC,2 DESC LIMIT 100",
+        (workspace_id, task_id, workspace_id, task_id),
+    )]
+    return jsonify({
+        "following": any(row["id"] == g.user["id"] for row in followers),
+        "followers": followers,
+        "members": [dict(row) for row in workspace_member_rows(db, workspace_id)],
+        "timeline": timeline,
+    })
+
+
+@app.route("/api/tasks/<int:task_id>/follow", methods=["POST"])
+def follow_task(task_id):
+    db = get_db()
+    workspace_id = current_workspace_id()
+    active_task(db, workspace_id, task_id)
+    db.execute(
+        "INSERT OR IGNORE INTO task_followers(workspace_id,task_id,user_id,created_at) "
+        "VALUES(?,?,?,?)", (workspace_id, task_id, g.user["id"], now_iso()),
+    )
+    db.commit()
+    return jsonify({"ok": True, "following": True})
+
+
+@app.route("/api/tasks/<int:task_id>/follow", methods=["DELETE"])
+def unfollow_task(task_id):
+    db = get_db()
+    workspace_id = current_workspace_id()
+    active_task(db, workspace_id, task_id)
+    db.execute(
+        "DELETE FROM task_followers WHERE workspace_id=? AND task_id=? AND user_id=?",
+        (workspace_id, task_id, g.user["id"]),
+    )
+    db.commit()
+    return jsonify({"ok": True, "following": False})
+
+
+@app.route("/api/tasks/<int:task_id>/comments", methods=["POST"])
+def add_task_comment(task_id):
+    data = json_object()
+    content = text_field(data, "content", "评论内容").strip()
+    if not content:
+        raise ApiError("评论内容不能为空")
+    if len(content) > 2000:
+        raise ApiError("评论内容不能超过 2000 个字符")
+    db = get_db()
+    workspace_id = current_workspace_id()
+    task = active_task(db, workspace_id, task_id)
+    created_at = now_iso()
+    cur = db.execute(
+        "INSERT INTO task_comments(workspace_id,task_id,author_id,content,created_at) "
+        "VALUES(?,?,?,?,?)",
+        (workspace_id, task_id, g.user["id"], content, created_at),
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO task_followers(workspace_id,task_id,user_id,created_at) "
+        "VALUES(?,?,?,?)", (workspace_id, task_id, g.user["id"], created_at),
+    )
+    mentioned = mentioned_user_ids(db, workspace_id, content) - {g.user["id"]}
+    audience = task_audience_user_ids(
+        db, workspace_id, task_id, task["owner"]
+    ) - mentioned
+    actor_name = g.user["display_name"]
+    add_notifications(
+        db, workspace_id, mentioned, "mention",
+        f"{actor_name} 在事务「{task['name']}」中提到了你",
+        task_id, g.user["id"],
+    )
+    add_notifications(
+        db, workspace_id, audience, "comment",
+        f"{actor_name} 评论了事务「{task['name']}」",
+        task_id, g.user["id"],
+    )
+    db.commit()
+    return jsonify({"id": cur.lastrowid, "created_at": created_at}), 201
 
 
 @app.route("/api/task-images/<int:image_id>")
@@ -2386,6 +2833,9 @@ def import_data():
             ),
         )
         imported_task_ids.append(cur.lastrowid)
+        add_task_activity(
+            db, workspace_id, cur.lastrowid, "imported", "通过 Excel 导入了事务"
+        )
     db.commit()
     return jsonify({
         "ok": True,
@@ -2784,6 +3234,18 @@ def create_task():
     replace_task_attachments(
         db, workspace_id, cur.lastrowid, attachment_changes
     )
+    db.execute(
+        "INSERT OR IGNORE INTO task_followers(workspace_id,task_id,user_id,created_at) "
+        "VALUES(?,?,?,?)", (workspace_id, cur.lastrowid, g.user["id"], now_iso()),
+    )
+    add_task_activity(
+        db, workspace_id, cur.lastrowid, "created", "创建了事务"
+    )
+    add_notifications(
+        db, workspace_id, owner_user_ids(db, workspace_id, owner), "assigned",
+        f"{g.user['display_name']} 将事务「{name}」指派给你",
+        cur.lastrowid, g.user["id"],
+    )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
 
@@ -2844,6 +3306,13 @@ def update_task(tid):
         )
 
     fields, vals = [], []
+    changed_labels = []
+    field_labels = {
+        "line_id": "所属线", "name": "事务名", "content": "事务内容",
+        "goal": "闭环目标", "owner": "责任人", "priority": "优先级",
+        "next_action": "下一步动作", "risk_reason": "风险原因",
+        "status": "进展状态", "start_date": "起始日期", "end_date": "结束日期",
+    }
     for k in ("line_id", "name", "content", "goal", "owner", "priority",
               "next_action", "risk_reason", "status", "start_date", "end_date"):
         if k not in d:
@@ -2881,6 +3350,8 @@ def update_task(tid):
             if d[k] != row["status"]:   # 状态变化 -> 重新计时
                 fields.append("status_since=?")
                 vals.append(date.today().isoformat())
+        if d[k] != row[k]:
+            changed_labels.append(field_labels[k])
         fields.append(f"{k}=?")
         vals.append(d[k])
     final_status = d.get("status", row["status"])
@@ -2890,6 +3361,20 @@ def update_task(tid):
     if final_status == "已闭环":
         ensure_dependencies_closed(db, workspace_id, final_prerequisite_ids)
 
+    old_prerequisite_ids = current_dependency_ids(db, workspace_id, tid)
+    dependencies_changed = prerequisite_ids is not None and set(
+        prerequisite_ids
+    ) != set(old_prerequisite_ids)
+    was_blocked = False
+    if dependencies_changed:
+        was_blocked = db.execute(
+            "SELECT 1 FROM task_dependencies edge "
+            "JOIN tasks prerequisite ON prerequisite.id=edge.prerequisite_task_id "
+            "WHERE edge.workspace_id=? AND edge.dependent_task_id=? "
+            "AND prerequisite.deleted=0 "
+            "AND prerequisite.status NOT IN ('已闭环','已取消') LIMIT 1",
+            (workspace_id, tid),
+        ).fetchone() is not None
     if (fields or prerequisite_ids is not None or image_changes is not None or
             attachment_changes is not None):
         on_edit(db)
@@ -2909,6 +3394,52 @@ def update_task(tid):
             replace_task_attachments(
                 db, workspace_id, tid, attachment_changes
             )
+        if dependencies_changed:
+            changed_labels.append("前置依赖")
+            if was_blocked:
+                notify_task_if_unblocked(
+                    db, workspace_id, tid, g.user["id"],
+                    "前置依赖调整后，事务已解除阻塞，可以继续推进",
+                )
+        if changed_labels:
+            if d.get("status", row["status"]) != row["status"]:
+                summary = (
+                    f"将进展状态从「{row['status']}」改为"
+                    f"「{d['status']}」"
+                )
+                other_labels = [label for label in changed_labels if label != "进展状态"]
+                if other_labels:
+                    summary += f"，并更新了{'、'.join(other_labels)}"
+            else:
+                summary = f"更新了{'、'.join(changed_labels)}"
+            add_task_activity(
+                db, workspace_id, tid, "updated", summary,
+                {"fields": changed_labels},
+            )
+        new_owner = d.get("owner", row["owner"])
+        if new_owner != row["owner"]:
+            add_notifications(
+                db, workspace_id, owner_user_ids(db, workspace_id, new_owner),
+                "assigned",
+                f"{g.user['display_name']} 将事务「{d.get('name', row['name'])}」指派给你",
+                tid, g.user["id"],
+            )
+        new_status = d.get("status", row["status"])
+        if new_status != row["status"]:
+            add_notifications(
+                db, workspace_id,
+                task_audience_user_ids(db, workspace_id, tid, new_owner),
+                "status_changed",
+                f"{g.user['display_name']} 将事务「{d.get('name', row['name'])}」"
+                f"从「{row['status']}」改为「{new_status}」",
+                tid, g.user["id"],
+            )
+            if row["status"] not in {"已闭环", "已取消"} and \
+                    new_status in {"已闭环", "已取消"}:
+                notify_dependents_unblocked(
+                    db, workspace_id, tid, d.get("name", row["name"]),
+                    g.user["id"],
+                )
         db.commit()
     return jsonify({"ok": True})
 
@@ -2938,6 +3469,19 @@ def task_dependency(tid):
             "AND dependent_task_id=? AND prerequisite_task_id=?",
             (workspace_id, tid, prerequisite_task_id),
         )
+        prerequisite = db.execute(
+            "SELECT name FROM tasks WHERE id=? AND workspace_id=?",
+            (prerequisite_task_id, workspace_id),
+        ).fetchone()
+        prerequisite_name = prerequisite["name"] if prerequisite else "前置事务"
+        add_task_activity(
+            db, workspace_id, tid, "dependency_removed",
+            f"移除了前置依赖「{prerequisite_name}」",
+        )
+        notify_task_if_unblocked(
+            db, workspace_id, tid, g.user["id"],
+            f"前置依赖「{prerequisite_name}」已解除，事务可以继续推进",
+        )
         db.commit()
         return jsonify({"ok": True})
 
@@ -2953,6 +3497,14 @@ def task_dependency(tid):
         "INSERT INTO task_dependencies("
         "workspace_id,dependent_task_id,prerequisite_task_id) VALUES(?,?,?)",
         (workspace_id, tid, prerequisite_task_id),
+    )
+    prerequisite = db.execute(
+        "SELECT name FROM tasks WHERE id=? AND workspace_id=?",
+        (prerequisite_task_id, workspace_id),
+    ).fetchone()
+    add_task_activity(
+        db, workspace_id, tid, "dependency_added",
+        f"添加了前置依赖「{prerequisite['name']}」",
     )
     db.commit()
     return jsonify({"ok": True, "created": True}), 201
@@ -3042,6 +3594,9 @@ def import_tasks():
             ),
         )
         imported_ids.append(cur.lastrowid)
+        add_task_activity(
+            db, workspace_id, cur.lastrowid, "imported", "通过 Excel 导入了事务"
+        )
     db.commit()
     return jsonify({
         "ok": True,
@@ -3114,7 +3669,8 @@ def bulk_tasks():
     workspace_id = current_workspace_id()
     marks = ",".join("?" * len(ids))
     existing = db.execute(
-        f"SELECT id FROM tasks WHERE workspace_id=? AND deleted=0 "
+        f"SELECT id,name,owner,status,line_id,priority FROM tasks "
+        f"WHERE workspace_id=? AND deleted=0 "
         f"AND id IN ({marks})", [workspace_id] + ids
     ).fetchall()
     if len(existing) != len(set(ids)):
@@ -3188,6 +3744,44 @@ def bulk_tasks():
         f"AND id IN ({marks})",
         vals + [workspace_id] + ids,
     )
+    bulk_labels = {
+        "line_id": "所属线", "owner": "责任人",
+        "priority": "优先级", "status": "进展状态",
+    }
+    for task in existing:
+        changed = [
+            bulk_labels[key] for key, value in patch.items()
+            if task[key] != value
+        ]
+        if not changed:
+            continue
+        add_task_activity(
+            db, workspace_id, task["id"], "bulk_updated",
+            f"批量更新了{'、'.join(changed)}", {"fields": changed},
+        )
+        new_owner = patch.get("owner", task["owner"])
+        if new_owner != task["owner"]:
+            add_notifications(
+                db, workspace_id, owner_user_ids(db, workspace_id, new_owner),
+                "assigned",
+                f"{g.user['display_name']} 将事务「{task['name']}」指派给你",
+                task["id"], g.user["id"],
+            )
+        new_status = patch.get("status", task["status"])
+        if new_status != task["status"]:
+            add_notifications(
+                db, workspace_id,
+                task_audience_user_ids(db, workspace_id, task["id"], new_owner),
+                "status_changed",
+                f"{g.user['display_name']} 将事务「{task['name']}」"
+                f"从「{task['status']}」改为「{new_status}」",
+                task["id"], g.user["id"],
+            )
+            if task["status"] not in {"已闭环", "已取消"} and \
+                    new_status in {"已闭环", "已取消"}:
+                notify_dependents_unblocked(
+                    db, workspace_id, task["id"], task["name"], g.user["id"]
+                )
     db.commit()
     return jsonify({"ok": True, "count": len(ids)})
 

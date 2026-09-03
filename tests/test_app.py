@@ -474,6 +474,8 @@ class AnyLineHttpTests(unittest.TestCase):
                 "name": "不可新增", "fork_date": self.today.isoformat(),
             }),
             ("PATCH", f"/api/tasks/{task_id}", {"name": "不可修改"}),
+            ("POST", f"/api/tasks/{task_id}/comments", {"content": "不可评论"}),
+            ("POST", f"/api/tasks/{task_id}/follow", None),
             ("PUT", "/api/statuses", {"statuses": ["不可修改"]}),
             ("PATCH", f"/api/workspaces/{default_workspace}", {"name": "不可改名"}),
             ("POST", f"/api/workspaces/{default_workspace}/members", {
@@ -1623,6 +1625,108 @@ class AnyLineHttpTests(unittest.TestCase):
         status, _ = self.request("POST", "/api/trash/restore", {"batch": task_batch})
         self.assertEqual(status, 200)
 
+    def test_collaboration_comments_mentions_followers_and_notifications(self):
+        self.add_member("alice", "张三")
+        line_id = self.create_line()
+        task_id = self.create_task(line_id, owner="张三")
+
+        status, data = self.request(
+            "POST", f"/api/tasks/{task_id}/comments",
+            {"content": "@张三 请确认今天的处理方案"},
+        )
+        self.assertEqual(status, 201, data)
+        status, collaboration = self.request(
+            "GET", f"/api/tasks/{task_id}/collaboration"
+        )
+        self.assertEqual(status, 200, collaboration)
+        self.assertTrue(collaboration["following"])
+        self.assertEqual(collaboration["followers"][0]["display_name"], "系统管理员")
+        self.assertEqual(collaboration["timeline"][0]["kind"], "comment")
+        self.assertIn("请确认", collaboration["timeline"][0]["detail"])
+        self.assertTrue(any(
+            item["summary"] == "创建了事务"
+            for item in collaboration["timeline"] if item["kind"] == "activity"
+        ))
+
+        status, data = self.login("alice", "member123")
+        self.assertEqual(status, 200, data)
+        status, notices = self.request("GET", "/api/notifications")
+        self.assertEqual(status, 200, notices)
+        kinds = {item["kind"] for item in notices["notifications"]}
+        self.assertIn("assigned", kinds)
+        self.assertIn("mention", kinds)
+        mention = next(
+            item for item in notices["notifications"] if item["kind"] == "mention"
+        )
+        self.assertEqual(mention["task_id"], task_id)
+        self.assertEqual(mention["task_available"], 1)
+
+        status, data = self.request("POST", f"/api/tasks/{task_id}/follow")
+        self.assertEqual(status, 200, data)
+        self.assertTrue(data["following"])
+        status, data = self.request(
+            "POST", f"/api/notifications/{mention['id']}/read"
+        )
+        self.assertEqual(status, 200, data)
+        status, data = self.request("POST", "/api/notifications/read-all")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["unread_count"], 0)
+
+        status, data = self.request(
+            "POST", f"/api/tasks/{task_id}/comments", {"content": "方案已经确认"}
+        )
+        self.assertEqual(status, 201, data)
+        self.login("admin", "admin123")
+        _, notices = self.request("GET", "/api/notifications")
+        self.assertTrue(any(
+            item["kind"] == "comment" and item["task_id"] == task_id
+            for item in notices["notifications"]
+        ))
+
+    def test_status_activity_and_dependency_unblocked_notification(self):
+        self.add_member("alice", "张三")
+        line_id = self.create_line()
+        prerequisite_id = self.create_task(line_id, "前置事务")
+        dependent_id = self.create_task(
+            line_id, "后续事务", owner="张三",
+            prerequisite_ids=[prerequisite_id],
+        )
+        self.login("alice", "member123")
+        self.request("POST", "/api/notifications/read-all")
+        self.login("admin", "admin123")
+
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{prerequisite_id}", {"status": "已闭环"}
+        )
+        self.assertEqual(status, 200, data)
+        _, collaboration = self.request(
+            "GET", f"/api/tasks/{prerequisite_id}/collaboration"
+        )
+        self.assertTrue(any(
+            "已闭环" in item["summary"]
+            for item in collaboration["timeline"] if item["kind"] == "activity"
+        ))
+
+        self.login("alice", "member123")
+        _, notices = self.request("GET", "/api/notifications")
+        unblocked = [
+            item for item in notices["notifications"]
+            if item["kind"] == "dependency_unblocked"
+        ]
+        self.assertEqual(len(unblocked), 1)
+        self.assertEqual(unblocked[0]["task_id"], dependent_id)
+        self.assertIn("可以继续推进", unblocked[0]["message"])
+
+    def test_collaboration_ui_entries_are_present(self):
+        _, body = self.request("GET", "/")
+        self.assertIn(b'id="btn-notifications"', body)
+        self.assertIn(b'id="notification-count"', body)
+        _, source = self.request("GET", "/static/app.js")
+        source = source.decode("utf-8")
+        self.assertIn("function openNotificationsModal()", source)
+        self.assertIn("function createTaskCollaborationPanel(body, task)", source)
+        self.assertIn("插入 @成员", source)
+
 
 class DatabaseMigrationTests(unittest.TestCase):
     def test_legacy_schema_is_migrated(self):
@@ -1689,6 +1793,10 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertIn("task_images", table_names)
             self.assertIn("task_attachments", table_names)
             self.assertIn("dashboard_snapshots", table_names)
+            self.assertIn("task_followers", table_names)
+            self.assertIn("task_comments", table_names)
+            self.assertIn("task_activities", table_names)
+            self.assertIn("notifications", table_names)
             self.assertEqual(task_workspace_id, workspace_id)
             self.assertEqual(admin_count, 1)
             self.assertEqual(json.loads(migrated_owners), ["历史责任人"])
