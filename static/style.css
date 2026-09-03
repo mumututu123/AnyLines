@@ -30,7 +30,10 @@ body.authenticated #login-view { display: none; }
 }
 #login-form button { width: 100%; padding: 9px; border-radius: 6px; cursor: pointer; }
 #login-error { min-height: 20px; margin-bottom: 8px; color: #cf222e; font-size: 12px; }
-#account-bar { position: relative; flex: 0 0 auto; margin-left: auto; }
+#account-bar {
+  position: fixed; top: 8px; right: 16px; z-index: 60;
+  flex: 0 0 auto;
+}
 #account-trigger {
   display: grid; place-items: center; width: 34px; height: 34px;
   padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer;
@@ -169,7 +172,7 @@ body.authenticated #login-view { display: none; }
 
 /* ---------------- top bar ---------------- */
 #topbar {
-  display: flex; align-items: center; gap: 16px; padding: 8px 66px 8px 16px;
+  display: flex; align-items: center; gap: 16px; padding: 8px 108px 8px 16px;
   background: #fff; border-bottom: 1px solid #d8dee4; flex-wrap: wrap;
 }
 #brand { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
@@ -220,19 +223,23 @@ body.authenticated #login-view { display: none; }
 }
 
 #theme-toggle {
-  position: fixed; top: 8px; right: 16px; z-index: 50;
+  position: fixed; top: 8px; right: 58px; z-index: 50;
   display: grid; place-items: center; width: 34px; height: 34px;
   padding: 0; border: 1px solid #d0d7de; border-radius: 50%;
   background: #fff; color: #57606a; cursor: pointer;
   transition: color .15s ease, background-color .15s ease, border-color .15s ease,
     transform .15s ease;
 }
-#theme-toggle:hover { border-color: #0969da; background: #eef6ff; color: #0969da; transform: rotate(8deg); }
+#theme-toggle:hover { border-color: #0969da; background: #eef6ff; color: #0969da; transform: translateY(-1px); }
 #theme-toggle:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
+body:not(.authenticated) #theme-toggle { right: 16px; }
 .theme-icon {
-  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
+  width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.9;
   stroke-linecap: round; stroke-linejoin: round;
 }
+.theme-icon-moon { fill: currentColor; stroke: none; opacity: .62; }
+#theme-toggle:hover .theme-icon-moon { opacity: .82; }
+.theme-icon-sun circle { fill: currentColor; stroke: none; }
 .theme-icon-sun { display: none; }
 html[data-theme="dark"] .theme-icon-moon { display: none; }
 html[data-theme="dark"] .theme-icon-sun { display: block; }
