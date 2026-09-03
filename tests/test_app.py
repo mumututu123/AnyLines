@@ -1070,6 +1070,14 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(snapshot["risk"], 0)
         self.assertEqual(snapshot["blocked"], 0)
 
+    def test_dashboard_risk_bubbles_use_stable_click_targets(self):
+        status, script = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = script.decode("utf-8")
+        self.assertIn('class: "dashboard-risk-hit-area"', source)
+        self.assertIn("group.onclick = open", source)
+        self.assertNotIn("group.onpointerenter", source)
+
     def test_general_undo_for_canvas_edits(self):
         main_id = self.create_line("初始主线")
         status, data = self.request("POST", "/api/undo")

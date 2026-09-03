@@ -588,31 +588,76 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .dashboard-heat-cell:not(:disabled):hover, .dashboard-heat-cell:not(:disabled):focus-visible {
   outline: 2px solid #0969da; outline-offset: 1px;
 }
-.dashboard-risk-matrix { min-height: 245px; overflow-x: auto; }
-.dashboard-risk-grid {
-  display: grid; grid-template-columns: 54px repeat(4, minmax(82px, 1fr));
-  min-width: 430px; align-items: stretch;
+.dashboard-risk-matrix { position: relative; min-height: 245px; overflow: hidden; }
+.dashboard-risk-matrix svg { display: block; width: 100%; height: auto; min-height: 245px; }
+.dashboard-quadrant { stroke: none; }
+.dashboard-quadrant-plan { fill: #f1f8ff; }
+.dashboard-quadrant-urgent { fill: #ffebe9; }
+.dashboard-quadrant-watch { fill: #f6f8fa; }
+.dashboard-quadrant-advance { fill: #fff8c5; }
+.dashboard-quadrant-axis { stroke: #8c959f; stroke-width: 1; stroke-dasharray: 5 4; }
+.dashboard-quadrant-label { fill: #6e7781; font-size: 10px; font-weight: 650; }
+.dashboard-risk-point {
+  fill-opacity: .72; stroke: #fff; stroke-width: 2; pointer-events: none;
+  transition: fill-opacity .15s ease, stroke-width .15s ease;
 }
-.dashboard-risk-header, .dashboard-risk-row {
-  display: grid; place-items: center; min-height: 34px; padding: 4px; color: #57606a;
-  font-size: 10px; text-align: center;
+.dashboard-risk-point.alert { stroke: #cf222e; stroke-width: 3; }
+.dashboard-risk-bubble-group { outline: none; cursor: pointer; }
+.dashboard-risk-hit-area { fill: transparent; pointer-events: all; }
+.dashboard-risk-bubble-group:hover .dashboard-risk-point {
+  fill-opacity: .95; stroke-width: 4;
 }
-.dashboard-risk-cell {
-  display: flex; min-height: 50px; align-items: center; justify-content: center; gap: 5px;
-  padding: 3px; border: 1px solid #eaeef2; border-right: 0; border-bottom: 0;
-  background: #fff; font: inherit; cursor: pointer;
+.dashboard-risk-bubble-group:focus .dashboard-risk-point {
+  fill-opacity: 1; stroke: #0969da; stroke-width: 4;
 }
-.dashboard-risk-cell:nth-last-child(-n+4) { border-bottom: 1px solid #eaeef2; }
-.dashboard-risk-cell:disabled { cursor: default; }
-.dashboard-risk-cell:not(:disabled):hover, .dashboard-risk-cell:not(:disabled):focus-visible {
-  outline: 2px solid #0969da; outline-offset: -2px; background: #f6f8fa;
+.dashboard-risk-anchor { stroke: #8c959f; stroke-width: 1; stroke-dasharray: 3 3; }
+.dashboard-risk-anchor-point { fill: #8c959f; }
+.dashboard-risk-cluster-count {
+  fill: #fff; font-size: 11px; font-weight: 750; pointer-events: none;
 }
-.dashboard-risk-bubble {
-  display: grid; place-items: center; width: var(--bubble-size); height: var(--bubble-size);
-  flex: 0 0 auto; border-radius: 50%; background: rgba(207,34,46,var(--bubble-opacity));
-  color: #82071e; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+.dashboard-risk-legend {
+  display: flex; justify-content: center; gap: 14px; flex-wrap: wrap;
+  margin-top: 6px; color: #6e7781; font-size: 10px;
 }
-.dashboard-risk-cell small { color: #8c959f; font-size: 9px; white-space: nowrap; }
+.dashboard-risk-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.dashboard-risk-legend i {
+  display: inline-block; width: 11px; height: 11px; border: 2px solid #cf222e;
+  border-radius: 50%; background: rgba(9,105,218,.35);
+}
+.dashboard-risk-legend b {
+  display: inline-grid; place-items: center; width: 17px; height: 17px;
+  border-radius: 50%; background: #8250df; color: #fff; font-size: 9px;
+}
+.dashboard-risk-lens {
+  position: absolute; z-index: 8; width: min(310px, calc(100% - 16px));
+  max-height: 230px; overflow: hidden; border: 1px solid #b6d7f2; border-radius: 8px;
+  background: #fff; box-shadow: 0 12px 30px rgba(31,35,40,.22);
+}
+.dashboard-risk-lens-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 8px 10px; border-bottom: 1px solid #d8dee4; background: #f1f8ff;
+}
+.dashboard-risk-lens-heading strong { font-size: 12px; }
+.dashboard-risk-lens-heading button {
+  display: grid; place-items: center; width: 24px; height: 24px; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: #57606a;
+  font-size: 17px; cursor: pointer;
+}
+.dashboard-risk-lens-heading button:hover { background: #ddf4ff; }
+.dashboard-risk-lens-list { max-height: 190px; overflow-y: auto; }
+.dashboard-risk-lens-list > button {
+  display: flex; width: 100%; flex-direction: column; align-items: flex-start; gap: 3px;
+  padding: 8px 10px; border: 0; border-bottom: 1px solid #eaeef2;
+  background: #fff; color: #24292f; font: inherit; text-align: left; cursor: pointer;
+}
+.dashboard-risk-lens-list > button:last-child { border-bottom: 0; }
+.dashboard-risk-lens-list > button:hover, .dashboard-risk-lens-list > button:focus-visible {
+  outline: none; background: #f6f8fa;
+}
+.dashboard-risk-lens-list strong {
+  width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap;
+}
+.dashboard-risk-lens-list span { color: #8c959f; font-size: 10px; }
 .dashboard-exception-heading > div { display: flex; align-items: baseline; gap: 10px; }
 .dashboard-exception-heading > div > span { color: #8c959f; font-size: 12px; }
 .dashboard-exception-heading select {
@@ -1592,7 +1637,8 @@ html[data-theme="dark"] :is(
   #account-menu, #modal, #cell-preview, .dashboard-kpi, .dashboard-range button,
   .dashboard-action, .dashboard-locate-button, .dashboard-risk-cell,
   .dashboard-report-group, .dashboard-report-item, .dashboard-variance-metric,
-  .dashboard-risk-overview .dashboard-report-panel, .cluster-focus-card,
+  .dashboard-risk-overview .dashboard-report-panel, .dashboard-risk-lens,
+  .dashboard-risk-lens-list > button, .cluster-focus-card,
   .my-todo-stat, .task-import-drop-zone, .task-image-item, .task-attachment-item,
   .dependency-picker, #modal-body .dependency-option, .notification-read-all,
   #modal-body .notification-row, .task-collaboration, .mention-suggestions,
@@ -1626,6 +1672,8 @@ html[data-theme="dark"] :is(
   .dashboard-action, .dashboard-report-group, .dashboard-report-group-heading,
   .dashboard-report-item, .dashboard-variance-metric,
   .dashboard-risk-overview .dashboard-report-panel, .dashboard-supporting,
+  .dashboard-risk-lens, .dashboard-risk-lens-heading,
+  .dashboard-risk-lens-list > button,
   .dashboard-blocker-row, .dashboard-locate-button, .dashboard-risk-cell,
   .dashboard-exception-table-wrap, .dashboard-exception-table th,
   .dashboard-exception-table td, #canvas-opts, #canvas-legend, #canvas-shortcuts,
@@ -1654,7 +1702,9 @@ html[data-theme="dark"] :is(
   .dashboard-action:hover, .dashboard-report-summary, .dashboard-report-group-heading,
   .dashboard-report-item:hover, .dashboard-report-item:focus-visible,
   .dashboard-variance-metric:hover, .dashboard-variance-metric:focus-visible,
-  .dashboard-variance-note,
+  .dashboard-variance-note, .dashboard-risk-lens-heading,
+  .dashboard-risk-lens-list > button:hover,
+  .dashboard-risk-lens-list > button:focus-visible,
   .dashboard-kpi:hover, .dashboard-kpi:focus-visible, .dashboard-heat-cell.level-0,
   .dashboard-risk-cell:not(:disabled):hover, .dashboard-risk-cell:not(:disabled):focus-visible,
   .dashboard-exception-table th, .dashboard-exception-table tbody tr:hover,
@@ -1710,7 +1760,8 @@ html[data-theme="dark"] :is(
   .dashboard-blocker-impact span, .dashboard-heatmap-days span,
   .dashboard-risk-cell small, .dashboard-exception-heading > div > span,
   .dashboard-report-item small, .dashboard-panel-heading span,
-  .dashboard-variance-metric small, .dashboard-empty, .opt-hint, .dependency-focus-empty,
+  .dashboard-variance-metric small, .dashboard-risk-lens-list span,
+  .dashboard-empty, .opt-hint, .dependency-focus-empty,
   .shortcut-key-group span, .cluster-focus-card-dates,
   .cluster-focus-footer span, .muted-text, .my-todo-list-heading span,
   .import-error-more, .task-attachment-meta, .dependency-empty,
@@ -1805,6 +1856,14 @@ html[data-theme="dark"] #sel-info {
   color: var(--dark-text);
 }
 html[data-theme="dark"] :is(.month-line, .dashboard-gridline) { stroke: #21262d; }
+html[data-theme="dark"] .dashboard-quadrant-plan { fill: #13233a; }
+html[data-theme="dark"] .dashboard-quadrant-urgent { fill: #3d181c; }
+html[data-theme="dark"] .dashboard-quadrant-watch { fill: #1c2128; }
+html[data-theme="dark"] .dashboard-quadrant-advance { fill: #362c10; }
+html[data-theme="dark"] .dashboard-quadrant-axis { stroke: #484f58; }
+html[data-theme="dark"] .dashboard-quadrant-label { fill: var(--dark-muted); }
+html[data-theme="dark"] .dashboard-risk-point { stroke: var(--dark-surface); }
+html[data-theme="dark"] .dashboard-risk-point.alert { stroke: #ff7b72; }
 html[data-theme="dark"] .year-line { stroke: #30363d; }
 html[data-theme="dark"] .month-label { fill: #484f58; }
 html[data-theme="dark"] .year-label { fill: #7d8590; }

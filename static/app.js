@@ -1526,63 +1526,321 @@ function renderDashboardDueHeatmap(tasks) {
   container.appendChild(note);
 }
 
+function closeDashboardRiskLens(restoreFocus = false) {
+  const lens = document.querySelector(".dashboard-risk-lens");
+  const returnFocus = lens?._returnFocus;
+  lens?.remove();
+  if (restoreFocus && returnFocus?.isConnected) returnFocus.focus();
+}
+
+function openDashboardRiskLens(container, svg, node, viewWidth, viewHeight, trigger) {
+  closeDashboardRiskLens();
+  const lens = document.createElement("div");
+  lens._returnFocus = trigger;
+  lens.className = "dashboard-risk-lens";
+  lens.setAttribute("role", "dialog");
+  lens.setAttribute("aria-label", `重叠事务 ${node.tasks.length} 项`);
+  const heading = document.createElement("div");
+  heading.className = "dashboard-risk-lens-heading";
+  const title = document.createElement("strong");
+  title.textContent = `重叠事务（${node.tasks.length}）`;
+  const close = document.createElement("button");
+  close.type = "button";
+  close.setAttribute("aria-label", "关闭重叠事务列表");
+  close.textContent = "×";
+  close.onclick = () => closeDashboardRiskLens(true);
+  heading.append(title, close);
+  const list = document.createElement("div");
+  list.className = "dashboard-risk-lens-list";
+  for (const task of [...node.tasks].sort((a, b) =>
+    priorityRank(b.priority) - priorityRank(a.priority) ||
+    (a.end_date || "9999-12-31").localeCompare(b.end_date || "9999-12-31")
+  )) {
+    const button = document.createElement("button");
+    button.type = "button";
+    const name = document.createElement("strong");
+    name.textContent = task.name;
+    const meta = document.createElement("span");
+    meta.textContent = `${task.priority}优先级 · ${task.owner || "无主"} · ${task.end_date || "无结束日期"}`;
+    button.append(name, meta);
+    button.onclick = () => {
+      closeDashboardRiskLens();
+      openTaskModal(task);
+    };
+    list.appendChild(button);
+  }
+  lens.append(heading, list);
+  container.appendChild(lens);
+  requestAnimationFrame(() => {
+    const svgRect = svg.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const anchorX = svgRect.left - containerRect.left + node.x / viewWidth * svgRect.width;
+    const anchorY = svgRect.top - containerRect.top + node.y / viewHeight * svgRect.height;
+    const maxLeft = Math.max(8, container.clientWidth - lens.offsetWidth - 8);
+    const maxTop = Math.max(8, svgRect.bottom - containerRect.top - lens.offsetHeight - 8);
+    lens.style.left = `${Math.max(8, Math.min(maxLeft, anchorX + 12))}px`;
+    lens.style.top = `${Math.max(8, Math.min(maxTop, anchorY + 12))}px`;
+    close.focus();
+  });
+}
+
 function renderDashboardRiskMatrix(tasks, dependency) {
   const container = $("#dashboard-risk-matrix");
   container.innerHTML = "";
-  const priorities = [...state.priorityEnum].reverse();
-  const columns = [
-    ["已超期", (task) => taskHealth(task).overdue],
-    ["7 天内", (task) => task.end_date && daysBetween(state.today, task.end_date) >= 0 && daysBetween(state.today, task.end_date) <= 7],
-    ["8–30 天", (task) => task.end_date && daysBetween(state.today, task.end_date) >= 8 && daysBetween(state.today, task.end_date) <= 30],
-    ["30 天后 / 无日期", (task) => !task.end_date || daysBetween(state.today, task.end_date) > 30],
-  ];
   const active = tasks.filter((task) => !isDone(task));
-  const grid = document.createElement("div");
-  grid.className = "dashboard-risk-grid";
-  grid.style.setProperty("--risk-columns", columns.length + 1);
-  grid.appendChild(document.createElement("span"));
-  for (const [title] of columns) {
-    const header = document.createElement("strong");
-    header.className = "dashboard-risk-header";
-    header.textContent = title;
-    grid.appendChild(header);
+  if (!active.length) {
+    dashboardEmpty(container, "当前范围没有未闭环事务");
+    return;
   }
-  let maxWeight = 1;
-  const cells = [];
-  for (const priority of priorities) {
-    const rowHeader = document.createElement("strong");
-    rowHeader.className = `dashboard-risk-row priority-${priority}`;
-    rowHeader.textContent = priority;
-    grid.appendChild(rowHeader);
-    for (const [columnTitle, matches] of columns) {
-      const cellTasks = active.filter((task) => task.priority === priority && matches(task));
-      const impact = cellTasks.reduce((sum, task) => sum + (dependency.impacts.get(task.id) || 0), 0);
-      const weight = cellTasks.length + impact;
-      maxWeight = Math.max(maxWeight, weight);
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "dashboard-risk-cell";
-      button.disabled = !cellTasks.length;
-      button.dataset.weight = weight;
-      button.title = `${priority}优先级 · ${columnTitle} · ${cellTasks.length} 个事务 · 影响 ${impact} 个后续事务`;
-      const bubble = document.createElement("span");
-      bubble.className = "dashboard-risk-bubble";
-      bubble.textContent = cellTasks.length || "";
-      const impactText = document.createElement("small");
-      impactText.textContent = impact ? `影响 ${impact}` : "";
-      button.append(bubble, impactText);
-      button.onclick = () => openTaskListModal(`${priority}优先级 · ${columnTitle}`, cellTasks);
-      grid.appendChild(button);
-      cells.push(button);
+
+  const width = 720, height = 300;
+  const margin = { left: 55, right: 22, top: 23, bottom: 42 };
+  const plotW = width - margin.left - margin.right;
+  const plotH = height - margin.top - margin.bottom;
+  const svg = dashboardSvg("svg", {
+    viewBox: `0 0 ${width} ${height}`, role: "img",
+    "aria-label": "交付风险二维象限气泡图，横轴为到期紧迫度，纵轴为优先级",
+  }, container);
+
+  const quadrants = [
+    [margin.left, margin.top, "重点计划", "plan"],
+    [margin.left + plotW / 2, margin.top, "立即处置", "urgent"],
+    [margin.left, margin.top + plotH / 2, "持续观察", "watch"],
+    [margin.left + plotW / 2, margin.top + plotH / 2, "尽快推进", "advance"],
+  ];
+  quadrants.forEach(([x, y, label, tone], index) => {
+    dashboardSvg("rect", {
+      x, y, width: plotW / 2, height: plotH / 2,
+      class: `dashboard-quadrant dashboard-quadrant-${tone}`,
+    }, svg);
+    const text = dashboardSvg("text", {
+      x: x + (index % 2 ? plotW / 2 - 9 : 9), y: y + 17,
+      class: "dashboard-quadrant-label",
+      "text-anchor": index % 2 ? "end" : "start",
+    }, svg);
+    text.textContent = label;
+  });
+  dashboardSvg("line", {
+    x1: margin.left + plotW / 2, x2: margin.left + plotW / 2,
+    y1: margin.top, y2: margin.top + plotH, class: "dashboard-quadrant-axis",
+  }, svg);
+  dashboardSvg("line", {
+    x1: margin.left, x2: margin.left + plotW,
+    y1: margin.top + plotH / 2, y2: margin.top + plotH / 2,
+    class: "dashboard-quadrant-axis",
+  }, svg);
+
+  const urgencyPosition = (task) => {
+    if (!task.end_date) return .06;
+    const days = daysBetween(state.today, task.end_date);
+    if (days < 0) return .82 + Math.min(30, Math.abs(days)) / 30 * .14;
+    if (days <= 7) return .62 + (7 - days) / 7 * .17;
+    if (days <= 30) return .32 + (30 - days) / 22 * .25;
+    return Math.max(.08, .28 - Math.min(90, days - 30) / 90 * .18);
+  };
+  const priorityPosition = { "低": .12, "中": .38, "高": .68, "紧急": .9 };
+  const bubbleData = active.map((task) => {
+    const impact = dependency.impacts.get(task.id) || 0;
+    const health = taskHealth(task);
+    const urgency = urgencyPosition(task);
+    const priority = priorityPosition[task.priority] || .38;
+    const anchorX = margin.left + urgency * plotW;
+    const anchorY = margin.top + (1 - priority) * plotH;
+    return {
+      task, impact, health,
+      radius: Math.min(22, 8 + Math.sqrt(impact + 1) * 3.5),
+      urgency, priority, anchorX, anchorY,
+    };
+  });
+
+  const parents = bubbleData.map((_, index) => index);
+  const find = (index) => {
+    while (parents[index] !== index) {
+      parents[index] = parents[parents[index]];
+      index = parents[index];
+    }
+    return index;
+  };
+  const union = (left, right) => {
+    const leftRoot = find(left), rightRoot = find(right);
+    if (leftRoot !== rightRoot) parents[rightRoot] = leftRoot;
+  };
+  for (let left = 0; left < bubbleData.length; left++) {
+    for (let right = left + 1; right < bubbleData.length; right++) {
+      const a = bubbleData[left], b = bubbleData[right];
+      if (Math.hypot(a.anchorX - b.anchorX, a.anchorY - b.anchorY) <
+          a.radius + b.radius + 5) union(left, right);
     }
   }
-  for (const cell of cells) {
-    const ratio = Number(cell.dataset.weight) / maxWeight;
-    cell.style.setProperty("--bubble-size", `${26 + Math.round(ratio * 28)}px`);
-    cell.style.setProperty("--bubble-opacity", String(.18 + ratio * .55));
+  const groups = new Map();
+  bubbleData.forEach((item, index) => {
+    const root = find(index);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(item);
+  });
+  const nodes = [];
+  for (const members of groups.values()) {
+    if (members.length >= 3) {
+      const totalImpact = members.reduce((sum, item) => sum + item.impact, 0);
+      const representative = [...members].sort((a, b) =>
+        Number(b.health.overdue || b.health.risk) - Number(a.health.overdue || a.health.risk) ||
+        priorityRank(b.task.priority) - priorityRank(a.task.priority)
+      )[0];
+      nodes.push({
+        tasks: members.map((item) => item.task),
+        impact: totalImpact,
+        health: {
+          overdue: members.some((item) => item.health.overdue),
+          risk: members.some((item) => item.health.risk),
+        },
+        color: statusColor(representative.task.status),
+        radius: Math.min(30, 13 + Math.sqrt(members.length + totalImpact) * 4),
+        anchorX: members.reduce((sum, item) => sum + item.anchorX, 0) / members.length,
+        anchorY: members.reduce((sum, item) => sum + item.anchorY, 0) / members.length,
+        priority: Math.max(...members.map((item) => item.priority)),
+      });
+    } else {
+      for (const item of members) {
+        nodes.push({
+          tasks: [item.task], impact: item.impact, health: item.health,
+          color: statusColor(item.task.status), radius: item.radius,
+          anchorX: item.anchorX, anchorY: item.anchorY, priority: item.priority,
+        });
+      }
+    }
   }
-  container.appendChild(grid);
-  if (!active.length) dashboardEmpty(container, "当前范围没有未闭环事务");
+
+  for (const node of nodes) {
+    node.x = node.anchorX;
+    node.y = node.anchorY;
+  }
+  const maxDisplacement = 24;
+  const constrainNode = (node) => {
+    let dx = node.x - node.anchorX, dy = node.y - node.anchorY;
+    const distance = Math.hypot(dx, dy);
+    if (distance > maxDisplacement) {
+      dx = dx / distance * maxDisplacement;
+      dy = dy / distance * maxDisplacement;
+      node.x = node.anchorX + dx;
+      node.y = node.anchorY + dy;
+    }
+    node.x = Math.max(margin.left + node.radius,
+      Math.min(margin.left + plotW - node.radius, node.x));
+    node.y = Math.max(margin.top + node.radius,
+      Math.min(margin.top + plotH - node.radius, node.y));
+  };
+  for (let iteration = 0; iteration < 48; iteration++) {
+    for (let left = 0; left < nodes.length; left++) {
+      for (let right = left + 1; right < nodes.length; right++) {
+        const a = nodes[left], b = nodes[right];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let distance = Math.hypot(dx, dy);
+        const minimum = a.radius + b.radius + 4;
+        if (distance >= minimum) continue;
+        if (!distance) {
+          const angle = ((a.tasks[0].id + b.tasks[0].id) % 12) / 12 * Math.PI * 2;
+          dx = Math.cos(angle);
+          dy = Math.sin(angle);
+          distance = 1;
+        }
+        const shift = (minimum - distance) / 2;
+        a.x -= dx / distance * shift;
+        a.y -= dy / distance * shift;
+        b.x += dx / distance * shift;
+        b.y += dy / distance * shift;
+      }
+    }
+    for (const node of nodes) {
+      node.x += (node.anchorX - node.x) * .04;
+      node.y += (node.anchorY - node.y) * .04;
+      constrainNode(node);
+    }
+  }
+
+  for (const node of nodes) {
+    if (Math.hypot(node.x - node.anchorX, node.y - node.anchorY) <= 8) continue;
+    dashboardSvg("line", {
+      x1: node.anchorX, y1: node.anchorY, x2: node.x, y2: node.y,
+      class: "dashboard-risk-anchor",
+    }, svg);
+    dashboardSvg("circle", {
+      cx: node.anchorX, cy: node.anchorY, r: 2.5, class: "dashboard-risk-anchor-point",
+    }, svg);
+  }
+
+  nodes.sort((a, b) => a.priority - b.priority ||
+    Number(a.health.overdue || a.health.risk) - Number(b.health.overdue || b.health.risk));
+  for (const node of nodes) {
+    const alert = node.health.overdue || node.health.risk ||
+      node.tasks.some((task) => dependency.blockedIds.has(task.id));
+    const ariaLabel = node.tasks.length > 1 ?
+      `重叠事务 ${node.tasks.length} 项，按回车展开` :
+      `${node.tasks[0].name}，${node.tasks[0].priority}优先级，${node.tasks[0].end_date || "无结束日期"}`;
+    const group = dashboardSvg("g", {
+      class: "dashboard-risk-bubble-group", tabindex: 0, role: "button",
+      "aria-label": ariaLabel,
+    }, svg);
+    dashboardSvg("circle", {
+      cx: node.x, cy: node.y, r: node.radius + 6,
+      class: "dashboard-risk-hit-area",
+    }, group);
+    const bubble = dashboardSvg("circle", {
+      cx: node.x, cy: node.y, r: node.radius, fill: node.color,
+      class: `dashboard-risk-point${alert ? " alert" : ""}`,
+    }, group);
+    const open = (event) => {
+      event?.stopPropagation();
+      if (node.tasks.length > 1) {
+        openDashboardRiskLens(container, svg, node, width, height, group);
+      }
+      else {
+        closeDashboardRiskLens();
+        openTaskModal(node.tasks[0]);
+      }
+    };
+    group.onclick = open;
+    group.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        open(event);
+      }
+    };
+    const title = dashboardSvg("title", {}, bubble);
+    title.textContent = node.tasks.length > 1 ?
+      `${node.tasks.length} 个重叠事务 · 点击展开` :
+      `${node.tasks[0].name} · ${node.tasks[0].priority}优先级 · ` +
+        `${node.tasks[0].end_date || "无结束日期"} · 影响 ${node.impact} 个后续事务`;
+    if (node.tasks.length > 1) {
+      const count = dashboardSvg("text", {
+        x: node.x, y: node.y + 4, class: "dashboard-risk-cluster-count",
+        "text-anchor": "middle", "aria-hidden": "true",
+      }, group);
+      count.textContent = node.tasks.length;
+    }
+  }
+
+  const labels = [
+    [margin.left, height - 12, "日期充裕 / 无日期", "start"],
+    [width - margin.right, height - 12, "临期 / 超期", "end"],
+    [16, margin.top + 5, "高优先级", "start"],
+    [16, margin.top + plotH, "低优先级", "start"],
+  ];
+  for (const [x, y, value, anchor] of labels) {
+    const label = dashboardSvg("text", {
+      x, y, class: "dashboard-axis-label", "text-anchor": anchor,
+    }, svg);
+    label.textContent = value;
+  }
+  const legend = document.createElement("div");
+  legend.className = "dashboard-risk-legend";
+  legend.innerHTML = "<span>颜色表示状态</span><span>大小表示影响范围</span><span><b>3</b>数字表示聚合事务数</span><span><i></i>红色外圈表示风险、超期或阻塞</span>";
+  container.appendChild(legend);
+  container.onclick = (event) => {
+    if (!event.target.closest(".dashboard-risk-lens") &&
+        !event.target.closest(".dashboard-risk-bubble-group")) {
+      closeDashboardRiskLens();
+    }
+  };
 }
 
 function dashboardExceptionInfo(task, dependency) {
@@ -5826,6 +6084,7 @@ const wrap = $("#canvas-wrap");
 
 let resizeFrame = null;
 window.addEventListener("resize", () => {
+  closeDashboardRiskLens();
   if (state.view !== "canvas") return;
   cancelAnimationFrame(resizeFrame);
   resizeFrame = requestAnimationFrame(renderCanvas);
@@ -5944,6 +6203,11 @@ document.addEventListener("keydown", async (e) => {
     else if (e.key === "ArrowRight") moveTaskImageViewer(1);
     else return;
     e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape" && document.querySelector(".dashboard-risk-lens")) {
+    e.preventDefault();
+    closeDashboardRiskLens(true);
     return;
   }
   if (e.key === "Escape" && state.dashboardMeeting &&
