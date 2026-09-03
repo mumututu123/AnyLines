@@ -50,6 +50,36 @@ const MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024;
 
 /* ---------------------------------------------- 界面偏好记忆 (localStorage) */
 const PREFS_KEY = "anyline.prefs";
+const THEME_KEY = "anyline.theme";
+
+function storedTheme() {
+  try {
+    const theme = localStorage.getItem(THEME_KEY);
+    return ["light", "dark"].includes(theme) ? theme : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function systemTheme() {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme, { persist = false } = {}) {
+  const resolved = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = resolved;
+  const toggle = $("#theme-toggle");
+  if (toggle) {
+    const isDark = resolved === "dark";
+    const label = isDark ? "切换到日间模式" : "切换到夜间模式";
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("title", label);
+    toggle.setAttribute("aria-pressed", String(isDark));
+  }
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, resolved); } catch (_error) { /* 忽略存储限制 */ }
+  }
+}
 
 function savePrefs() {
   try {
@@ -5617,6 +5647,7 @@ document.addEventListener("keydown", async (e) => {
 
 /* ---- 启动：恢复界面偏好，登录后加载当前项目空间 ---- */
 async function bootstrap() {
+  applyTheme(storedTheme() || systemTheme());
   loadPrefs();
   for (const [id, key] of SHOW_OPTS) $(id).checked = state.show[key];
   updateToggleLabelsBtn();
@@ -5629,6 +5660,20 @@ async function bootstrap() {
 }
 
 bootstrap();
+
+$("#theme-toggle").onclick = () => {
+  const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(nextTheme, { persist: true });
+};
+
+const themeMedia = window.matchMedia?.("(prefers-color-scheme: dark)");
+themeMedia?.addEventListener?.("change", (event) => {
+  if (!storedTheme()) applyTheme(event.matches ? "dark" : "light");
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key === THEME_KEY) applyTheme(storedTheme() || systemTheme());
+});
 
 async function pollNotificationCount() {
   if (!state.user || document.hidden) return;

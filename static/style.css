@@ -1,3 +1,5 @@
+:root { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
 body {
@@ -167,7 +169,7 @@ body.authenticated #login-view { display: none; }
 
 /* ---------------- top bar ---------------- */
 #topbar {
-  display: flex; align-items: center; gap: 16px; padding: 8px 16px;
+  display: flex; align-items: center; gap: 16px; padding: 8px 66px 8px 16px;
   background: #fff; border-bottom: 1px solid #d8dee4; flex-wrap: wrap;
 }
 #brand { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
@@ -186,6 +188,7 @@ body.authenticated #login-view { display: none; }
   display: grid; place-items: center; flex: 0 0 auto; width: 32px; height: 32px;
   padding: 0; border: 1px solid #d0d7de; border-radius: 6px;
   background: #fff; color: #57606a; cursor: pointer;
+  transition: color .15s ease, background-color .15s ease, border-color .15s ease;
 }
 .dashboard-entry:hover { border-color: #0969da; color: #0969da; background: #eef6ff; }
 .dashboard-entry:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
@@ -215,9 +218,31 @@ body.authenticated #login-view { display: none; }
 .my-status-entry.has-unread {
   border-color: #8250df; background: #f6f0ff; color: #6639ba;
 }
+
+#theme-toggle {
+  position: fixed; top: 8px; right: 16px; z-index: 50;
+  display: grid; place-items: center; width: 34px; height: 34px;
+  padding: 0; border: 1px solid #d0d7de; border-radius: 50%;
+  background: #fff; color: #57606a; cursor: pointer;
+  transition: color .15s ease, background-color .15s ease, border-color .15s ease,
+    transform .15s ease;
+}
+#theme-toggle:hover { border-color: #0969da; background: #eef6ff; color: #0969da; transform: rotate(8deg); }
+#theme-toggle:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
+.theme-icon {
+  width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.theme-icon-sun { display: none; }
+html[data-theme="dark"] .theme-icon-moon { display: none; }
+html[data-theme="dark"] .theme-icon-sun { display: block; }
 .view-btn {
   border: none; background: #fff; padding: 6px 14px; cursor: pointer; font-size: 13px;
+  color: #57606a;
+  transition: color .15s ease, background-color .15s ease;
 }
+.view-btn:hover:not(.active) { background: #f6f8fa; color: #0969da; }
+.view-btn:focus-visible { position: relative; z-index: 1; outline: 2px solid #0969da; outline-offset: -2px; }
 .view-btn.active { background: #0969da; color: #fff; }
 
 #toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -248,8 +273,11 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   display: inline-flex; align-items: baseline; gap: 6px; min-width: 82px;
   border: 1px solid #d0d7de; background: #fff; border-radius: 6px;
   padding: 6px 10px; cursor: pointer; color: #57606a;
+  transition: color .15s ease, background-color .15s ease, border-color .15s ease,
+    box-shadow .15s ease;
 }
 .summary-card:hover, .summary-card.active { border-color: #0969da; color: #0969da; background: #ddf4ff; }
+.summary-card:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
 .summary-num { font-size: 18px; font-weight: 700; color: #24292f; }
 #filters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: 1; }
 #filters input, #filters select, #table-bar select {
@@ -1382,3 +1410,293 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   }
   .image-lightbox-nav { width: 36px; height: 48px; }
 }
+
+/* ---------------- day / night theme ---------------- */
+html[data-theme="dark"] {
+  --dark-bg: #0d1117;
+  --dark-surface: #161b22;
+  --dark-raised: #1c2128;
+  --dark-subtle: #21262d;
+  --dark-hover: #292e36;
+  --dark-border: #30363d;
+  --dark-border-strong: #484f58;
+  --dark-text: #e6edf3;
+  --dark-muted: #9da7b3;
+  --dark-faint: #7d8590;
+  --dark-accent: #58a6ff;
+}
+
+html[data-theme="dark"] body,
+html[data-theme="dark"] #login-view {
+  background: var(--dark-bg);
+  color: var(--dark-text);
+}
+
+html[data-theme="dark"] :is(
+  #login-form, #topbar, #workbench, #dashboard-view, #canvas-opts, #table-wrap,
+  #account-menu, #modal, #cell-preview, .dashboard-kpi, .dashboard-range button,
+  .dashboard-locate-button, .dashboard-risk-cell, .cluster-focus-card,
+  .my-todo-stat, .task-import-drop-zone, .task-image-item, .task-attachment-item,
+  .dependency-picker, #modal-body .dependency-option, .notification-read-all,
+  #modal-body .notification-row, .task-collaboration, .mention-suggestions,
+  #modal-body .mention-option, #modal-body .comment-composer textarea
+) {
+  background-color: var(--dark-surface);
+  color: var(--dark-text);
+}
+
+html[data-theme="dark"] :is(
+  #login-form input, #workspace-select, #filters input, #filters select, #table-bar select,
+  #dashboard-exception-sort, #modal-body input, #modal-body select,
+  #modal-body textarea, #modal-tools input
+) {
+  border-color: var(--dark-border);
+  background-color: var(--dark-bg);
+  color: var(--dark-text);
+}
+html[data-theme="dark"] input::placeholder,
+html[data-theme="dark"] textarea::placeholder { color: var(--dark-faint); }
+
+html[data-theme="dark"] :is(
+  #login-form, #topbar, #workbench, #workspace-select, #view-switch,
+  .dashboard-entry, .my-status-entry, #theme-toggle, #account-menu,
+  .summary-card, #filters input, #filters select, #table-bar select,
+  #toolbar button, #table-bar button, #modal-btns button, #filters button,
+  .member-list, .member-row, .member-add, .member-actions button,
+  .workspace-management-list, .workspace-management-row,
+  .workspace-management-heading button, .workspace-management-actions button,
+  .dashboard-range, .dashboard-range button, .dashboard-section, .dashboard-kpi,
+  .dashboard-blocker-row, .dashboard-locate-button, .dashboard-risk-cell,
+  .dashboard-exception-table-wrap, .dashboard-exception-table th,
+  .dashboard-exception-table td, #canvas-opts, #canvas-legend, #canvas-shortcuts,
+  #dependency-focus-panel, .dependency-focus-tasks button, .shortcut-list kbd,
+  #btn-toggle-labels, #btn-today, #btn-fit, #btn-toggle-children,
+  .cluster-focus-card, #table-wrap, #task-table th, #task-table td,
+  .dependency-config-button, #cell-preview, .my-status-tabs button.active,
+  .modal-delete-button, #modal-body input, #modal-body select, #modal-body textarea,
+  .my-todo-stat, .dashboard-task-list-wrap, .dashboard-task-list th,
+  .dashboard-task-list td, .import-error-list, .import-error-list li,
+  .import-template-panel, .task-import-drop-zone, .task-image-item,
+  .task-attachment-drop-zone, .task-attachment-item, .dependency-picker,
+  #modal-body .dependency-option, .task-more-details,
+  .task-more-details[open] > summary, #modal-tools input,
+  #modal-body .status-remove, #modal-body .status-add, .trash-row,
+  .trash-row button, .notification-read-all, .notification-list,
+  #modal-body .notification-row, .task-collaboration,
+  .task-collaboration[open] > summary, .comment-composer,
+  .mention-suggestions, .collaboration-item
+) { border-color: var(--dark-border); }
+
+html[data-theme="dark"] :is(
+  #toolbar button, #table-bar button, #modal-btns button, #filters button,
+  .member-actions button, .member-add, .workspace-management-heading button,
+  .workspace-management-actions button, .dashboard-range button:hover,
+  .dashboard-kpi:hover, .dashboard-kpi:focus-visible, .dashboard-heat-cell.level-0,
+  .dashboard-risk-cell:not(:disabled):hover, .dashboard-risk-cell:not(:disabled):focus-visible,
+  .dashboard-exception-table th, .dashboard-exception-table tbody tr:hover,
+  .canvas-density, .shortcut-list kbd, #btn-toggle-labels, #btn-today, #btn-fit,
+  #btn-toggle-children, .cluster-focus-close, .dependency-config-button,
+  .my-status-tabs, .import-template-panel, .task-attachment-drop-zone,
+  .task-more-details, #modal-body .status-add, .trash-row button,
+  .comment-composer, #modal-body .dependency-option:hover,
+  #modal-body .notification-row:hover
+) {
+  background-color: var(--dark-subtle);
+  color: var(--dark-text);
+}
+
+html[data-theme="dark"] :is(
+  #account-menu > button:hover, #account-menu > button:focus-visible,
+  #toolbar button:hover:not(:disabled), #table-bar button:hover,
+  .dashboard-load-track, .notification-kind,
+  .collaboration-item.activity .collaboration-avatar
+) { background-color: var(--dark-hover); }
+
+html[data-theme="dark"] :is(
+  #current-user, .account-role strong, .summary-num, .dashboard-kpi,
+  .dashboard-blocker-main, .dashboard-load-owner, .dashboard-heat-cell,
+  .import-dialog-intro, .task-import-drop-zone strong,
+  .task-attachment-item > span.task-attachment-name,
+  #modal-body .dependency-option, .milestone-acceptance-task strong,
+  #modal-body .milestone-acceptance-owner, #cell-preview-content,
+  #modal-body .notification-row, #modal-body .mention-option,
+  .collaboration-detail
+) { color: var(--dark-text); }
+
+html[data-theme="dark"] :is(
+  #login-form label, .account-role, .member-list-header,
+  .member-control-label, .workspace-management-heading, .dashboard-heading p,
+  .dashboard-range button, .dashboard-kpi > span, .dashboard-chart-legend,
+  .dashboard-load-legend, .dashboard-locate-button, .dashboard-risk-header,
+  .dashboard-risk-row, .dashboard-exception-table th, .opt-title,
+  .canvas-density, #btn-clear-dependency-focus, #dependency-focus-stats,
+  #canvas-legend, .shortcut-list dd, .cluster-focus-card-meta,
+  #cell-preview-close, #modal-body .my-status-tabs button,
+  .my-status-notification-toolbar, #modal-body label, .my-todo-intro,
+  .my-todo-stat span, .import-template-panel span,
+  .task-import-drop-zone span:last-child, .task-attachment-prompt,
+  .dependency-selected-count, .milestone-acceptance-task > span,
+  #modal-tools label, .collaboration-heading
+) { color: var(--dark-muted); }
+
+html[data-theme="dark"] :is(
+  #current-username, .member-account, #workspace-select.archived,
+  .dashboard-updated, .dashboard-section-heading > span, .dashboard-kpi > small,
+  .dashboard-chart-note, .dashboard-blocker-main span,
+  .dashboard-blocker-impact span, .dashboard-heatmap-days span,
+  .dashboard-risk-cell small, .dashboard-exception-heading > div > span,
+  .dashboard-empty, .opt-hint, .dependency-focus-empty,
+  .shortcut-key-group span, .cluster-focus-card-dates,
+  .cluster-focus-footer span, .muted-text, .my-todo-list-heading span,
+  .import-error-more, .task-attachment-meta, .dependency-empty,
+  .notification-read-all:disabled, .notification-empty, .collaboration-empty,
+  .collaboration-meta time
+) { color: var(--dark-faint); }
+
+html[data-theme="dark"] :is(
+  .summary-card:hover, .summary-card.active, .dashboard-entry:hover,
+  .my-status-entry.has-todos, .dependency-focus-tasks button:hover,
+  .cluster-focus-close:hover, .cluster-focus-close:focus-visible,
+  .cluster-focus-card.selected, #task-table tr.selected-row,
+  .dashboard-task-list tbody tr:hover, .dashboard-task-list tbody tr:focus-visible,
+  .task-import-drop-zone:hover, .task-import-drop-zone:focus-visible,
+  .task-import-drop-zone.is-dragover, .task-attachment-drop-zone:hover,
+  .task-attachment-drop-zone:focus-visible, .task-content-editor.is-attachment-dragover,
+  #modal-body .mention-option.active
+) { background-color: #13233a; }
+
+html[data-theme="dark"] :is(
+  .my-status-entry.has-unread, #modal-body .notification-row.unread,
+  #modal-body .collaboration-heading button.following
+) { background-color: #271f3d; }
+
+html[data-theme="dark"] :is(.badge-overdue, .cluster-focus-health.badge-overdue,
+  .import-error-summary, #modal-body .task-image-remove:hover, .kind-overdue) {
+  background-color: #3d181c;
+  color: #ff7b72;
+}
+html[data-theme="dark"] :is(.badge-soon, .badge-risk, .cluster-focus-health.badge-risk,
+  .cluster-focus-health.badge-soon, .kind-due_soon) {
+  background-color: #362c10;
+  color: #e3b341;
+}
+html[data-theme="dark"] :is(.badge-stale, .cluster-focus-health.badge-stale,
+  .kind-dependency_unblocked) {
+  background-color: #271f3d;
+  color: #d2a8ff;
+}
+html[data-theme="dark"] :is(.badge-ok, .cluster-focus-health.badge-ok,
+  .kind-assigned, .kind-status_changed) {
+  background-color: #16351f;
+  color: #56d364;
+}
+html[data-theme="dark"] :is(.kind-mention, .kind-comment, .collaboration-avatar) {
+  background-color: #13233a;
+  color: var(--dark-accent);
+}
+
+html[data-theme="dark"] #theme-toggle {
+  border-color: var(--dark-border-strong);
+  background: var(--dark-subtle);
+  color: #e3b341;
+}
+html[data-theme="dark"] #theme-toggle:hover {
+  border-color: #e3b341;
+  background: #362c10;
+  color: #f2cc60;
+}
+html[data-theme="dark"] #account-avatar { background: #13233a; color: var(--dark-accent); }
+html[data-theme="dark"] #account-trigger:hover #account-avatar { background: #1d3557; }
+html[data-theme="dark"] .my-status-count { border-color: var(--dark-surface); }
+
+html[data-theme="dark"] #canvas-wrap,
+html[data-theme="dark"] #graph { background: var(--dark-bg); }
+html[data-theme="dark"] #sel-info {
+  border-color: var(--dark-border-strong);
+  background: rgba(33, 38, 45, .94);
+  color: var(--dark-text);
+}
+html[data-theme="dark"] :is(.month-line, .dashboard-gridline) { stroke: #21262d; }
+html[data-theme="dark"] .year-line { stroke: #30363d; }
+html[data-theme="dark"] .month-label { fill: #484f58; }
+html[data-theme="dark"] .year-label { fill: #7d8590; }
+html[data-theme="dark"] .task-label.t-name,
+html[data-theme="dark"] .line-task-summary text,
+html[data-theme="dark"] .fork-symbol { fill: var(--dark-text); }
+html[data-theme="dark"] :is(.task-label.t-meta, .task-action-hint,
+  .milestone-date-label, .dashboard-axis-label) { fill: var(--dark-muted); }
+html[data-theme="dark"] .milestone-label { fill: #d2a8ff; stroke: var(--dark-bg); }
+html[data-theme="dark"] :is(.milestone-node, .merge-dot, .fork-dot) { stroke: var(--dark-bg); }
+html[data-theme="dark"] .fork-dot.collapsed { fill: var(--dark-surface); }
+html[data-theme="dark"] .line-task-summary rect {
+  fill: rgba(22, 27, 34, .96);
+  stroke: var(--dark-border-strong);
+}
+html[data-theme="dark"] .cluster-focus-anchor-ring { fill: rgba(13, 17, 23, .75); }
+html[data-theme="dark"] .cluster-focus-lens {
+  background: rgba(22, 27, 34, .98);
+  color: var(--dark-text);
+  border-color: rgba(88, 166, 255, .45);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45), 0 4px 14px rgba(88, 166, 255, .12);
+}
+html[data-theme="dark"] .cluster-focus-lens[data-placement="above"]::after {
+  border-top-color: var(--dark-surface);
+}
+html[data-theme="dark"] .cluster-focus-lens[data-placement="below"]::after {
+  border-bottom-color: var(--dark-surface);
+}
+html[data-theme="dark"] .cluster-focus-status,
+html[data-theme="dark"] .my-todo-stat.active {
+  background: color-mix(in srgb, var(--task-color, var(--todo-status-color)) 20%, var(--dark-surface));
+}
+html[data-theme="dark"] #task-table td input,
+html[data-theme="dark"] #task-table td select { background: transparent; color: var(--dark-text); }
+html[data-theme="dark"] #task-table td input:focus,
+html[data-theme="dark"] #task-table td select:focus { background: var(--dark-bg); }
+html[data-theme="dark"] #modal-mask { background: rgba(1, 4, 9, .72); }
+html[data-theme="dark"] #toast { background: #e6edf3; color: #0d1117; }
+
+/* 顶部视图入口与概览筛选在两套主题下保持清晰的交互层级。 */
+html[data-theme="dark"] .dashboard-entry {
+  border-color: var(--dark-border);
+  background: var(--dark-subtle);
+  color: var(--dark-muted);
+}
+html[data-theme="dark"] .dashboard-entry:hover {
+  border-color: var(--dark-accent);
+  background: #13233a;
+  color: var(--dark-accent);
+}
+html[data-theme="dark"] .dashboard-entry.active {
+  border-color: var(--dark-accent);
+  background: #1f6feb;
+  color: #fff;
+}
+html[data-theme="dark"] #view-switch { border-color: var(--dark-border); }
+html[data-theme="dark"] .view-btn {
+  background: var(--dark-surface);
+  color: var(--dark-muted);
+}
+html[data-theme="dark"] .view-btn:hover:not(.active) {
+  background: var(--dark-subtle);
+  color: var(--dark-accent);
+}
+html[data-theme="dark"] .view-btn.active {
+  background: #1f6feb;
+  color: #fff;
+}
+html[data-theme="dark"] .summary-card {
+  border-color: var(--dark-border);
+  background: var(--dark-surface);
+  color: var(--dark-muted);
+}
+html[data-theme="dark"] .summary-card .summary-num { color: var(--dark-text); }
+html[data-theme="dark"] .summary-card:hover,
+html[data-theme="dark"] .summary-card.active {
+  border-color: var(--dark-accent);
+  background: #13233a;
+  color: var(--dark-accent);
+  box-shadow: inset 0 0 0 1px rgba(88, 166, 255, .12);
+}
+html[data-theme="dark"] .summary-card:hover .summary-num,
+html[data-theme="dark"] .summary-card.active .summary-num { color: #cae8ff; }

@@ -4,6 +4,19 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AnyLine · 在线事务管理</title>
+<script>
+  (() => {
+    try {
+      const savedTheme = localStorage.getItem("anyline.theme");
+      const theme = ["light", "dark"].includes(savedTheme)
+        ? savedTheme
+        : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = theme;
+    } catch (_error) {
+      document.documentElement.dataset.theme = "light";
+    }
+  })();
+</script>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="auth-pending">
@@ -83,6 +96,17 @@
     </div>
   </div>
 </header>
+
+<button id="theme-toggle" type="button" aria-label="切换到夜间模式"
+        aria-pressed="false" title="切换到夜间模式">
+  <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M20.6 15.4A8.5 8.5 0 0 1 8.6 3.4 8.5 8.5 0 1 0 20.6 15.4Z"></path>
+  </svg>
+  <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
+    <circle cx="12" cy="12" r="4"></circle>
+    <path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42M17.65 17.65l1.42 1.42M2 12h2M20 12h2M4.93 19.07l1.42-1.42M17.65 6.35l1.42-1.42"></path>
+  </svg>
+</button>
 
 <section id="workbench" class="app-surface">
   <div id="summary-strip">
