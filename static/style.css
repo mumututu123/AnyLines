@@ -285,6 +285,10 @@ html[data-theme="dark"] .theme-icon-sun { display: block; }
 }
 #toolbar button:hover:not(:disabled), #table-bar button:hover { background: #eaeef2; }
 #toolbar button:disabled, #table-bar button:disabled { opacity: .4; cursor: not-allowed; }
+#toolbar .toolbar-icon-button {
+  display: grid; place-items: center; width: 32px; min-width: 32px; padding: 5px;
+}
+#toolbar .toolbar-icon-button svg { display: block; }
 #toolbar button.danger, #table-bar button.danger { color: #cf222e; border-color: #f0b3b8; }
 #toolbar button.danger:hover:not(:disabled), #table-bar button.danger:hover:not(:disabled) { background: #ffebe9; }
 button.primary { background: #0969da !important; color: #fff; border-color: #0969da !important; }
@@ -482,6 +486,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   font-weight: 600; cursor: pointer;
 }
 .dashboard-meeting-mode #topbar, .dashboard-meeting-mode #filters,
+.dashboard-meeting-mode #theme-toggle,
 .dashboard-meeting-mode .dashboard-supporting, .dashboard-meeting-mode #btn-dashboard-print,
 .dashboard-meeting-mode .dashboard-updated { display: none !important; }
 .dashboard-meeting-mode #dashboard-view { padding-top: 28px; }
@@ -1158,7 +1163,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   background: transparent; color: #57606a; font: inherit; font-weight: 650; cursor: pointer;
 }
 #modal-body .my-status-tabs button.active {
-  border-color: #d0d7de; background: #fff; color: #0969da;
+  border-color: #d0d7de; background: #d6d2d2; color: #0969da;
   box-shadow: 0 1px 3px rgba(31, 35, 40, .1);
 }
 .my-status-content {
@@ -1595,7 +1600,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 @media print {
   @page { size: A4 landscape; margin: 10mm; }
   html, body { height: auto; overflow: visible; background: #fff !important; color: #111 !important; }
-  #topbar, #filters, #summary-strip, #canvas-view, #table-view,
+  #topbar, #theme-toggle, #filters, #summary-strip, #canvas-view, #table-view,
   .dashboard-heading-tools, .dashboard-supporting, #toast { display: none !important; }
   #workbench, #dashboard-view { display: block !important; height: auto; overflow: visible; }
   #dashboard-view { padding: 0; background: #fff !important; }

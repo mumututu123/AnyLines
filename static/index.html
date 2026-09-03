@@ -71,7 +71,17 @@
     <button id="btn-add-task" disabled title="在选中的线上添加事务节点">+ 事务</button>
     <button id="btn-add-milestone" disabled title="在选中的线上添加里程碑节点">+ 里程碑</button>
     <button id="btn-merge" disabled title="将选中的支线反合回父线">反合</button>
-    <button id="btn-trash" title="查看和恢复已删除的线或事务">回收站</button>
+    <button id="btn-trash" class="toolbar-icon-button" type="button"
+            title="回收站：查看和恢复已删除内容" aria-label="回收站">
+      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"
+           fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 6h18"></path>
+        <path d="M8 6V4h8v2"></path>
+        <path d="M19 6l-1 14H6L5 6"></path>
+        <path d="M10 11v5M14 11v5"></path>
+      </svg>
+    </button>
   </div>
 
   <div id="account-bar">
