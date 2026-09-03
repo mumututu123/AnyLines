@@ -495,8 +495,14 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .dashboard-progress-line.planned { stroke: #6e7781; stroke-dasharray: 5 4; }
 .dashboard-progress-line.actual { stroke: #0969da; }
 .dashboard-progress-dot { fill: #fff; stroke: #0969da; stroke-width: 2; }
-.dashboard-status-segment { cursor: pointer; }
-.dashboard-status-segment:hover { filter: brightness(.88); }
+.dashboard-status-area { opacity: .22; cursor: pointer; transition: opacity .15s ease; }
+.dashboard-status-area:hover { opacity: .36; }
+.dashboard-status-line {
+  fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  pointer-events: none;
+}
+.dashboard-status-point { stroke: #fff; stroke-width: 1.5; cursor: pointer; }
+.dashboard-status-point:hover { r: 4; }
 .dashboard-chart-legend, .dashboard-load-legend {
   display: flex; align-items: center; justify-content: center; gap: 16px;
   flex-wrap: wrap; color: #57606a; font-size: 11px;

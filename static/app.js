@@ -1316,31 +1316,81 @@ function renderDashboardStatusTrend() {
     }
   }
   const width = 720, height = 250;
-  const margin = { left: 34, right: 14, top: 14, bottom: 30 };
-  const svg = dashboardSvg("svg", { viewBox: `0 0 ${width} ${height}`, role: "img", "aria-label": "事务状态堆叠趋势" }, container);
+  const margin = { left: 38, right: 14, top: 14, bottom: 30 };
+  const svg = dashboardSvg("svg", {
+    viewBox: `0 0 ${width} ${height}`, role: "img",
+    "aria-label": "事务状态折线堆叠趋势",
+  }, container);
   const plotW = width - margin.left - margin.right;
   const plotH = height - margin.top - margin.bottom;
   const maxTotal = Math.max(1, ...snapshots.map((snapshot) => snapshot.total));
-  const gap = snapshots.length > 20 ? 1 : 4;
-  const barWidth = Math.max(4, Math.min(54, plotW / snapshots.length - gap));
-  snapshots.forEach((snapshot, index) => {
-    const center = snapshots.length === 1 ? margin.left + plotW / 2 :
-      margin.left + index / (snapshots.length - 1) * plotW;
-    let bottom = margin.top + plotH;
-    for (const status of statuses) {
-      const count = snapshot.status_counts?.[status] || 0;
-      if (!count) continue;
-      const segmentHeight = count / maxTotal * plotH;
-      bottom -= segmentHeight;
-      const rect = dashboardSvg("rect", {
-        x: center - barWidth / 2, y: bottom, width: barWidth, height: segmentHeight,
-        fill: statusColor(status), class: "dashboard-status-segment",
-      }, svg);
-      rect.onclick = () => openTaskListModal(status, state.tasks.filter((task) => task.status === status));
-      const title = dashboardSvg("title", {}, rect);
-      title.textContent = `${snapshot.snapshot_date} · ${status} ${count}`;
+  const x = (index) => snapshots.length === 1 ? margin.left + plotW / 2 :
+    margin.left + index / (snapshots.length - 1) * plotW;
+  const y = (value) => margin.top + (maxTotal - value) / maxTotal * plotH;
+  const tickStep = Math.max(1, Math.ceil(maxTotal / 4));
+  const ticks = [];
+  for (let value = 0; value < maxTotal; value += tickStep) ticks.push(value);
+  if (ticks[ticks.length - 1] !== maxTotal) ticks.push(maxTotal);
+  for (const tick of ticks) {
+    dashboardSvg("line", {
+      x1: margin.left, x2: width - margin.right, y1: y(tick), y2: y(tick),
+      class: "dashboard-gridline",
+    }, svg);
+    const label = dashboardSvg("text", {
+      x: margin.left - 8, y: y(tick) + 4, class: "dashboard-axis-label",
+      "text-anchor": "end",
+    }, svg);
+    label.textContent = tick;
+  }
+
+  const cumulative = snapshots.map(() => 0);
+  const lineLayers = [];
+  for (const status of statuses) {
+    const lower = [...cumulative];
+    const counts = snapshots.map((snapshot) => snapshot.status_counts?.[status] || 0);
+    const upper = counts.map((count, index) => {
+      cumulative[index] += count;
+      return cumulative[index];
+    });
+    if (!counts.some(Boolean)) continue;
+    const upperPoints = upper.map((value, index) => `${x(index)},${y(value)}`);
+    const lowerPoints = lower.map((value, index) => `${x(index)},${y(value)}`).reverse();
+    let areaPath;
+    let linePath;
+    if (snapshots.length === 1) {
+      areaPath = `M${margin.left},${y(upper[0])} L${width - margin.right},${y(upper[0])} ` +
+        `L${width - margin.right},${y(lower[0])} L${margin.left},${y(lower[0])} Z`;
+      linePath = `M${margin.left},${y(upper[0])} L${width - margin.right},${y(upper[0])}`;
+    } else {
+      areaPath = `M${upperPoints.join(" L")} L${lowerPoints.join(" L")} Z`;
+      linePath = `M${upperPoints.join(" L")}`;
     }
-  });
+    const area = dashboardSvg("path", {
+      d: areaPath, fill: statusColor(status), class: "dashboard-status-area",
+    }, svg);
+    area.onclick = () => openTaskListModal(
+      status, state.tasks.filter((task) => task.status === status)
+    );
+    const areaTitle = dashboardSvg("title", {}, area);
+    areaTitle.textContent = `${status} · 点击查看当前事务`;
+    lineLayers.push({ status, counts, upper, linePath, open: area.onclick });
+  }
+  for (const layer of lineLayers) {
+    dashboardSvg("path", {
+      d: layer.linePath, stroke: statusColor(layer.status), class: "dashboard-status-line",
+    }, svg);
+    if (snapshots.length > 1) {
+      snapshots.forEach((snapshot, index) => {
+        const point = dashboardSvg("circle", {
+          cx: x(index), cy: y(layer.upper[index]), r: 3,
+          fill: statusColor(layer.status), class: "dashboard-status-point",
+        }, svg);
+        point.onclick = layer.open;
+        const title = dashboardSvg("title", {}, point);
+        title.textContent = `${snapshot.snapshot_date} · ${layer.status} ${layer.counts[index]}`;
+      });
+    }
+  }
   for (const [snapshot, anchor, xPos] of [
     [snapshots[0], "start", margin.left],
     [snapshots[snapshots.length - 1], "end", width - margin.right],
@@ -1352,7 +1402,9 @@ function renderDashboardStatusTrend() {
   legend.className = "dashboard-chart-legend dashboard-status-legend";
   for (const status of statuses) {
     const item = document.createElement("span");
-    item.innerHTML = `<i style="background:${statusColor(status)}"></i>${status}`;
+    const swatch = document.createElement("i");
+    swatch.style.background = statusColor(status);
+    item.append(swatch, status);
     legend.appendChild(item);
   }
   container.appendChild(legend);
