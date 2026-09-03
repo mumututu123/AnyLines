@@ -287,6 +287,8 @@ class AnyLineHttpTests(unittest.TestCase):
 
         self.assertIn('key === "r"', source)
         self.assertIn('await api("/api/redo", "POST")', source)
+        self.assertIn('key === "m"', source)
+        self.assertIn('createMilestoneOnSelectedLine();', source)
         self.assertIn('if (key === "h") goToToday();', source)
         self.assertIn(
             'else if (key === "b") createBranchOnSelectedLine();', source
@@ -301,7 +303,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         markup = body.decode("utf-8")
         self.assertIn('id="canvas-shortcuts"', markup)
-        for key in ("Ctrl+Z", "Ctrl+R", "H", "B", "A", "N", "Delete", "Ctrl+滚轮"):
+        for key in ("Ctrl+Z", "Ctrl+R", "Ctrl+M", "H", "B", "A", "N", "Delete", "Ctrl+滚轮"):
             with self.subTest(shortcut_hint=key):
                 self.assertIn(f"<kbd>{key}</kbd>", markup)
 

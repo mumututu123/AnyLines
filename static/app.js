@@ -4954,9 +4954,7 @@ function createTaskOnSelectedLine() {
   openTaskModal(null, state.selectedLineId);
 }
 
-$("#btn-add-branch").onclick = createBranchOnSelectedLine;
-$("#btn-add-task").onclick = createTaskOnSelectedLine;
-$("#btn-add-milestone").onclick = () => {
+function createMilestoneOnSelectedLine() {
   if (!ensureWorkspaceEditable()) return;
   const line = lineById(state.selectedLineId);
   if (!line) {
@@ -4964,7 +4962,11 @@ $("#btn-add-milestone").onclick = () => {
     return;
   }
   openMilestoneModal(null, line.id);
-};
+}
+
+$("#btn-add-branch").onclick = createBranchOnSelectedLine;
+$("#btn-add-task").onclick = createTaskOnSelectedLine;
+$("#btn-add-milestone").onclick = createMilestoneOnSelectedLine;
 
 $("#btn-merge").onclick = () => {
   const line = lineById(state.selectedLineId);
@@ -5687,6 +5689,13 @@ document.addEventListener("keydown", async (e) => {
     } catch (_error) {
       // api() 已显示没有可恢复操作或服务端错误。
     }
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === "m") {
+    e.preventDefault();
+    if (e.repeat) return;
+    createMilestoneOnSelectedLine();
     return;
   }
 
