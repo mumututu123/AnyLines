@@ -345,7 +345,8 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 .dashboard-heading h1 { font-size: 22px; line-height: 1.25; font-weight: 700; }
 .dashboard-heading p { margin-top: 5px; color: #57606a; font-size: 13px; }
-.dashboard-heading-tools { display: flex; align-items: center; gap: 14px; }
+.dashboard-heading-tools { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; justify-content: flex-end; }
+.dashboard-range-label { color: #57606a; font-size: 12px; white-space: nowrap; }
 .dashboard-updated { color: #8c959f; font-size: 12px; white-space: nowrap; }
 .dashboard-range {
   display: flex; overflow: hidden; border: 1px solid #d0d7de; border-radius: 6px;
@@ -357,6 +358,14 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .dashboard-range button:last-child { border-right: 0; }
 .dashboard-range button:hover { background: #f6f8fa; }
 .dashboard-range button.active { background: #0969da; color: #fff; }
+.dashboard-action {
+  min-height: 31px; padding: 4px 10px; border: 1px solid #d0d7de; border-radius: 6px;
+  background: #fff; color: #57606a; font: inherit; font-size: 12px; cursor: pointer;
+}
+.dashboard-action:hover, .dashboard-action:focus-visible {
+  outline: none; border-color: #0969da; color: #0969da; background: #eef6ff;
+}
+.dashboard-action[aria-pressed="true"] { border-color: #0969da; background: #0969da; color: #fff; }
 .dashboard-section {
   min-width: 0; max-width: 1440px; margin: 0 auto; padding: 18px 0 22px;
   border-top: 1px solid #d8dee4;
@@ -369,6 +378,10 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   gap: 16px; margin-bottom: 14px;
 }
 .dashboard-section-heading > span { color: #8c959f; font-size: 12px; }
+.dashboard-report-summary {
+  margin: -2px 0 14px; padding: 11px 13px; border-left: 3px solid #0969da;
+  background: #f6f8fa; color: #3f4750; font-size: 13px; line-height: 1.7;
+}
 .dashboard-kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .dashboard-kpi {
   display: flex; min-width: 0; min-height: 104px; flex-direction: column; align-items: flex-start;
@@ -391,6 +404,87 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .dashboard-grid-primary { grid-template-columns: minmax(0, 1.45fr) minmax(330px, .75fr); }
 .dashboard-grid-equal { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .dashboard-grid > .dashboard-section { width: 100%; margin: 0; }
+.dashboard-panel-heading {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  margin-bottom: 10px;
+}
+.dashboard-panel-heading h3, .dashboard-exception-heading h3 {
+  font-size: 13px; line-height: 1.4; font-weight: 650;
+}
+.dashboard-panel-heading span { color: #8c959f; font-size: 11px; }
+.dashboard-report-panel { min-width: 0; }
+.dashboard-achievements { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.dashboard-report-group {
+  min-width: 0; overflow: hidden; border: 1px solid #d8dee4; border-radius: 7px;
+  background: #fff;
+}
+.dashboard-report-group-heading {
+  display: flex; min-height: 39px; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 8px 11px; border-bottom: 1px solid #eaeef2; background: #f6f8fa;
+}
+.dashboard-report-group-heading strong { font-size: 12px; }
+.dashboard-report-group-heading button {
+  padding: 2px 4px; border: 0; background: transparent; color: #0969da;
+  font: inherit; font-size: 11px; cursor: pointer;
+}
+.dashboard-report-list { display: flex; flex-direction: column; }
+.dashboard-report-item {
+  display: flex; min-width: 0; min-height: 51px; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 8px 11px; border: 0; border-bottom: 1px solid #eaeef2;
+  background: #fff; color: #24292f; font: inherit; text-align: left; cursor: pointer;
+}
+.dashboard-report-item:last-child { border-bottom: 0; }
+.dashboard-report-item:hover, .dashboard-report-item:focus-visible {
+  outline: none; background: #f6f8fa;
+}
+.dashboard-report-item > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.dashboard-report-item strong, .dashboard-report-item small {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dashboard-report-item strong { font-size: 12px; }
+.dashboard-report-item small { color: #8c959f; font-size: 10px; }
+.dashboard-report-item time { flex: 0 0 auto; color: #57606a; font-size: 10px; }
+.dashboard-plan-grid { align-items: stretch; }
+.dashboard-plan-grid > .dashboard-report-panel,
+.dashboard-variance { display: flex; min-width: 0; flex-direction: column; }
+.dashboard-plan-grid .dashboard-chart,
+.dashboard-variance-metrics { flex: 1; }
+.dashboard-variance-metrics {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(108px, 1fr)); gap: 8px;
+}
+.dashboard-variance-metric {
+  display: flex; min-height: 108px; flex-direction: column; align-items: flex-start;
+  justify-content: space-between; padding: 11px; border: 1px solid #d8dee4; border-radius: 6px;
+  background: #fff; color: #24292f; font: inherit; text-align: left; cursor: pointer;
+}
+.dashboard-variance-metric:hover, .dashboard-variance-metric:focus-visible {
+  outline: none; border-color: #0969da; background: #f6f8fa;
+}
+.dashboard-variance-metric strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.dashboard-variance-metric span { font-size: 12px; font-weight: 600; }
+.dashboard-variance-metric small { color: #8c959f; font-size: 10px; }
+.dashboard-variance-metric.tone-good strong { color: #1a7f37; }
+.dashboard-variance-metric.tone-warning strong { color: #9a6700; }
+.dashboard-variance-metric.tone-danger strong { color: #cf222e; }
+.dashboard-variance-note {
+  width: 100%; margin-top: 8px; padding: 8px 10px; border: 1px solid #d8dee4;
+  border-radius: 6px; background: #f6f8fa; color: #57606a; font: inherit;
+  font-size: 11px; text-align: left; cursor: pointer;
+}
+.dashboard-risk-overview { margin-bottom: 22px; }
+.dashboard-risk-overview .dashboard-report-panel {
+  padding: 14px; border: 1px solid #d8dee4; border-radius: 7px;
+}
+.dashboard-supporting { max-width: 1440px; margin: 0 auto; border-top: 1px solid #d8dee4; }
+.dashboard-supporting > summary {
+  width: fit-content; padding: 18px 0; color: #57606a; font-size: 13px;
+  font-weight: 600; cursor: pointer;
+}
+.dashboard-meeting-mode #topbar, .dashboard-meeting-mode #filters,
+.dashboard-meeting-mode .dashboard-supporting, .dashboard-meeting-mode #btn-dashboard-print,
+.dashboard-meeting-mode .dashboard-updated { display: none !important; }
+.dashboard-meeting-mode #dashboard-view { padding-top: 28px; }
 .dashboard-chart { min-width: 0; }
 .dashboard-chart svg { display: block; width: 100%; height: auto; min-height: 230px; }
 .dashboard-gridline { stroke: #eaeef2; stroke-width: 1; }
@@ -1420,6 +1514,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   #dashboard-view { padding: 18px 16px 30px; }
   .dashboard-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .dashboard-grid { grid-template-columns: 1fr; gap: 0; }
+  .dashboard-risk-overview { gap: 14px; }
 }
 
 @media (max-width: 560px) {
@@ -1429,7 +1524,9 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   #dashboard-view { padding-inline: 12px; }
   .dashboard-heading { align-items: flex-start; flex-direction: column; gap: 10px; }
   .dashboard-heading-tools { width: 100%; align-items: flex-start; flex-direction: column; gap: 7px; }
+  .dashboard-range-label { display: none; }
   .dashboard-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+  .dashboard-achievements { grid-template-columns: 1fr; }
   .dashboard-kpi { min-height: 96px; padding: 11px; }
   .dashboard-kpi > strong { font-size: 24px; }
   .dashboard-chart svg { min-height: 190px; }
@@ -1442,6 +1539,25 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
     padding: 52px 8px 18px;
   }
   .image-lightbox-nav { width: 36px; height: 48px; }
+}
+
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+  html, body { height: auto; overflow: visible; background: #fff !important; color: #111 !important; }
+  #topbar, #filters, #summary-strip, #canvas-view, #table-view,
+  .dashboard-heading-tools, .dashboard-supporting, #toast { display: none !important; }
+  #workbench, #dashboard-view { display: block !important; height: auto; overflow: visible; }
+  #dashboard-view { padding: 0; background: #fff !important; }
+  .dashboard-heading, .dashboard-section { max-width: none; }
+  .dashboard-heading { margin-bottom: 12px; }
+  .dashboard-section { padding: 12px 0 14px; break-inside: avoid; }
+  .dashboard-report-summary, .dashboard-kpi, .dashboard-report-group,
+  .dashboard-variance-metric, .dashboard-risk-overview .dashboard-report-panel,
+  .dashboard-exception-table-wrap { box-shadow: none; break-inside: avoid; }
+  .dashboard-locate-button, #dashboard-exception-sort { display: none !important; }
+  .dashboard-chart svg { min-height: 180px; max-height: 210px; }
+  .dashboard-report-item, .dashboard-kpi, .dashboard-variance-metric,
+  .dashboard-risk-cell { color: #111 !important; background: #fff !important; }
 }
 
 /* ---------------- day / night theme ---------------- */
@@ -1468,7 +1584,9 @@ html[data-theme="dark"] #login-view {
 html[data-theme="dark"] :is(
   #login-form, #topbar, #workbench, #dashboard-view, #canvas-opts, #table-wrap,
   #account-menu, #modal, #cell-preview, .dashboard-kpi, .dashboard-range button,
-  .dashboard-locate-button, .dashboard-risk-cell, .cluster-focus-card,
+  .dashboard-action, .dashboard-locate-button, .dashboard-risk-cell,
+  .dashboard-report-group, .dashboard-report-item, .dashboard-variance-metric,
+  .dashboard-risk-overview .dashboard-report-panel, .cluster-focus-card,
   .my-todo-stat, .task-import-drop-zone, .task-image-item, .task-attachment-item,
   .dependency-picker, #modal-body .dependency-option, .notification-read-all,
   #modal-body .notification-row, .task-collaboration, .mention-suggestions,
@@ -1499,6 +1617,9 @@ html[data-theme="dark"] :is(
   .workspace-management-list, .workspace-management-row,
   .workspace-management-heading button, .workspace-management-actions button,
   .dashboard-range, .dashboard-range button, .dashboard-section, .dashboard-kpi,
+  .dashboard-action, .dashboard-report-group, .dashboard-report-group-heading,
+  .dashboard-report-item, .dashboard-variance-metric,
+  .dashboard-risk-overview .dashboard-report-panel, .dashboard-supporting,
   .dashboard-blocker-row, .dashboard-locate-button, .dashboard-risk-cell,
   .dashboard-exception-table-wrap, .dashboard-exception-table th,
   .dashboard-exception-table td, #canvas-opts, #canvas-legend, #canvas-shortcuts,
@@ -1524,6 +1645,10 @@ html[data-theme="dark"] :is(
   #toolbar button, #table-bar button, #modal-btns button, #filters button,
   .member-actions button, .member-add, .workspace-management-heading button,
   .workspace-management-actions button, .dashboard-range button:hover,
+  .dashboard-action:hover, .dashboard-report-summary, .dashboard-report-group-heading,
+  .dashboard-report-item:hover, .dashboard-report-item:focus-visible,
+  .dashboard-variance-metric:hover, .dashboard-variance-metric:focus-visible,
+  .dashboard-variance-note,
   .dashboard-kpi:hover, .dashboard-kpi:focus-visible, .dashboard-heat-cell.level-0,
   .dashboard-risk-cell:not(:disabled):hover, .dashboard-risk-cell:not(:disabled):focus-visible,
   .dashboard-exception-table th, .dashboard-exception-table tbody tr:hover,
@@ -1559,7 +1684,7 @@ html[data-theme="dark"] :is(
 html[data-theme="dark"] :is(
   #login-form label, .member-list-header,
   .member-control-label, .workspace-management-heading, .dashboard-heading p,
-  .dashboard-range button, .dashboard-kpi > span, .dashboard-chart-legend,
+  .dashboard-range-label, .dashboard-range button, .dashboard-kpi > span, .dashboard-chart-legend,
   .dashboard-load-legend, .dashboard-locate-button, .dashboard-risk-header,
   .dashboard-risk-row, .dashboard-exception-table th, .opt-title,
   .canvas-density, #btn-clear-dependency-focus, #dependency-focus-stats,
@@ -1578,7 +1703,8 @@ html[data-theme="dark"] :is(
   .dashboard-chart-note, .dashboard-blocker-main span,
   .dashboard-blocker-impact span, .dashboard-heatmap-days span,
   .dashboard-risk-cell small, .dashboard-exception-heading > div > span,
-  .dashboard-empty, .opt-hint, .dependency-focus-empty,
+  .dashboard-report-item small, .dashboard-panel-heading span,
+  .dashboard-variance-metric small, .dashboard-empty, .opt-hint, .dependency-focus-empty,
   .shortcut-key-group span, .cluster-focus-card-dates,
   .cluster-focus-footer span, .muted-text, .my-todo-list-heading span,
   .import-error-more, .task-attachment-meta, .dependency-empty,
@@ -1724,6 +1850,11 @@ html[data-theme="dark"] .dashboard-entry:hover {
   color: var(--dark-accent);
 }
 html[data-theme="dark"] .dashboard-entry.active {
+  border-color: var(--dark-accent);
+  background: #1f6feb;
+  color: #fff;
+}
+html[data-theme="dark"] .dashboard-action[aria-pressed="true"] {
   border-color: var(--dark-accent);
   background: #1f6feb;
   color: #fff;

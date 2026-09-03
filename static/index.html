@@ -163,47 +163,97 @@
 <main id="dashboard-view" class="app-surface hidden">
   <div class="dashboard-heading">
     <div>
-      <h1>项目看板</h1>
+      <h1>项目看板 · 进展报告</h1>
       <p><span id="dashboard-workspace-name"></span><span id="dashboard-filter-context"></span></p>
     </div>
     <div class="dashboard-heading-tools">
-      <div id="dashboard-range" class="dashboard-range" aria-label="趋势时间范围">
+      <span class="dashboard-range-label">汇报周期</span>
+      <div id="dashboard-range" class="dashboard-range" aria-label="汇报与趋势时间范围">
         <button type="button" data-range="7">近 7 天</button>
         <button type="button" data-range="30" class="active">近 30 天</button>
         <button type="button" data-range="all">全部</button>
       </div>
+      <button id="btn-dashboard-meeting" class="dashboard-action" type="button"
+              aria-pressed="false">会议模式</button>
+      <button id="btn-dashboard-print" class="dashboard-action" type="button">打印报告</button>
       <span id="dashboard-updated" class="dashboard-updated"></span>
     </div>
   </div>
 
   <section class="dashboard-section dashboard-kpi-section" aria-labelledby="dashboard-health-title">
     <div class="dashboard-section-heading">
-      <h2 id="dashboard-health-title">项目健康</h2>
+      <h2 id="dashboard-health-title">一、总体进展</h2>
       <span>当前筛选口径</span>
     </div>
+    <p id="dashboard-report-summary" class="dashboard-report-summary"></p>
     <div id="dashboard-kpis" class="dashboard-kpis"></div>
   </section>
 
-  <div class="dashboard-grid dashboard-grid-primary">
-    <section class="dashboard-section" aria-labelledby="dashboard-progress-title">
-      <div class="dashboard-section-heading">
-        <h2 id="dashboard-progress-title">计划与实际进度</h2>
-        <span>全项目趋势</span>
-      </div>
-      <div id="dashboard-progress" class="dashboard-chart"></div>
-    </section>
+  <section class="dashboard-section" aria-labelledby="dashboard-achievements-title">
+    <div class="dashboard-section-heading">
+      <h2 id="dashboard-achievements-title">二、本期成果</h2>
+      <span id="dashboard-achievement-total"></span>
+    </div>
+    <div id="dashboard-achievements" class="dashboard-achievements"></div>
+  </section>
 
-    <section class="dashboard-section" aria-labelledby="dashboard-blockers-title">
-      <div class="dashboard-section-heading">
-        <h2 id="dashboard-blockers-title">关键阻塞链</h2>
-        <span id="dashboard-blocker-total"></span>
+  <section class="dashboard-section" aria-labelledby="dashboard-plan-title">
+    <div class="dashboard-section-heading">
+      <h2 id="dashboard-plan-title">三、计划与偏差</h2>
+      <span id="dashboard-period-label"></span>
+    </div>
+    <div class="dashboard-grid dashboard-grid-primary dashboard-plan-grid">
+      <div class="dashboard-report-panel" aria-labelledby="dashboard-progress-title">
+        <div class="dashboard-panel-heading">
+          <h3 id="dashboard-progress-title">计划与实际进度</h3>
+          <span>全项目趋势</span>
+        </div>
+        <div id="dashboard-progress" class="dashboard-chart"></div>
       </div>
-      <div id="dashboard-blockers" class="dashboard-blockers"></div>
-    </section>
-  </div>
+      <div id="dashboard-variance" class="dashboard-variance"></div>
+    </div>
+  </section>
 
-  <div class="dashboard-grid dashboard-grid-equal">
-    <section class="dashboard-section" aria-labelledby="dashboard-status-trend-title">
+  <section class="dashboard-section dashboard-risk-section" aria-labelledby="dashboard-risk-block-title">
+    <div class="dashboard-section-heading">
+      <h2 id="dashboard-risk-block-title">四、风险与阻塞</h2>
+      <span id="dashboard-risk-summary"></span>
+    </div>
+    <div class="dashboard-grid dashboard-grid-equal dashboard-risk-overview">
+      <div class="dashboard-report-panel" aria-labelledby="dashboard-blockers-title">
+        <div class="dashboard-panel-heading">
+          <h3 id="dashboard-blockers-title">关键阻塞链</h3>
+          <span id="dashboard-blocker-total"></span>
+        </div>
+        <div id="dashboard-blockers" class="dashboard-blockers"></div>
+      </div>
+      <div class="dashboard-report-panel" aria-labelledby="dashboard-risk-title">
+        <div class="dashboard-panel-heading">
+          <h3 id="dashboard-risk-title">交付风险矩阵</h3>
+          <span>优先级 × 到期紧迫度</span>
+        </div>
+        <div id="dashboard-risk-matrix" class="dashboard-risk-matrix"></div>
+      </div>
+    </div>
+    <div class="dashboard-section-heading dashboard-exception-heading">
+      <div>
+        <h3 id="dashboard-exceptions-title">需关注事务</h3>
+        <span id="dashboard-exception-total"></span>
+      </div>
+      <select id="dashboard-exception-sort" aria-label="异常事务排序">
+        <option value="severity">风险优先</option>
+        <option value="due">到期日优先</option>
+        <option value="impact">影响范围优先</option>
+        <option value="updated">最近更新</option>
+      </select>
+    </div>
+    <div id="dashboard-exceptions" class="dashboard-exceptions"></div>
+  </section>
+
+  <details class="dashboard-supporting">
+    <summary>辅助分析</summary>
+    <div class="dashboard-grid dashboard-grid-equal">
+      <section class="dashboard-section" aria-labelledby="dashboard-status-trend-title">
       <div class="dashboard-section-heading">
         <h2 id="dashboard-status-trend-title">状态趋势</h2>
         <span>全项目每日快照</span>
@@ -217,10 +267,9 @@
         <span>当前筛选口径</span>
       </div>
       <div id="dashboard-owner-load" class="dashboard-owner-load"></div>
-    </section>
-  </div>
+      </section>
+    </div>
 
-  <div class="dashboard-grid dashboard-grid-equal">
     <section class="dashboard-section" aria-labelledby="dashboard-due-title">
       <div class="dashboard-section-heading">
         <h2 id="dashboard-due-title">到期热力图</h2>
@@ -228,31 +277,7 @@
       </div>
       <div id="dashboard-due-heatmap" class="dashboard-due-heatmap"></div>
     </section>
-
-    <section class="dashboard-section" aria-labelledby="dashboard-risk-title">
-      <div class="dashboard-section-heading">
-        <h2 id="dashboard-risk-title">交付风险矩阵</h2>
-        <span>优先级 × 到期紧迫度</span>
-      </div>
-      <div id="dashboard-risk-matrix" class="dashboard-risk-matrix"></div>
-    </section>
-  </div>
-
-  <section class="dashboard-section" aria-labelledby="dashboard-exceptions-title">
-    <div class="dashboard-section-heading dashboard-exception-heading">
-      <div>
-        <h2 id="dashboard-exceptions-title">异常事务</h2>
-        <span id="dashboard-exception-total"></span>
-      </div>
-      <select id="dashboard-exception-sort" aria-label="异常事务排序">
-        <option value="severity">风险优先</option>
-        <option value="due">到期日优先</option>
-        <option value="impact">影响范围优先</option>
-        <option value="updated">最近更新</option>
-      </select>
-    </div>
-    <div id="dashboard-exceptions" class="dashboard-exceptions"></div>
-  </section>
+  </details>
 </main>
 
 <!-- 画布视图 -->

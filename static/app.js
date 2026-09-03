@@ -27,6 +27,7 @@ const state = {
   sort: "start_asc",
   dashboardRange: "30",
   dashboardExceptionSort: "severity",
+  dashboardMeeting: false,
   taskCreateDrafts: new Map(),
 };
 
@@ -90,6 +91,7 @@ function savePrefs() {
       view: state.view,
       zoom: state.zoom,
       sort: state.sort,
+      dashboardRange: state.dashboardRange,
     }));
   } catch (_e) { /* 隐私模式等场景忽略 */ }
 }
@@ -108,6 +110,9 @@ function loadPrefs() {
     }
     if (["start_asc", "due_asc", "priority_desc", "updated_desc"].includes(p.sort)) {
       state.sort = p.sort;
+    }
+    if (["7", "30", "all"].includes(p.dashboardRange)) {
+      state.dashboardRange = p.dashboardRange;
     }
   } catch (_e) { /* 数据损坏则用默认值 */ }
 }
@@ -930,10 +935,225 @@ function dashboardDateSequence(start, end, maxPoints = 120) {
   return dates;
 }
 
+function dashboardPeriodLabel() {
+  const start = dashboardRangeStart();
+  return state.dashboardRange === "all" ? `全周期 · 截至 ${state.today}` :
+    `${start} 至 ${state.today}`;
+}
+
+function dashboardDateInPeriod(value) {
+  return Boolean(value) && value >= dashboardRangeStart() && value <= state.today;
+}
+
+function dashboardBaselineSnapshot() {
+  if (state.dashboardRange === "all") return null;
+  const start = dashboardRangeStart();
+  return [...state.dashboardSnapshots]
+    .filter((snapshot) => snapshot.snapshot_date < start)
+    .sort((a, b) => a.snapshot_date.localeCompare(b.snapshot_date))
+    .pop() || null;
+}
+
+function dashboardReportData(tasks, dependency) {
+  const taskIds = new Set(tasks.map((task) => task.id));
+  const active = tasks.filter((task) => !isDone(task));
+  const completed = tasks.filter((task) =>
+    task.status === "已闭环" && dashboardDateInPeriod(task.status_since)
+  );
+  const cancelled = tasks.filter((task) =>
+    task.status === "已取消" && dashboardDateInPeriod(task.status_since)
+  );
+  const planned = tasks.filter((task) => dashboardDateInPeriod(task.end_date));
+  const plannedClosed = planned.filter((task) => task.status === "已闭环");
+  const overdueInPeriod = planned.filter((task) => !isDone(task) && task.end_date <= state.today);
+  const carriedOverdue = active.filter((task) =>
+    task.end_date && task.end_date < dashboardRangeStart()
+  );
+  const milestones = state.milestones.map((milestone) => {
+    if (state.filters.line && String(milestone.line_id) !== state.filters.line) return false;
+    if (!milestone.acceptance_task_ids?.length) return false;
+    if (taskIds.size !== state.tasks.length &&
+        !milestone.acceptance_task_ids.some((id) => taskIds.has(id))) return false;
+    const acceptanceTasks = milestone.acceptance_task_ids.map((id) => taskById(id));
+    if (!acceptanceTasks.every((task) => task && isDone(task))) return false;
+    const achievedAt = acceptanceTasks.map((task) => task.status_since).sort().pop();
+    return dashboardDateInPeriod(achievedAt) ?
+      { ...milestone, achieved_at: achievedAt } : false;
+  }).filter(Boolean);
+  const risk = tasks.filter((task) => taskHealth(task).risk);
+  const overdue = tasks.filter((task) => taskHealth(task).overdue);
+  const blocked = tasks.filter((task) => dependency.blockedIds.has(task.id));
+  return {
+    completed, cancelled, planned, plannedClosed, overdueInPeriod, carriedOverdue,
+    milestones, risk, overdue, blocked,
+  };
+}
+
+function dashboardCompactTaskButton(task) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "dashboard-report-item";
+  const main = document.createElement("span");
+  const name = document.createElement("strong");
+  name.textContent = task.name;
+  const meta = document.createElement("small");
+  meta.textContent = `${lineById(task.line_id)?.name || "未分组"} · ${task.owner || "无主"}`;
+  main.append(name, meta);
+  const date = document.createElement("time");
+  date.textContent = task.status === "已闭环" ? task.status_since : task.end_date;
+  button.append(main, date);
+  button.onclick = () => openTaskModal(task);
+  return button;
+}
+
+function dashboardReportGroup(title, items, emptyText, openAll) {
+  const group = document.createElement("div");
+  group.className = "dashboard-report-group";
+  const heading = document.createElement("div");
+  heading.className = "dashboard-report-group-heading";
+  const label = document.createElement("strong");
+  label.textContent = `${title}（${items.length}）`;
+  heading.appendChild(label);
+  if (items.length > 6 && openAll) {
+    const all = document.createElement("button");
+    all.type = "button";
+    all.textContent = "查看全部";
+    all.onclick = openAll;
+    heading.appendChild(all);
+  }
+  group.appendChild(heading);
+  if (!items.length) {
+    dashboardEmpty(group, emptyText);
+    return group;
+  }
+  const list = document.createElement("div");
+  list.className = "dashboard-report-list";
+  for (const item of items.slice(0, 6)) list.appendChild(dashboardCompactTaskButton(item));
+  group.appendChild(list);
+  return group;
+}
+
+function renderDashboardAchievements(report) {
+  const container = $("#dashboard-achievements");
+  container.innerHTML = "";
+  $("#dashboard-achievement-total").textContent =
+    `${dashboardPeriodLabel()} · 闭环 ${report.completed.length} 项`;
+  container.appendChild(dashboardReportGroup(
+    "闭环事务", report.completed, "本期暂无新闭环事务",
+    () => openTaskListModal("本期闭环事务", report.completed)
+  ));
+
+  const group = document.createElement("div");
+  group.className = "dashboard-report-group";
+  const heading = document.createElement("div");
+  heading.className = "dashboard-report-group-heading";
+  const title = document.createElement("strong");
+  title.textContent = `达成里程碑（${report.milestones.length}）`;
+  heading.appendChild(title);
+  group.appendChild(heading);
+  if (!report.milestones.length) {
+    dashboardEmpty(group, "本期计划里程碑暂无已达成项");
+  } else {
+    const list = document.createElement("div");
+    list.className = "dashboard-report-list";
+    for (const milestone of report.milestones.slice(0, 6)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "dashboard-report-item";
+      const main = document.createElement("span");
+      const name = document.createElement("strong");
+      name.textContent = milestone.name;
+      const meta = document.createElement("small");
+      meta.textContent = `${lineById(milestone.line_id)?.name || "未分组"} · ${milestone.acceptance_task_ids.length} 项验收条件`;
+      main.append(name, meta);
+      const date = document.createElement("time");
+      date.textContent = milestone.achieved_at;
+      button.append(main, date);
+      button.onclick = () => openMilestoneModal(milestone);
+      list.appendChild(button);
+    }
+    group.appendChild(list);
+  }
+  container.appendChild(group);
+}
+
+function dashboardVarianceMetric(label, value, detail, tasks, tone = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = `dashboard-variance-metric ${tone}`.trim();
+  const count = document.createElement("strong");
+  count.textContent = value;
+  const text = document.createElement("span");
+  text.textContent = label;
+  const note = document.createElement("small");
+  note.textContent = detail;
+  button.append(count, text, note);
+  button.onclick = () => openTaskListModal(label, tasks);
+  return button;
+}
+
+function renderDashboardVariance(report) {
+  const container = $("#dashboard-variance");
+  container.innerHTML = "";
+  const heading = document.createElement("div");
+  heading.className = "dashboard-panel-heading";
+  const title = document.createElement("h3");
+  title.textContent = "周期交付偏差";
+  const note = document.createElement("span");
+  note.textContent = "点击指标查看事务";
+  heading.append(title, note);
+  const metrics = document.createElement("div");
+  metrics.className = "dashboard-variance-metrics";
+  metrics.append(
+    dashboardVarianceMetric("本期计划到期", report.planned.length, "按结束日期统计", report.planned),
+    dashboardVarianceMetric("计划内已闭环", report.plannedClosed.length,
+      report.planned.length ? `达成率 ${Math.round(report.plannedClosed.length / report.planned.length * 100)}%` : "本期无计划到期", report.plannedClosed, "tone-good"),
+    dashboardVarianceMetric("本期到期未完成", report.overdueInPeriod.length, "尚未按期闭环", report.overdueInPeriod, "tone-danger"),
+    dashboardVarianceMetric("期初遗留超期", report.carriedOverdue.length, "结束日期早于本期", report.carriedOverdue, "tone-warning")
+  );
+  container.append(heading, metrics);
+  if (report.cancelled.length) {
+    const cancelled = document.createElement("button");
+    cancelled.type = "button";
+    cancelled.className = "dashboard-variance-note";
+    cancelled.textContent = `本期另有 ${report.cancelled.length} 项取消，点击查看范围变化`;
+    cancelled.onclick = () => openTaskListModal("本期取消事务", report.cancelled);
+    container.appendChild(cancelled);
+  }
+}
+
+function dashboardDeltaText(value, suffix = "") {
+  if (!value) return "较期初持平";
+  return `较期初${value > 0 ? "+" : ""}${value}${suffix}`;
+}
+
+function renderDashboardReportSummary(tasks, report, activeFilters) {
+  const done = tasks.filter(isDone).length;
+  const completion = tasks.length ? Math.round(done / tasks.length * 100) : 0;
+  const baseline = activeFilters ? null : dashboardBaselineSnapshot();
+  let comparison = "历史快照积累后可显示期初对比";
+  if (baseline) {
+    const baselineCompletion = baseline.total ? Math.round(baseline.done / baseline.total * 100) : 0;
+    comparison = `完成率${dashboardDeltaText(completion - baselineCompletion, "个百分点")}`;
+  } else if (state.dashboardRange === "all") {
+    comparison = "当前为项目全周期口径";
+  } else if (activeFilters) {
+    comparison = "筛选口径不进行历史环比";
+  }
+  $("#dashboard-report-summary").textContent =
+    `${dashboardPeriodLabel()}：本期闭环 ${report.completed.length} 项，` +
+    `计划到期 ${report.planned.length} 项；当前完成率 ${completion}%，${comparison}。` +
+    `现有风险 ${report.risk.length} 项、超期 ${report.overdue.length} 项、被阻塞 ${report.blocked.length} 项。`;
+  $("#dashboard-period-label").textContent = dashboardPeriodLabel();
+  $("#dashboard-risk-summary").textContent =
+    `风险 ${report.risk.length} · 超期 ${report.overdue.length} · 被阻塞 ${report.blocked.length}`;
+}
+
 function renderDashboard() {
   const tasks = filteredTasks();
   const dependency = dashboardDependencyAnalysis(tasks);
   const activeFilters = Object.values(state.filters).some(Boolean) || Boolean(state.quickFilter);
+  const report = dashboardReportData(tasks, dependency);
   $("#dashboard-workspace-name").textContent = state.currentWorkspace?.name || "当前项目空间";
   $("#dashboard-filter-context").textContent = activeFilters ?
     ` · 筛选后 ${tasks.length} / ${state.tasks.length} 个事务` : ` · ${tasks.length} 个事务`;
@@ -941,7 +1161,10 @@ function renderDashboard() {
   for (const button of document.querySelectorAll("#dashboard-range button")) {
     button.classList.toggle("active", button.dataset.range === state.dashboardRange);
   }
-  renderDashboardKpis(tasks, dependency);
+  renderDashboardReportSummary(tasks, report, activeFilters);
+  renderDashboardKpis(tasks, dependency, activeFilters);
+  renderDashboardAchievements(report);
+  renderDashboardVariance(report);
   renderDashboardProgress();
   renderDashboardBlockers(dependency);
   renderDashboardStatusTrend();
@@ -951,7 +1174,7 @@ function renderDashboard() {
   renderDashboardExceptions(tasks, dependency);
 }
 
-function renderDashboardKpis(tasks, dependency) {
+function renderDashboardKpis(tasks, dependency, activeFilters = false) {
   const container = $("#dashboard-kpis");
   container.innerHTML = "";
   const doneTasks = tasks.filter(isDone);
@@ -961,12 +1184,21 @@ function renderDashboardKpis(tasks, dependency) {
   const riskTasks = tasks.filter((task) => taskHealth(task).risk);
   const soonTasks = tasks.filter((task) => taskHealth(task).soon);
   const completion = tasks.length ? Math.round(doneTasks.length / tasks.length * 100) : 0;
+  const baseline = activeFilters ? null : dashboardBaselineSnapshot();
+  const completionDelta = baseline ? completion -
+    (baseline.total ? Math.round(baseline.done / baseline.total * 100) : 0) : null;
+  const detail = (defaultText, key, current, suffix = "") => baseline ?
+    `${dashboardDeltaText(current - baseline[key])}${suffix}` : defaultText;
   container.append(
-    dashboardMetric("完成率", `${completion}%`, `${doneTasks.length} / ${tasks.length}`, doneTasks, "tone-good"),
+    dashboardMetric("完成率", `${completion}%`, baseline ?
+      dashboardDeltaText(completionDelta, "个百分点") : `${doneTasks.length} / ${tasks.length}`, doneTasks, "tone-good"),
     dashboardMetric("未闭环", activeTasks.length, "仍需推进", activeTasks),
-    dashboardMetric("被阻塞", blockedTasks.length, "存在未完成前置", blockedTasks, "tone-danger"),
-    dashboardMetric("超期", overdueTasks.length, "已超过结束日期", overdueTasks, "tone-danger"),
-    dashboardMetric("风险", riskTasks.length, "当前状态为有风险", riskTasks, "tone-warning"),
+    dashboardMetric("被阻塞", blockedTasks.length,
+      detail("存在未完成前置", "blocked", blockedTasks.length), blockedTasks, "tone-danger"),
+    dashboardMetric("超期", overdueTasks.length,
+      detail("已超过结束日期", "overdue", overdueTasks.length), overdueTasks, "tone-danger"),
+    dashboardMetric("风险", riskTasks.length,
+      detail("当前状态为有风险", "risk", riskTasks.length), riskTasks, "tone-warning"),
     dashboardMetric("7 天内到期", soonTasks.length, "含今天", soonTasks, "tone-warning")
   );
 }
@@ -4916,6 +5148,7 @@ $("#btn-logout").onclick = async () => {
 function switchView(v) {
   closeTableCellPreview();
   if (v !== "canvas") dismissClusterFocus({ rerender: false });
+  if (v !== "dashboard" && state.dashboardMeeting) setDashboardMeeting(false);
   state.view = v;
   $("#btn-view-dashboard").classList.toggle("active", v === "dashboard");
   $("#btn-view-dashboard").setAttribute("aria-pressed", String(v === "dashboard"));
@@ -4933,6 +5166,19 @@ function switchView(v) {
 $("#btn-view-dashboard").onclick = () => switchView("dashboard");
 $("#btn-view-canvas").onclick = () => switchView("canvas");
 $("#btn-view-table").onclick = () => switchView("table");
+
+function setDashboardMeeting(enabled) {
+  state.dashboardMeeting = Boolean(enabled);
+  document.body.classList.toggle("dashboard-meeting-mode", state.dashboardMeeting);
+  const button = $("#btn-dashboard-meeting");
+  button.setAttribute("aria-pressed", String(state.dashboardMeeting));
+  button.textContent = state.dashboardMeeting ? "退出会议模式" : "会议模式";
+  if (state.dashboardMeeting) $("#dashboard-view").scrollTop = 0;
+}
+
+$("#btn-dashboard-meeting").onclick = () =>
+  setDashboardMeeting(!state.dashboardMeeting);
+$("#btn-dashboard-print").onclick = () => window.print();
 
 $("#btn-add-mainline").onclick = () => openLineModal(null, null);
 
@@ -5164,6 +5410,7 @@ $("#btn-clear-filters").onclick = () => {
 for (const button of document.querySelectorAll("#dashboard-range button")) {
   button.onclick = () => {
     state.dashboardRange = button.dataset.range;
+    savePrefs();
     if (state.view === "dashboard") renderDashboard();
   };
 }
@@ -5645,6 +5892,13 @@ document.addEventListener("keydown", async (e) => {
     else if (e.key === "ArrowRight") moveTaskImageViewer(1);
     else return;
     e.preventDefault();
+    return;
+  }
+  if (e.key === "Escape" && state.dashboardMeeting &&
+      $("#modal-mask").classList.contains("hidden")) {
+    e.preventDefault();
+    setDashboardMeeting(false);
+    $("#btn-dashboard-meeting").focus();
     return;
   }
   if (e.key === "Escape" && state.focusedClusterKey) {
