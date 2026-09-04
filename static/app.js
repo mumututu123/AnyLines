@@ -2055,13 +2055,35 @@ function renderTaskListTable(container, tasks, emptyText = "暂无符合条件�
     container.appendChild(tableWrap);
 }
 
-function openTaskListModal(title, tasks) {
-  const taskList = [...tasks].sort(compareTasks);
+function openTaskListModal(title, tasks, options = {}) {
+  const taskIds = tasks.map((task) => task.id);
+  const taskList = taskIds.map(taskById).filter(Boolean).sort(compareTasks);
   openModal(`${title}（${taskList.length}）`, (body) => {
     $("#modal").classList.add("modal-wide", "task-list-modal");
     $("#modal-ok").classList.add("hidden");
     $("#modal-cancel").textContent = "关闭";
-    renderTaskListTable(body, taskList);
+    renderTaskListTable(body, taskList, undefined, {
+      onTaskOpen: (task) => {
+        const listWrap = body.querySelector(".dashboard-task-list-wrap");
+        const listScrollTop = listWrap?.scrollTop || 0;
+        const listScrollLeft = listWrap?.scrollLeft || 0;
+        openTaskModal(task, task.line_id, false, {
+          onClosed: () => openTaskListModal(
+            title,
+            taskIds.map(taskById).filter(Boolean),
+            {
+              initialScrollTop: listScrollTop,
+              initialScrollLeft: listScrollLeft,
+            }
+          ),
+        });
+      },
+    });
+    const listWrap = body.querySelector(".dashboard-task-list-wrap");
+    if (listWrap) requestAnimationFrame(() => {
+      listWrap.scrollTop = options.initialScrollTop || 0;
+      listWrap.scrollLeft = options.initialScrollLeft || 0;
+    });
   }, async () => true);
 }
 
@@ -3326,7 +3348,7 @@ function renderCanvas() {
       const summaryY = lineY(line.id) - summaryHeight - 5 * unit;
       const group = svgEl("g", {
         class: "line-task-summary", role: "button", tabindex: 0,
-        "aria-label": `${line.name}：${summaryText}`,
+        "aria-label": `${line.name}：${summaryText}，点击查看事务列表`,
       }, summaries);
       svgEl("rect", {
         x: summaryX, y: summaryY, width: summaryWidth, height: summaryHeight,
@@ -3337,16 +3359,15 @@ function renderCanvas() {
         "font-size": 9 * unit,
       }, group);
       label.textContent = summaryText;
-      const selectLine = () => {
-        state.selectedLineId = line.id;
-        state.selectedTaskId = null;
-        render();
+      const openSummaryTasks = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openTaskListModal(`${line.name} · 事务`, lineTasks);
       };
-      group.addEventListener("click", selectLine);
+      group.addEventListener("click", openSummaryTasks);
       group.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          selectLine();
+          openSummaryTasks(event);
         }
       });
     }
@@ -3723,16 +3744,22 @@ function locateTask(id) {
   if (!t) return;
   state.selectedTaskId = id;
   state.selectedLineId = t.line_id;
+  // 概览密度会隐藏事务节点；定位时进入最小标准密度，确保目标节点可见且坐标可辨认。
+  if (canvasDensityLevel(state.zoom) === "overview") {
+    state.zoom = CANVAS_OVERVIEW_MAX_ZOOM;
+  }
   const sameDay = state.tasks.filter((x) => x.line_id === t.line_id && x.start_date === t.start_date);
   state.focusedClusterKey = sameDay.length > 1 ? clusterKey(t) : null;
   switchView("canvas");
-  setTimeout(() => scrollToCanvasTask(id), 0);
+  requestAnimationFrame(() => scrollToCanvasTask(id));
 }
 
 function scrollToCanvasTask(id) {
   const pos = state.canvasTaskPositions.get(id);
   if (!pos) return;
   centerCanvasPoint(pos.x, pos.y);
+  // 同日事务浮层是 HTML 覆盖层，需要在画布平移后按新的锚点屏幕坐标重新布局。
+  if (state.focusedClusterKey) renderCanvas();
   const focusedCard = document.querySelector(`.cluster-focus-card[data-task-id="${id}"]`);
   if (focusedCard) {
     focusedCard.focus({ preventScroll: true });
@@ -3752,7 +3779,7 @@ function emphasizeCanvasTask(id) {
     node.classList.remove("locate-emphasis");
   }, { once: true });
   // 减少动态效果偏好下不会触发 animationend，用兜底计时保持强调仍是短暂的。
-  setTimeout(() => node.classList.remove("locate-emphasis"), 1000);
+  setTimeout(() => node.classList.remove("locate-emphasis"), 3000);
 }
 
 function centerCanvasPoint(x, y = null) {

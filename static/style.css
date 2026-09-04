@@ -919,7 +919,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .task-node.locate-emphasis {
   transform-box: fill-box;
   transform-origin: center;
-  animation: task-locate-pulse .9s cubic-bezier(.2, .75, .35, 1);
+  animation: task-locate-pulse 1s cubic-bezier(.2, .75, .35, 1) 3;
 }
 @keyframes task-locate-pulse {
   0%, 100% { transform: scale(1); }

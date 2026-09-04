@@ -406,6 +406,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("CANVAS_OVERVIEW_MAX_ZOOM = 0.7", source)
         self.assertIn("CANVAS_DETAIL_MIN_ZOOM = 1.5", source)
         self.assertIn('class: "line-task-summary"', source)
+        self.assertIn('openTaskListModal(`${line.name} · 事务`, lineTasks)', source)
+        self.assertIn("点击查看事务列表", source)
         self.assertIn("const showDependencies = Boolean(dependencyFocus);", source)
         self.assertIn('["#opt-date", "date"]', source)
 
@@ -422,18 +424,38 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(".task-layer.semantic-overview", styles)
         self.assertNotIn(".task-node.health-overdue", styles)
 
+    def test_task_list_modal_restores_session_after_editing_task(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn("function openTaskListModal(title, tasks, options = {})", source)
+        self.assertIn("const taskIds = tasks.map((task) => task.id)", source)
+        self.assertIn("const listScrollTop = listWrap?.scrollTop || 0", source)
+        self.assertIn("const listScrollLeft = listWrap?.scrollLeft || 0", source)
+        self.assertIn("taskIds.map(taskById).filter(Boolean)", source)
+        self.assertIn("initialScrollTop: listScrollTop", source)
+        self.assertIn("initialScrollLeft: listScrollLeft", source)
+        self.assertIn("listWrap.scrollTop = options.initialScrollTop || 0", source)
+        self.assertIn("listWrap.scrollLeft = options.initialScrollLeft || 0", source)
+
     def test_located_canvas_task_uses_transient_pulse_emphasis(self):
         status, body = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)
         source = body.decode("utf-8")
+        self.assertIn('if (canvasDensityLevel(state.zoom) === "overview")', source)
+        self.assertIn("state.zoom = CANVAS_OVERVIEW_MAX_ZOOM", source)
+        self.assertIn("requestAnimationFrame(() => scrollToCanvasTask(id))", source)
+        self.assertIn("if (state.focusedClusterKey) renderCanvas()", source)
         self.assertIn("requestAnimationFrame(() => emphasizeCanvasTask(id))", source)
         self.assertIn('node.classList.add("locate-emphasis")', source)
         self.assertIn('node.addEventListener("animationend"', source)
+        self.assertIn('setTimeout(() => node.classList.remove("locate-emphasis"), 3000)', source)
 
         status, body = self.request("GET", "/static/style.css")
         self.assertEqual(status, 200)
         styles = body.decode("utf-8")
         self.assertIn("@keyframes task-locate-pulse", styles)
+        self.assertIn("animation: task-locate-pulse 1s cubic-bezier(.2, .75, .35, 1) 3", styles)
         self.assertIn("transform: scale(1.18)", styles)
         self.assertIn("@media (prefers-reduced-motion: reduce)", styles)
 
