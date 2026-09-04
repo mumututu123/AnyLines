@@ -35,54 +35,37 @@
   <div id="brand">Any<span>Line</span></div>
   <select id="workspace-select" title="切换项目空间" aria-label="项目空间"></select>
 
-  <button id="btn-view-dashboard" class="dashboard-entry" type="button"
-          title="项目看板" aria-label="打开项目看板" aria-pressed="false">
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
-         fill="none" stroke="currentColor" stroke-width="2"
-         stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 3v18h18"></path>
-      <path d="M8 17v-3"></path>
-      <path d="M13 17V5"></path>
-      <path d="M18 17V9"></path>
-    </svg>
-  </button>
-
-  <button id="btn-my-status" class="my-status-entry" type="button"
-          title="查看我的情况" aria-label="查看我的情况">
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
-         fill="none" stroke="currentColor" stroke-width="2.2"
-         stroke-linecap="round" stroke-linejoin="round">
-      <path d="m3.5 6 1.4 1.4L7.5 4.8"></path>
-      <path d="m3.5 12 1.4 1.4 2.6-2.6"></path>
-      <path d="m3.5 18 1.4 1.4 2.6-2.6"></path>
-      <path d="M10.5 6H21M10.5 12H21M10.5 18H21"></path>
-    </svg>
-    <span id="my-status-count" class="my-status-count" aria-hidden="true">0</span>
-  </button>
-
-  <nav id="view-switch">
-    <button id="btn-view-canvas" class="view-btn active">画布视图</button>
-    <button id="btn-view-table" class="view-btn">表格视图</button>
+  <nav id="view-switch" aria-label="视图切换">
+    <div class="quick-view-group">
+      <button id="btn-view-dashboard" class="view-btn icon-view-btn" type="button"
+              title="项目看板" aria-label="项目看板" aria-pressed="false">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
+             fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 3v18h18"></path>
+          <path d="M8 17v-3"></path>
+          <path d="M13 17V5"></path>
+          <path d="M18 17V9"></path>
+        </svg>
+      </button>
+      <button id="btn-my-status" class="my-status-entry" type="button"
+              title="查看我的待办" aria-label="查看我的待办">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"
+             fill="none" stroke="currentColor" stroke-width="2.2"
+             stroke-linecap="round" stroke-linejoin="round">
+          <path d="m3.5 6 1.4 1.4L7.5 4.8"></path>
+          <path d="m3.5 12 1.4 1.4 2.6-2.6"></path>
+          <path d="m3.5 18 1.4 1.4 2.6-2.6"></path>
+          <path d="M10.5 6H21M10.5 12H21M10.5 18H21"></path>
+        </svg>
+        <span id="my-status-count" class="my-status-count" aria-hidden="true">0</span>
+      </button>
+    </div>
+    <div class="mode-view-group">
+      <button id="btn-view-canvas" class="view-btn active">画布视图</button>
+      <button id="btn-view-table" class="view-btn">表格视图</button>
+    </div>
   </nav>
-
-  <div id="toolbar">
-    <button id="btn-add-mainline" title="新建一条主线">+ 主线</button>
-    <button id="btn-add-branch" disabled title="从选中的线拉出支线">+ 支线</button>
-    <button id="btn-add-task" disabled title="在选中的线上添加事务节点">+ 事务</button>
-    <button id="btn-add-milestone" disabled title="在选中的线上添加里程碑节点">+ 里程碑</button>
-    <button id="btn-merge" disabled title="将选中的支线反合回父线">反合</button>
-    <button id="btn-trash" class="toolbar-icon-button" type="button"
-            title="回收站：查看和恢复已删除内容" aria-label="回收站">
-      <svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true"
-           fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 6h18"></path>
-        <path d="M8 6V4h8v2"></path>
-        <path d="M19 6l-1 14H6L5 6"></path>
-        <path d="M10 11v5M14 11v5"></path>
-      </svg>
-    </button>
-  </div>
 
   <div id="account-bar">
     <button id="account-trigger" type="button" aria-haspopup="menu"
@@ -110,6 +93,9 @@
       <button id="btn-workspaces" class="admin-only" type="button" role="menuitem">项目管理</button>
       <button id="btn-members" class="admin-only" type="button" role="menuitem">成员管理</button>
       <button id="btn-statuses" type="button" role="menuitem">状态设置</button>
+      <button id="theme-toggle" type="button" role="menuitem" aria-label="切换到夜间模式"
+              aria-pressed="false">外观：夜间模式</button>
+      <button id="btn-trash" type="button" role="menuitem">回收站</button>
       <button id="btn-password" type="button" role="menuitem">修改密码</button>
       <button id="btn-logout" type="button" role="menuitem">退出</button>
     </div>
@@ -118,19 +104,9 @@
   </div>
 </header>
 
-<button id="theme-toggle" type="button" aria-label="切换到夜间模式"
-        aria-pressed="false" title="切换到夜间模式">
-  <svg class="theme-icon theme-icon-moon" viewBox="0 0 960 960" aria-hidden="true">
-    <path d="M480 840q-150 0-255-105T120 480q0-150 105-255t255-105q14 0 27.5 1t26.5 3q-41 29-65.5 75.5T444 300q0 90 63 153t153 63q55 0 101-24.5t75-65.5q2 13 3 26.5t1 27.5q0 150-105 255T480 840Z"></path>
-  </svg>
-  <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="12" r="4.25"></circle>
-    <path d="M12 2v2.25M12 19.75V22M4.93 4.93l1.6 1.6M17.47 17.47l1.6 1.6M2 12h2.25M19.75 12H22M4.93 19.07l1.6-1.6M17.47 6.53l1.6-1.6"></path>
-  </svg>
-</button>
-
 <section id="workbench" class="app-surface">
-  <div id="summary-strip">
+  <div class="workbench-main">
+    <div id="summary-strip" aria-label="事务概览">
     <button class="summary-card" data-quick="active">
       <span class="summary-num" id="sum-active">0</span><span>未闭环</span>
     </button>
@@ -140,33 +116,48 @@
     <button class="summary-card" data-quick="overdue">
       <span class="summary-num" id="sum-overdue">0</span><span>超期</span>
     </button>
-    <button class="summary-card" data-quick="soon">
-      <span class="summary-num" id="sum-soon">0</span><span>即将到期</span>
-    </button>
-    <button class="summary-card" data-quick="stale">
-      <span class="summary-num" id="sum-stale">0</span><span>停留过久</span>
-    </button>
+      <details id="summary-more">
+        <summary>更多指标</summary>
+        <div class="summary-more-menu">
+          <button class="summary-card" data-quick="soon">
+            <span class="summary-num" id="sum-soon">0</span><span>即将到期</span>
+          </button>
+          <button class="summary-card" data-quick="stale">
+            <span class="summary-num" id="sum-stale">0</span><span>停留过久</span>
+          </button>
+        </div>
+      </details>
+    </div>
+
+    <div id="filters">
+      <div class="filter-primary-row">
+        <input id="filter-q" type="search" placeholder="搜索事务、内容、目标、下一步">
+        <button id="btn-toggle-filters" type="button" aria-expanded="false"
+                aria-controls="filter-panel">筛选</button>
+        <div id="active-filter-chips" aria-live="polite"></div>
+        <button id="btn-clear-filters" class="hidden">清空</button>
+      </div>
+      <div id="filter-panel" class="hidden">
+        <select id="filter-line"><option value="">全部线</option></select>
+        <select id="filter-owner"><option value="">全部责任人</option></select>
+        <select id="filter-status"><option value="">全部状态</option></select>
+        <select id="filter-priority"><option value="">全部优先级</option></select>
+        <select id="filter-due">
+          <option value="">全部日期</option>
+          <option value="overdue">已超期</option>
+          <option value="soon">7 天内到期</option>
+          <option value="none">无结束日期</option>
+        </select>
+        <select id="sort-tasks">
+          <option value="start_asc">起始日期升序</option>
+          <option value="due_asc">结束日期升序</option>
+          <option value="priority_desc">优先级优先</option>
+          <option value="updated_desc">最近更新</option>
+        </select>
+      </div>
+    </div>
   </div>
-  <div id="filters">
-    <input id="filter-q" type="search" placeholder="搜索事务、内容、目标、下一步">
-    <select id="filter-line"><option value="">全部线</option></select>
-    <select id="filter-owner"><option value="">全部责任人</option></select>
-    <select id="filter-status"><option value="">全部状态</option></select>
-    <select id="filter-priority"><option value="">全部优先级</option></select>
-    <select id="filter-due">
-      <option value="">全部日期</option>
-      <option value="overdue">已超期</option>
-      <option value="soon">7 天内到期</option>
-      <option value="none">无结束日期</option>
-    </select>
-    <select id="sort-tasks">
-      <option value="start_asc">起始日期升序</option>
-      <option value="due_asc">结束日期升序</option>
-      <option value="priority_desc">优先级优先</option>
-      <option value="updated_desc">最近更新</option>
-    </select>
-    <button id="btn-clear-filters">清空</button>
-  </div>
+
 </section>
 
 <!-- 项目看板 -->
@@ -293,20 +284,23 @@
 <!-- 画布视图 -->
 <main id="canvas-view" class="app-surface hidden">
   <aside id="canvas-opts">
-    <div class="opt-title">节点标签显示</div>
-    <button id="btn-toggle-labels" title="一键显示/隐藏所有节点文字信息">隐藏全部标签</button>
     <button id="btn-today" title="滚动到今天所在位置">聚焦今天</button>
     <button id="btn-fit" title="重置缩放并回到画布左上">适应画布</button>
     <button id="btn-toggle-children" disabled title="折叠或展开选中线的子支线">折叠子支线</button>
-    <div class="canvas-density" aria-live="polite">
-      <span>信息密度</span><strong id="canvas-density-label">标准</strong>
-    </div>
-    <label><input type="checkbox" id="opt-name" checked> 事务名</label>
-    <label><input type="checkbox" id="opt-status" checked> 进展状态</label>
-    <label><input type="checkbox" id="opt-dur" checked> 状态停留时长</label>
-    <label><input type="checkbox" id="opt-owner" checked> 责任人</label>
-    <label><input type="checkbox" id="opt-date" checked> 起止日期</label>
-    <div class="opt-hint">缩小为线路概览，标准倍率显示名称和状态，放大后显示完整信息与依赖；单击重叠节点顶层可临时聚焦，单击事务可聚焦依赖链</div>
+    <details id="canvas-display-settings">
+      <summary>显示设置</summary>
+      <div class="canvas-settings-content">
+        <button id="btn-toggle-labels" title="一键显示/隐藏所有节点文字信息">隐藏全部标签</button>
+        <div class="canvas-density" aria-live="polite">
+          <span>信息密度</span><strong id="canvas-density-label">标准</strong>
+        </div>
+        <label><input type="checkbox" id="opt-name" checked> 事务名</label>
+        <label><input type="checkbox" id="opt-status" checked> 进展状态</label>
+        <label><input type="checkbox" id="opt-dur" checked> 状态停留时长</label>
+        <label><input type="checkbox" id="opt-owner" checked> 责任人</label>
+        <label><input type="checkbox" id="opt-date" checked> 起止日期</label>
+      </div>
+    </details>
     <section id="dependency-focus-panel" class="hidden" aria-labelledby="dependency-focus-title">
       <div class="dependency-focus-heading">
         <div id="dependency-focus-title" class="opt-title">依赖聚焦</div>
@@ -324,9 +318,11 @@
         <div id="dependency-focus-affected" class="dependency-focus-tasks"></div>
       </div>
     </section>
-    <details id="canvas-legend">
-      <summary>画布图例</summary>
-      <div class="canvas-legend-content">
+    <details id="canvas-help">
+      <summary>图例与快捷键</summary>
+      <div class="canvas-help-content">
+      <section id="canvas-legend" aria-label="画布图例">
+        <div class="canvas-legend-content">
         <div id="canvas-status-legend"></div>
         <div class="canvas-legend-row"><i class="legend-focus-selected"></i><span>当前事务</span></div>
         <div class="canvas-legend-row"><i class="legend-focus-upstream"></i><span>前置链</span></div>
@@ -336,14 +332,14 @@
         <div class="canvas-legend-row"><i class="legend-alert legend-alert-soon">临</i><span>即将到期</span></div>
         <div class="canvas-legend-row"><i class="legend-alert legend-alert-stale">久</i><span>状态停留过久</span></div>
         <div class="canvas-legend-row"><i class="legend-dependency"></i><span>箭头指向前置事务</span></div>
-      </div>
-    </details>
-    <section id="canvas-shortcuts" aria-labelledby="canvas-shortcuts-title">
+        </div>
+      </section>
+      <section id="canvas-shortcuts" aria-labelledby="canvas-shortcuts-title">
       <div id="canvas-shortcuts-title" class="opt-title">画布快捷键</div>
       <dl class="shortcut-list">
         <div><dt><kbd>Ctrl+Z</kbd></dt><dd>撤销</dd></div>
         <div><dt><kbd>Ctrl+R</kbd></dt><dd>恢复</dd></div>
-        <div><dt><kbd>Ctrl+M</kbd></dt><dd>创建里程碑</dd></div>
+        <div><dt><kbd>M</kbd></dt><dd>创建里程碑</dd></div>
         <div><dt><kbd>H</kbd></dt><dd>聚焦今天</dd></div>
         <div><dt><kbd>B</kbd></dt><dd>创建支线</dd></div>
         <div>
@@ -353,12 +349,22 @@
         <div><dt><kbd>Delete</kbd></dt><dd>删除选中线</dd></div>
         <div><dt><kbd>Ctrl+滚轮</kbd></dt><dd>缩放</dd></div>
       </dl>
-    </section>
-    <div class="opt-hint">左键长按拖动：平移画布</div>
+      </section>
+      <div class="opt-hint">缩放可切换信息密度；单击事务聚焦依赖链；左键长按拖动画布。</div>
+      </div>
+    </details>
   </aside>
   <div id="sel-info" role="status" aria-live="polite">未选中任何线</div>
   <div id="canvas-wrap">
     <svg id="graph" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+  <div id="canvas-context-menu" class="hidden" role="menu"
+       aria-label="画布操作">
+    <button id="context-add-mainline" type="button" role="menuitem">创建主线</button>
+    <button id="context-add-branch" type="button" role="menuitem">创建支线</button>
+    <button id="context-add-task" type="button" role="menuitem">创建事务</button>
+    <button id="context-add-milestone" type="button" role="menuitem">创建里程碑</button>
+    <button id="context-merge-line" type="button" role="menuitem">反合母线</button>
   </div>
 </main>
 
@@ -366,15 +372,24 @@
 <main id="table-view" class="app-surface hidden">
   <div id="table-bar">
     <button id="btn-table-add">+ 新增事务</button>
-    <button id="btn-import-data" title="从 Excel 模板批量创建主线、支线和事务">导入数据</button>
-    <input id="data-import-file" class="hidden" type="file"
-           accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
-    <button id="btn-export-all">导出全部数据</button>
-    <button id="btn-export-selected" disabled>导出选中事务</button>
-    <select id="bulk-status"><option value="">批量改状态</option></select>
-    <select id="bulk-owner"><option value="">批量改责任人</option></select>
-    <select id="bulk-priority"><option value="">批量改优先级</option></select>
-    <button id="btn-bulk-delete" class="danger">批量删除</button>
+    <button id="btn-table-columns" type="button" aria-pressed="false">列设置</button>
+    <details id="table-data-actions">
+      <summary>导入 / 导出</summary>
+      <div>
+        <button id="btn-import-data" title="从 Excel 模板批量创建主线、支线和事务">导入数据</button>
+        <input id="data-import-file" class="hidden" type="file"
+               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+        <button id="btn-export-all">导出全部数据</button>
+      </div>
+    </details>
+    <div id="table-bulk-actions" class="hidden">
+      <span id="table-selected-count"></span>
+      <button id="btn-export-selected" disabled>导出选中事务</button>
+      <select id="bulk-status"><option value="">批量改状态</option></select>
+      <select id="bulk-owner"><option value="">批量改责任人</option></select>
+      <select id="bulk-priority"><option value="">批量改优先级</option></select>
+      <button id="btn-bulk-delete" class="danger">批量删除</button>
+    </div>
     <span id="table-edit-hint" class="opt-hint">单击单元格可查看完整内容，修改后自动保存</span>
   </div>
   <div id="table-wrap">

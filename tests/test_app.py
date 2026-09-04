@@ -261,19 +261,16 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(".my-status-tabs {", styles)
         self.assertIn(".dashboard-task-list-wrap.my-todo-list-wrap {", styles)
 
-    def test_canvas_merge_uses_rounded_polyline(self):
+    def test_canvas_merge_uses_latest_task_end_and_vertical_line(self):
         status, body = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)
         source = body.decode("utf-8")
 
-        self.assertIn(
-            "const horizontalDistance = verticalDistance / BRANCH_SLOPE;",
-            source,
-        )
-        self.assertIn(
-            "` Q ${corner.x} ${corner.y}, ${diagonalStart.x} ${diagonalStart.y} `",
-            source,
-        )
+        self.assertIn("function latestLineTaskEndDate(line)", source)
+        self.assertIn("const mergeDate = latestLineTaskEndDate(line);", source)
+        self.assertIn("const end = { x: horizontalEnd.x, y: parentY };", source)
+        self.assertIn("d += ` L ${merge.end.x} ${merge.end.y}`;", source)
+        self.assertIn("const childMergeDate = latestLineTaskEndDate(child);", source)
         self.assertIn(
             "const lineHeadX = parent ? geometry.horizontalStart.x : x1;",
             source,
@@ -281,9 +278,33 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('"text-anchor": "end"', source)
         self.assertIn("lbl.textContent = line.name", source)
         self.assertIn("cx: merge.end.x, cy: merge.end.y", source)
-        self.assertNotIn("d += ` C ${mx + 24}", source)
+        self.assertNotIn("BRANCH_SLOPE", source)
         self.assertIn('e.key === "Delete"', source)
         self.assertIn('key === "z"', source)
+
+    def test_nested_branch_starts_on_parent_at_its_fork_date(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn("x: x(line.fork_date)", source)
+        self.assertIn("y: lineY(parent.id)", source)
+        self.assertIn("function lineGeometry(line)", source)
+        self.assertIn("const horizontalStart = { x: start.x, y };", source)
+        self.assertIn(
+            "`M ${start.x} ${start.y} L ${horizontalStart.x} ${horizontalStart.y} `",
+            source,
+        )
+        self.assertNotIn("connectorBend", source)
+        self.assertIn(
+            "state.lines.filter((candidate) => candidate.parent_id === line.id)",
+            source,
+        )
+        self.assertNotIn(
+            "(parentGeometry.start.x + parentGeometry.diagonalEnd.x) / 2",
+            source,
+        )
+        self.assertNotIn("pointOnLineAtX", source)
 
     def test_canvas_shortcuts_include_redo_today_branch_and_task(self):
         status, body = self.request("GET", "/static/app.js")
@@ -292,14 +313,15 @@ class AnyLineHttpTests(unittest.TestCase):
 
         self.assertIn('key === "r"', source)
         self.assertIn('await api("/api/redo", "POST")', source)
-        self.assertIn('key === "m"', source)
-        self.assertIn('createMilestoneOnSelectedLine();', source)
+        self.assertIn(
+            'else if (key === "m") createMilestoneOnSelectedLine();', source
+        )
         self.assertIn('if (key === "h") goToToday();', source)
         self.assertIn(
             'else if (key === "b") createBranchOnSelectedLine();', source
         )
         self.assertIn('else createTaskOnSelectedLine();', source)
-        self.assertIn('["h", "b", "a", "n"].includes(key)', source)
+        self.assertIn('["h", "b", "m", "a", "n"].includes(key)', source)
         self.assertIn('state.view !== "canvas"', source)
         self.assertIn('target.matches("input, textarea, select")', source)
         self.assertIn('!$("#modal-mask").classList.contains("hidden")', source)
@@ -308,7 +330,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         markup = body.decode("utf-8")
         self.assertIn('id="canvas-shortcuts"', markup)
-        for key in ("Ctrl+Z", "Ctrl+R", "Ctrl+M", "H", "B", "A", "N", "Delete", "Ctrl+滚轮"):
+        for key in ("Ctrl+Z", "Ctrl+R", "M", "H", "B", "A", "N", "Delete", "Ctrl+滚轮"):
             with self.subTest(shortcut_hint=key):
                 self.assertIn(f"<kbd>{key}</kbd>", markup)
 
@@ -765,9 +787,12 @@ class AnyLineHttpTests(unittest.TestCase):
 
         status, page = self.request("GET", "/")
         self.assertEqual(status, 200)
-        self.assertIn(b'id="btn-add-milestone"', page)
+        self.assertIn(b'id="canvas-context-menu"', page)
+        self.assertIn(b'id="context-add-milestone"', page)
         _, script = self.request("GET", "/static/app.js")
         source = script.decode("utf-8")
+        self.assertIn('wrap.addEventListener("contextmenu"', source)
+        self.assertIn("function openCanvasContextMenu(", source)
         self.assertIn("function openMilestoneModal(", source)
         self.assertIn("function milestoneModalDraft(body)", source)
         self.assertIn("Number(selected.has(b.id)) - Number(selected.has(a.id))", source)

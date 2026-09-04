@@ -78,6 +78,7 @@ function applyTheme(theme, { persist = false } = {}) {
     toggle.setAttribute("aria-label", label);
     toggle.setAttribute("title", label);
     toggle.setAttribute("aria-pressed", String(isDark));
+    toggle.textContent = isDark ? "外观：日间模式" : "外观：夜间模式";
   }
   if (persist) {
     try { localStorage.setItem(THEME_KEY, resolved); } catch (_error) { /* 忽略存储限制 */ }
@@ -539,6 +540,7 @@ async function reload() {
 function render() {
   renderToolbar();
   renderSummary();
+  renderActiveFilters();
   if (state.view === "dashboard") renderDashboard();
   else if (state.view === "canvas") renderCanvas();
   else renderTable();
@@ -740,18 +742,13 @@ function renderMyNotificationsPanel(container, options = {}) {
 }
 
 function renderToolbar() {
-  const archived = isWorkspaceArchived();
+  closeCanvasContextMenu();
   const sel = state.selectedLineId ? lineById(state.selectedLineId) : null;
   const selectedTask = state.selectedTaskId ? taskById(state.selectedTaskId) : null;
   const dependencyFocus = selectedTask ? taskDependencyFocus(selectedTask.id) : null;
   const children = sel ? state.lines.filter((line) => line.parent_id === sel.id) : [];
   const allChildrenHidden = children.length > 0 &&
     children.every((line) => state.hiddenBranchIds.has(line.id));
-  $("#btn-add-mainline").disabled = archived;
-  $("#btn-add-branch").disabled = archived || !sel;
-  $("#btn-add-task").disabled = archived || !sel;
-  $("#btn-add-milestone").disabled = archived || !sel;
-  $("#btn-merge").disabled = archived || !sel || sel.parent_id === null || sel.merge_date;
   $("#btn-toggle-children").disabled = !children.length;
   $("#btn-toggle-children").textContent =
     allChildrenHidden ? "展开子支线" : "折叠子支线";
@@ -759,10 +756,11 @@ function renderToolbar() {
     ? `已选中事务：${selectedTask.name} · 前置链 ${dependencyFocus.upstream.size} · ` +
       `影响链 ${dependencyFocus.downstream.size}` +
       (dependencyFocus.blockers.length ?
-        ` · 当前被 ${dependencyFocus.blockers.map((task) => task.name).join("、")} 阻塞` : "")
+        ` · 当前被 ${dependencyFocus.blockers.map((task) => task.name).join("、")} 阻塞` : "") +
+      " · 右键打开操作"
     : (sel
-      ? `已选中：${sel.name}${sel.parent_id === null ? "（主线）" : "（支线）"}`
-      : "未选中任何对象");
+      ? `已选中：${sel.name}${sel.parent_id === null ? "（主线）" : "（支线）"} · 右键打开操作`
+      : "未选中任何对象 · 右键画布创建主线");
   renderDependencyFocusPanel(dependencyFocus);
   renderCanvasLegend();
   renderMyStatusEntry();
@@ -798,6 +796,47 @@ function renderFilterControls() {
   $("#sort-tasks").value = state.sort;
   decorateStatusSelect($("#filter-status"));
   decorateStatusSelect($("#bulk-status"));
+  renderActiveFilters();
+}
+
+function renderActiveFilters() {
+  const host = $("#active-filter-chips");
+  if (!host) return;
+  host.innerHTML = "";
+  const optionLabel = (selector, value) => {
+    const option = [...document.querySelector(selector).options]
+      .find((candidate) => candidate.value === String(value));
+    return option?.textContent || value;
+  };
+  const descriptors = [
+    ["line", "线", (value) => optionLabel("#filter-line", value)],
+    ["owner", "责任人", (value) => optionLabel("#filter-owner", value)],
+    ["status", "状态", (value) => value],
+    ["priority", "优先级", (value) => value],
+    ["due", "日期", (value) => optionLabel("#filter-due", value)],
+  ];
+  for (const [key, prefix, label] of descriptors) {
+    const value = state.filters[key];
+    if (!value) continue;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "filter-chip";
+    chip.textContent = `${prefix}：${label(value)} ×`;
+    chip.title = `移除${prefix}筛选`;
+    chip.onclick = () => {
+      state.filters[key] = "";
+      state.selectedTaskIds.clear();
+      renderFilterControls();
+      render();
+    };
+    host.appendChild(chip);
+  }
+  const hasFilters = Boolean(
+    state.filters.q || descriptors.some(([key]) => state.filters[key]) || state.quickFilter
+  );
+  $("#btn-clear-filters").classList.toggle("hidden", !hasFilters);
+  const filterCount = descriptors.filter(([key]) => state.filters[key]).length;
+  $("#btn-toggle-filters").textContent = filterCount ? `筛选 (${filterCount})` : "筛选";
 }
 
 function renderSummary() {
@@ -2241,17 +2280,31 @@ function assignRows(includeHidden = false) {
   return rows;
 }
 
+function latestLineTaskEndDate(line) {
+  let latest = line.fork_date;
+  for (const task of state.tasks.filter((candidate) => candidate.line_id === line.id)) {
+    const taskEnd = task.end_date || task.start_date;
+    if (taskEnd && taskEnd > latest) latest = taskEnd;
+  }
+  return latest;
+}
+
 /* 线的有效时间范围（含其事务与子线） */
 function lineEnd(line) {
   let end = line.merge_date || state.today;
-  for (const t of state.tasks.filter((t) => t.line_id === line.id)) {
-    if (t.end_date && t.end_date > end) end = t.end_date;
-    if (t.start_date > end) end = t.start_date;
-  }
+  const ownTaskEnd = latestLineTaskEndDate(line);
+  if (ownTaskEnd > end) end = ownTaskEnd;
   for (const milestone of state.milestones.filter(
     (candidate) => candidate.line_id === line.id
   )) {
     if (milestone.milestone_date > end) end = milestone.milestone_date;
+  }
+  for (const child of state.lines.filter((candidate) => candidate.parent_id === line.id)) {
+    if (child.fork_date > end) end = child.fork_date;
+    if (child.merge_date) {
+      const childMergeDate = latestLineTaskEndDate(child);
+      if (childMergeDate > end) end = childMergeDate;
+    }
   }
   return end;
 }
@@ -2535,7 +2588,7 @@ function renderCanvas() {
     svg.setAttribute("width", Math.max(800 * z, wrap.clientWidth));
     svg.setAttribute("height", Math.max(400 * z, wrap.clientHeight));
     const t = svgEl("text", { x: 60, y: 80, fill: "#8c959f", "font-size": 15 }, svg);
-    t.textContent = "还没有任何线，点击左上角「+ 主线」开始。";
+    t.textContent = "还没有任何线，在画布空白处右键创建主线。";
     return;
   }
 
@@ -2595,24 +2648,14 @@ function renderCanvas() {
   }
   const lineY = (id) => rowCenter.get(id);
 
-  const BRANCH_SLOPE = Math.tan(70 * Math.PI / 180);  // |dy / dx|，统一为 70°。
-  const BRANCH_CORNER_R = 6;
   const lineGeometryCache = new Map();
   const mergeGeometryCache = new Map();
 
-  /* 同日创建的嵌套支线从父支线可见斜线段的中点继续分叉。 */
-  const branchStartPoint = (line, parent) => {
-    if (parent.parent_id !== null && line.fork_date === parent.fork_date) {
-      const parentGeometry = lineGeometry(parent);
-      if (parentGeometry.diagonalEnd) {
-        return {
-          x: (parentGeometry.start.x + parentGeometry.diagonalEnd.x) / 2,
-          y: (parentGeometry.start.y + parentGeometry.diagonalEnd.y) / 2,
-        };
-      }
-    }
-    return { x: x(line.fork_date), y: lineY(parent.id) };
-  };
+  /* 子支线始终从父线的水平泳道分叉，横坐标严格对应子支线创建日期。 */
+  const branchStartPoint = (line, parent) => ({
+    x: x(line.fork_date),
+    y: lineY(parent.id),
+  });
 
   function lineGeometry(line) {
     if (lineGeometryCache.has(line.id)) return lineGeometryCache.get(line.id);
@@ -2622,25 +2665,15 @@ function renderCanvas() {
     if (!parent) {
       const point = { x: x(line.fork_date), y };
       const geometry = {
-        start: point, diagonalEnd: null, corner: null, horizontalStart: point,
+        start: point, horizontalStart: point,
       };
       lineGeometryCache.set(line.id, geometry);
       return geometry;
     }
 
     const start = branchStartPoint(line, parent);
-    const verticalDistance = Math.abs(y - start.y);
-    const corner = { x: start.x + verticalDistance / BRANCH_SLOPE, y };
-    const dx = corner.x - start.x;
-    const dy = corner.y - start.y;
-    const diagonalLength = Math.hypot(dx, dy);
-    const trim = Math.min(BRANCH_CORNER_R, diagonalLength / 3);
-    const diagonalEnd = {
-      x: corner.x - dx / diagonalLength * trim,
-      y: corner.y - dy / diagonalLength * trim,
-    };
-    const horizontalStart = { x: corner.x + BRANCH_CORNER_R, y };
-    const geometry = { start, diagonalEnd, corner, horizontalStart };
+    const horizontalStart = { x: start.x, y };
+    const geometry = { start, horizontalStart };
     lineGeometryCache.set(line.id, geometry);
     return geometry;
   }
@@ -2656,24 +2689,13 @@ function renderCanvas() {
 
     const y = lineY(line.id);
     const parentY = lineY(parent.id);
-    const lineStartX = lineGeometry(line).horizontalStart.x;
+    const mergeDate = latestLineTaskEndDate(line);
     const horizontalEnd = {
-      x: Math.max(x(lineEnd(line)), lineStartX + 6),
+      x: x(mergeDate),
       y,
     };
-    const corner = { x: horizontalEnd.x + BRANCH_CORNER_R, y };
-    const verticalDistance = Math.abs(parentY - y);
-    const horizontalDistance = verticalDistance / BRANCH_SLOPE;
-    const end = { x: corner.x + horizontalDistance, y: parentY };
-    const dx = end.x - corner.x;
-    const dy = end.y - corner.y;
-    const diagonalLength = Math.hypot(dx, dy);
-    const trim = Math.min(BRANCH_CORNER_R, diagonalLength / 3);
-    const diagonalStart = {
-      x: corner.x + dx / diagonalLength * trim,
-      y: corner.y + dy / diagonalLength * trim,
-    };
-    const geometry = { horizontalEnd, corner, diagonalStart, end };
+    const end = { x: horizontalEnd.x, y: parentY };
+    const geometry = { horizontalEnd, end, mergeDate };
     mergeGeometryCache.set(line.id, geometry);
     return geometry;
   }
@@ -2777,26 +2799,22 @@ function renderCanvas() {
     const parentLine = line.parent_id !== null ? lineById(line.parent_id) : null;
     const parent = parentLine && rows.has(parentLine.id) ? parentLine : null;
     const merge = mergeGeometry(line);
-    const x2 = Math.max(
-      merge ? merge.horizontalEnd.x : x(endDate),
-      parent ? geometry.horizontalStart.x + 6 : x1 + 30
+    const x2 = merge ? merge.horizontalEnd.x : Math.max(
+      x(endDate), parent ? geometry.horizontalStart.x + 6 : x1 + 30
     );
 
     let d = "";
     if (parent) {
-      /* 从父线斜向拉出，并用二次曲线平滑过渡到水平线。 */
-      const { start, diagonalEnd, corner, horizontalStart } = geometry;
-      d += `M ${start.x} ${start.y} L ${diagonalEnd.x} ${diagonalEnd.y} ` +
-        `Q ${corner.x} ${corner.y}, ${horizontalStart.x} ${horizontalStart.y} `;
+      /* 垂直连接线只表达层级，两端保持在同一日期横坐标。 */
+      const { start, horizontalStart } = geometry;
+      d += `M ${start.x} ${start.y} L ${horizontalStart.x} ${horizontalStart.y} `;
       d += `L ${x2} ${y}`;
     } else {
       d = `M ${x1} ${y} L ${x2} ${y}`;
     }
-    /* 反合使用与分叉一致的圆角斜向折线。 */
+    /* 反合点按子线最晚事务结束日期定位，并垂直连接到母线。 */
     if (merge) {
-      const { corner, diagonalStart, end } = merge;
-      d += ` Q ${corner.x} ${corner.y}, ${diagonalStart.x} ${diagonalStart.y} ` +
-        `L ${end.x} ${end.y}`;
+      d += ` L ${merge.end.x} ${merge.end.y}`;
     }
 
     const path = svgEl("path", {
@@ -3500,6 +3518,8 @@ function renderTable() {
   exportSelected.disabled = state.selectedTaskIds.size === 0;
   exportSelected.textContent = state.selectedTaskIds.size ?
     `导出选中事务 (${state.selectedTaskIds.size})` : "导出选中事务";
+  $("#table-bulk-actions").classList.toggle("hidden", state.selectedTaskIds.size === 0);
+  $("#table-selected-count").textContent = `已选 ${state.selectedTaskIds.size} 项`;
   $("#btn-table-add").disabled = archived;
   $("#btn-import-data").disabled = archived;
   $("#bulk-status").disabled = archived;
@@ -5433,6 +5453,11 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeTableCellPreview();
+  if (event.key === "Escape") {
+    closeCanvasContextMenu();
+    $("#filter-panel").classList.add("hidden");
+    $("#btn-toggle-filters").setAttribute("aria-expanded", "false");
+  }
   if (event.key === "Escape" && !$("#account-menu").classList.contains("hidden")) {
     closeAccountMenu({ restoreFocus: true });
   }
@@ -5457,6 +5482,7 @@ $("#btn-logout").onclick = async () => {
 
 function switchView(v) {
   closeTableCellPreview();
+  closeCanvasContextMenu();
   if (v !== "canvas") dismissClusterFocus({ rerender: false });
   if (v !== "dashboard" && state.dashboardMeeting) setDashboardMeeting(false);
   state.view = v;
@@ -5490,8 +5516,6 @@ $("#btn-dashboard-meeting").onclick = () =>
   setDashboardMeeting(!state.dashboardMeeting);
 $("#btn-dashboard-print").onclick = () => window.print();
 
-$("#btn-add-mainline").onclick = () => openLineModal(null, null);
-
 function createBranchOnSelectedLine() {
   if (!ensureWorkspaceEditable()) return;
   if (!lineById(state.selectedLineId)) {
@@ -5520,27 +5544,26 @@ function createMilestoneOnSelectedLine() {
   openMilestoneModal(null, line.id);
 }
 
-$("#btn-add-branch").onclick = createBranchOnSelectedLine;
-$("#btn-add-task").onclick = createTaskOnSelectedLine;
-$("#btn-add-milestone").onclick = createMilestoneOnSelectedLine;
-
-$("#btn-merge").onclick = () => {
+function mergeSelectedLine() {
+  if (!ensureWorkspaceEditable()) return;
   const line = lineById(state.selectedLineId);
-  if (!line) return;
+  if (!line || line.parent_id === null || line.merge_date) return;
+  const mergeDate = latestLineTaskEndDate(line);
+  const hasTasks = state.tasks.some((task) => task.line_id === line.id);
   openModal("反合支线到父线", (body) => {
-    body._date = field(body, "反合日期", input("date", state.today));
     const hint = document.createElement("div");
     hint.className = "opt-hint";
-    hint.textContent = `将「${line.name}」反合回「${lineById(line.parent_id).name}」`;
+    hint.textContent = `将「${line.name}」反合回「${lineById(line.parent_id).name}」。` +
+      `反合位置：${mergeDate}（${hasTasks ? "该支线最晚事务结束日期" : "该支线暂无事务，使用创建日期"}）。`;
     body.appendChild(hint);
   }, async () => {
     await api(`/api/lines/${line.id}`, "PATCH", {
-      merge_date: $("#modal-body")._date.value || state.today,
+      merge_date: mergeDate,
     });
     toast("反合成功");
     reload();
   });
-};
+}
 
 async function deleteSelectedLine() {
   if (!ensureWorkspaceEditable()) return;
@@ -5567,6 +5590,14 @@ $("#btn-table-add").onclick = () => {
   if (!state.lines.length) { toast("请先创建一条主线"); return; }
   const lineId = state.selectedLineId || state.lines[0].id;
   openTaskModal(null, lineId, true);
+};
+
+$("#btn-table-columns").onclick = () => {
+  const table = $("#task-table");
+  const showAll = table.classList.toggle("show-all-columns");
+  $("#btn-table-columns").setAttribute("aria-pressed", String(showAll));
+  $("#btn-table-columns").textContent = showAll ? "精简列" : "列设置";
+  closeTableCellPreview();
 };
 
 $("#btn-statuses").onclick = () => {
@@ -5638,6 +5669,7 @@ $("#btn-statuses").onclick = () => {
 };
 
 $("#btn-trash").onclick = async () => {
+  closeAccountMenu();
   const trash = await api("/api/trash");
   openModal("回收站", (body) => {
     const archived = isWorkspaceArchived();
@@ -5700,6 +5732,14 @@ function setFilter(key, value) {
 }
 
 $("#filter-q").oninput = (e) => setFilter("q", e.target.value);
+$("#btn-toggle-filters").onclick = (event) => {
+  event.stopPropagation();
+  const panel = $("#filter-panel");
+  const open = panel.classList.toggle("hidden");
+  $("#btn-toggle-filters").setAttribute("aria-expanded", String(!open));
+  closeCanvasContextMenu();
+};
+$("#filter-panel").onclick = (event) => event.stopPropagation();
 $("#filter-line").onchange = (e) => setFilter("line", e.target.value);
 $("#filter-owner").onchange = (e) => setFilter("owner", e.target.value);
 $("#filter-status").onchange = (e) => setFilter("status", e.target.value);
@@ -5735,6 +5775,58 @@ for (const btn of document.querySelectorAll(".summary-card")) {
     render();
   };
 }
+
+function closeCanvasContextMenu() {
+  $("#canvas-context-menu")?.classList.add("hidden");
+}
+
+function openCanvasContextMenu(clientX, clientY) {
+  const menu = $("#canvas-context-menu");
+  const line = state.selectedLineId ? lineById(state.selectedLineId) : null;
+  const archived = isWorkspaceArchived();
+  const mainline = $("#context-add-mainline");
+  const branch = $("#context-add-branch");
+  const task = $("#context-add-task");
+  const milestone = $("#context-add-milestone");
+  const merge = $("#context-merge-line");
+
+  mainline.classList.toggle("hidden", Boolean(line));
+  for (const button of [branch, task, milestone]) {
+    button.classList.toggle("hidden", !line);
+  }
+  merge.classList.toggle("hidden", !line || line.parent_id === null);
+  for (const button of [mainline, branch, task, milestone]) button.disabled = archived;
+  merge.disabled = archived || !line || Boolean(line.merge_date);
+  merge.textContent = line?.merge_date ? "已反合母线" : "反合母线";
+
+  menu.style.left = `${clientX}px`;
+  menu.style.top = `${clientY}px`;
+  menu.classList.remove("hidden");
+  const rect = menu.getBoundingClientRect();
+  const margin = 8;
+  menu.style.left = `${Math.max(margin, Math.min(clientX, innerWidth - rect.width - margin))}px`;
+  menu.style.top = `${Math.max(margin, Math.min(clientY, innerHeight - rect.height - margin))}px`;
+  menu.querySelector("button:not(.hidden):not(:disabled)")?.focus({ preventScroll: true });
+}
+
+function runCanvasContextAction(action) {
+  closeCanvasContextMenu();
+  action();
+}
+
+$("#context-add-mainline").onclick = () =>
+  runCanvasContextAction(() => openLineModal(null, null));
+$("#context-add-branch").onclick = () => runCanvasContextAction(createBranchOnSelectedLine);
+$("#context-add-task").onclick = () => runCanvasContextAction(createTaskOnSelectedLine);
+$("#context-add-milestone").onclick = () =>
+  runCanvasContextAction(createMilestoneOnSelectedLine);
+$("#context-merge-line").onclick = () => runCanvasContextAction(mergeSelectedLine);
+$("#canvas-context-menu").oncontextmenu = (event) => event.preventDefault();
+document.addEventListener("click", () => {
+  closeCanvasContextMenu();
+  $("#filter-panel").classList.add("hidden");
+  $("#btn-toggle-filters").setAttribute("aria-expanded", "false");
+});
 
 async function bulkUpdate(field, value) {
   if (!ensureWorkspaceEditable()) return;
@@ -6082,9 +6174,17 @@ $("#btn-clear-dependency-focus").onclick = () => {
 /* ---- 画布缩放 (Ctrl+滚轮) 与拖拽平移 (左键长按) ---- */
 const wrap = $("#canvas-wrap");
 
+wrap.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  if (state.view !== "canvas") return;
+  openCanvasContextMenu(event.clientX, event.clientY);
+});
+wrap.addEventListener("scroll", closeCanvasContextMenu, { passive: true });
+
 let resizeFrame = null;
 window.addEventListener("resize", () => {
   closeDashboardRiskLens();
+  closeCanvasContextMenu();
   if (state.view !== "canvas") return;
   cancelAnimationFrame(resizeFrame);
   resizeFrame = requestAnimationFrame(renderCanvas);
@@ -6262,18 +6362,12 @@ document.addEventListener("keydown", async (e) => {
     return;
   }
 
-  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === "m") {
-    e.preventDefault();
-    if (e.repeat) return;
-    createMilestoneOnSelectedLine();
-    return;
-  }
-
-  if (!e.ctrlKey && !e.metaKey && !e.altKey && ["h", "b", "a", "n"].includes(key)) {
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && ["h", "b", "m", "a", "n"].includes(key)) {
     e.preventDefault();
     if (e.repeat) return;
     if (key === "h") goToToday();
     else if (key === "b") createBranchOnSelectedLine();
+    else if (key === "m") createMilestoneOnSelectedLine();
     else createTaskOnSelectedLine();
     return;
   }
@@ -6308,6 +6402,7 @@ bootstrap();
 $("#theme-toggle").onclick = () => {
   const nextTheme = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   applyTheme(nextTheme, { persist: true });
+  closeAccountMenu();
 };
 
 const themeMedia = window.matchMedia?.("(prefers-color-scheme: dark)");
