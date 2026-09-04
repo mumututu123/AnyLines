@@ -5565,6 +5565,22 @@ function mergeSelectedLine() {
   });
 }
 
+function cancelSelectedLineMerge() {
+  if (!ensureWorkspaceEditable()) return;
+  const line = lineById(state.selectedLineId);
+  if (!line || line.parent_id === null || !line.merge_date) return;
+  openModal("取消反合", (body) => {
+    const hint = document.createElement("div");
+    hint.className = "opt-hint";
+    hint.textContent = `取消「${line.name}」到「${lineById(line.parent_id).name}」的反合连接。`;
+    body.appendChild(hint);
+  }, async () => {
+    await api(`/api/lines/${line.id}`, "PATCH", { merge_date: null });
+    toast("已取消反合");
+    reload();
+  });
+}
+
 async function deleteSelectedLine() {
   if (!ensureWorkspaceEditable()) return;
   const line = lineById(state.selectedLineId);
@@ -5796,8 +5812,8 @@ function openCanvasContextMenu(clientX, clientY) {
   }
   merge.classList.toggle("hidden", !line || line.parent_id === null);
   for (const button of [mainline, branch, task, milestone]) button.disabled = archived;
-  merge.disabled = archived || !line || Boolean(line.merge_date);
-  merge.textContent = line?.merge_date ? "已反合母线" : "反合母线";
+  merge.disabled = archived || !line;
+  merge.textContent = line?.merge_date ? "取消反合" : "反合母线";
 
   menu.style.left = `${clientX}px`;
   menu.style.top = `${clientY}px`;
@@ -5820,7 +5836,11 @@ $("#context-add-branch").onclick = () => runCanvasContextAction(createBranchOnSe
 $("#context-add-task").onclick = () => runCanvasContextAction(createTaskOnSelectedLine);
 $("#context-add-milestone").onclick = () =>
   runCanvasContextAction(createMilestoneOnSelectedLine);
-$("#context-merge-line").onclick = () => runCanvasContextAction(mergeSelectedLine);
+$("#context-merge-line").onclick = () => runCanvasContextAction(() => {
+  const line = state.selectedLineId ? lineById(state.selectedLineId) : null;
+  if (line?.merge_date) cancelSelectedLineMerge();
+  else mergeSelectedLine();
+});
 $("#canvas-context-menu").oncontextmenu = (event) => event.preventDefault();
 document.addEventListener("click", () => {
   closeCanvasContextMenu();

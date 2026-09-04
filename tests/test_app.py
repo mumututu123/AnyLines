@@ -271,6 +271,9 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("const end = { x: horizontalEnd.x, y: parentY };", source)
         self.assertIn("d += ` L ${merge.end.x} ${merge.end.y}`;", source)
         self.assertIn("const childMergeDate = latestLineTaskEndDate(child);", source)
+        self.assertIn("function cancelSelectedLineMerge()", source)
+        self.assertIn('{ merge_date: null }', source)
+        self.assertIn('line?.merge_date ? "取消反合" : "反合母线"', source)
         self.assertIn(
             "const lineHeadX = parent ? geometry.horizontalStart.x : x1;",
             source,
