@@ -3896,9 +3896,10 @@ function ownerInput(value = "", required = false) {
 }
 
 /* 新建/编辑线 */
-function openLineModal(line, parentId = null) {
+function openLineModal(line, parentId = null, options = {}) {
   if (!ensureWorkspaceEditable()) return;
   const isNew = !line;
+  const defaultDate = options.defaultDate || null;
   openModal(
     isNew ? (parentId ? "新建支线" : "新建主线") : "编辑线",
     (body) => {
@@ -3911,7 +3912,7 @@ function openLineModal(line, parentId = null) {
       color.className = "line-color-input";
       body._color = field($("#modal-tools"), "颜色", color);
       body._date = field(body, isNew ? "起始日期（支线即分叉日）" : "起始日期",
-        input("date", line ? line.fork_date : state.today));
+        input("date", line ? line.fork_date : (defaultDate || state.today)));
       if (parentId) {
         const hint = document.createElement("div");
         hint.className = "opt-hint";
@@ -5571,6 +5572,34 @@ function createMilestoneOnSelectedLine() {
   openMilestoneModal(null, line.id);
 }
 
+// 从右键的事务节点创建支线：支线的父线为该事务所在线，
+// 默认起始日期为该事务的起始日期。
+function createBranchFromTask(task) {
+  if (!ensureWorkspaceEditable()) return;
+  const line = lineById(task.line_id);
+  if (!line) {
+    toast("未找到事务所在线");
+    return;
+  }
+  state.selectedLineId = line.id;
+  state.selectedTaskId = task.id;
+  openLineModal(null, line.id, { defaultDate: task.start_date });
+}
+
+// 从右键的事务节点创建里程碑：里程碑挂在该事务所在线上，
+// 默认里程碑日期为该事务的起始日期。
+function createMilestoneFromTask(task) {
+  if (!ensureWorkspaceEditable()) return;
+  const line = lineById(task.line_id);
+  if (!line) {
+    toast("未找到事务所在线");
+    return;
+  }
+  state.selectedLineId = line.id;
+  state.selectedTaskId = task.id;
+  openMilestoneModal(null, line.id, { milestoneDate: task.start_date });
+}
+
 function mergeSelectedLine() {
   if (!ensureWorkspaceEditable()) return;
   const line = lineById(state.selectedLineId);
@@ -5819,13 +5848,21 @@ for (const btn of document.querySelectorAll(".summary-card")) {
   };
 }
 
+// 记录当前右键上下文所定位的事务节点；仅在右键事务节点时非空。
+let canvasContextTaskId = null;
+
 function closeCanvasContextMenu() {
   $("#canvas-context-menu")?.classList.add("hidden");
+  canvasContextTaskId = null;
 }
 
-function openCanvasContextMenu(clientX, clientY) {
+function openCanvasContextMenu(clientX, clientY, options = {}) {
   const menu = $("#canvas-context-menu");
-  const line = state.selectedLineId ? lineById(state.selectedLineId) : null;
+  const contextTask = options.task || null;
+  canvasContextTaskId = contextTask ? contextTask.id : null;
+  const line = contextTask
+    ? lineById(contextTask.line_id)
+    : (state.selectedLineId ? lineById(state.selectedLineId) : null);
   const archived = isWorkspaceArchived();
   const mainline = $("#context-add-mainline");
   const branch = $("#context-add-branch");
@@ -5833,14 +5870,25 @@ function openCanvasContextMenu(clientX, clientY) {
   const milestone = $("#context-add-milestone");
   const merge = $("#context-merge-line");
 
-  mainline.classList.toggle("hidden", Boolean(line));
-  for (const button of [branch, task, milestone]) {
-    button.classList.toggle("hidden", !line);
+  if (contextTask) {
+    // 右键事务节点：仅显示“创建支线”和“创建里程碑”。
+    mainline.classList.add("hidden");
+    task.classList.add("hidden");
+    merge.classList.add("hidden");
+    branch.classList.remove("hidden");
+    milestone.classList.remove("hidden");
+    branch.disabled = archived;
+    milestone.disabled = archived;
+  } else {
+    mainline.classList.toggle("hidden", Boolean(line));
+    for (const button of [branch, task, milestone]) {
+      button.classList.toggle("hidden", !line);
+    }
+    merge.classList.toggle("hidden", !line || line.parent_id === null);
+    for (const button of [mainline, branch, task, milestone]) button.disabled = archived;
+    merge.disabled = archived || !line;
+    merge.textContent = line?.merge_date ? "取消反合" : "反合母线";
   }
-  merge.classList.toggle("hidden", !line || line.parent_id === null);
-  for (const button of [mainline, branch, task, milestone]) button.disabled = archived;
-  merge.disabled = archived || !line;
-  merge.textContent = line?.merge_date ? "取消反合" : "反合母线";
 
   menu.style.left = `${clientX}px`;
   menu.style.top = `${clientY}px`;
@@ -5853,16 +5901,29 @@ function openCanvasContextMenu(clientX, clientY) {
 }
 
 function runCanvasContextAction(action) {
+  // 在关闭菜单前先取出上下文事务，避免关闭时清空 canvasContextTaskId。
+  const contextTask = canvasContextTaskId ? taskById(canvasContextTaskId) : null;
   closeCanvasContextMenu();
-  action();
+  action(contextTask);
 }
 
 $("#context-add-mainline").onclick = () =>
   runCanvasContextAction(() => openLineModal(null, null));
-$("#context-add-branch").onclick = () => runCanvasContextAction(createBranchOnSelectedLine);
+$("#context-add-branch").onclick = () => runCanvasContextAction((contextTask) => {
+  if (contextTask) {
+    createBranchFromTask(contextTask);
+  } else {
+    createBranchOnSelectedLine();
+  }
+});
 $("#context-add-task").onclick = () => runCanvasContextAction(createTaskOnSelectedLine);
-$("#context-add-milestone").onclick = () =>
-  runCanvasContextAction(createMilestoneOnSelectedLine);
+$("#context-add-milestone").onclick = () => runCanvasContextAction((contextTask) => {
+  if (contextTask) {
+    createMilestoneFromTask(contextTask);
+  } else {
+    createMilestoneOnSelectedLine();
+  }
+});
 $("#context-merge-line").onclick = () => runCanvasContextAction(() => {
   const line = state.selectedLineId ? lineById(state.selectedLineId) : null;
   if (line?.merge_date) cancelSelectedLineMerge();
@@ -6224,7 +6285,13 @@ const wrap = $("#canvas-wrap");
 wrap.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   if (state.view !== "canvas") return;
-  openCanvasContextMenu(event.clientX, event.clientY);
+  // 若右键落在事务节点（单事务节点带 data-task-id；聚合节点不带）上，
+  // 仅提供“创建支线”“创建里程碑”两个操作。
+  const taskEl = event.target?.closest?.(".task-node[data-task-id]");
+  const contextTask = taskEl
+    ? taskById(Number(taskEl.dataset.taskId))
+    : null;
+  openCanvasContextMenu(event.clientX, event.clientY, { task: contextTask });
 });
 wrap.addEventListener("scroll", closeCanvasContextMenu, { passive: true });
 
