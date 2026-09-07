@@ -5,21 +5,15 @@
  * Running on http://127.0.0.1:8000
  * Running on http://198.18.0.1:8000
 [33mPress CTRL+C to quit[0m
-127.0.0.1 - - [07/Sep/2026 11:52:34] "HEAD / HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:52:54] "GET / HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:52:54] "GET /static/style.css HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:52:54] "GET /static/app.js HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:52:54] "GET /api/auth/session HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:52:54] "[33mGET /favicon.ico HTTP/1.1[0m" 404 -
-127.0.0.1 - - [07/Sep/2026 11:53:00] "POST /api/auth/login HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:00] "GET /api/state HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:00] "GET /api/auth/avatar?v=2026-09-04T13:57:36.404846Z HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:12] "POST /api/workspaces/1/select HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:12] "GET /api/auth/session HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:12] "GET /api/auth/avatar?v=2026-09-04T13:57:36.404846Z HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:12] "GET /api/state HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:24] "GET /api/notifications HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:29] "GET /api/tasks/28/collaboration HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:39] "[35m[1mPOST /api/milestones HTTP/1.1[0m" 201 -
-127.0.0.1 - - [07/Sep/2026 11:53:39] "GET /api/state HTTP/1.1" 200 -
-127.0.0.1 - - [07/Sep/2026 11:53:54] "GET /api/notifications HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:15:41] "HEAD / HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:16:45] "GET /api/notifications HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:16:45] "GET /api/notifications HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:16:47] "[36mGET / HTTP/1.1[0m" 304 -
+127.0.0.1 - - [07/Sep/2026 13:16:47] "GET /static/style.css HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:16:47] "GET /static/app.js HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:16:47] "GET /api/auth/session HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:16:47] "GET /api/auth/avatar?v=2026-09-04T13:57:36.404846Z HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:16:47] "GET /api/state HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:17:17] "GET /api/notifications HTTP/1.1" 200 -
+127.0.0.1 - - [07/Sep/2026 13:17:30] "[35m[1mPOST /api/milestones HTTP/1.1[0m" 201 -
+127.0.0.1 - - [07/Sep/2026 13:17:30] "GET /api/state HTTP/1.1" 200 -

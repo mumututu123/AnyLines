@@ -2342,6 +2342,7 @@ const SAME_DAY_NODE_GAP = 8;
 const SAME_DAY_SPREAD_STEP = SAME_DAY_NODE_DIAMETER + SAME_DAY_NODE_GAP;
 
 function clusterKey(t) { return `${t.line_id}|${t.start_date}`; }
+function milestoneClusterKey(m) { return `${m.line_id}|${m.milestone_date}`; }
 
 /* 最不成熟的状态 = 枚举顺序里最靠前的（未启动 < 进行中 < 有风险 < 已闭环） */
 function leastMatureStatus(tasks) {
@@ -2363,6 +2364,27 @@ function buildClusters(tasks = state.tasks) {
   }
   for (const arr of clusters.values()) arr.sort((a, b) => a.id - b.id);
   return clusters;
+}
+
+/* 集群项：把同线同日的事务和里程碑合并成"元素列表"。
+   返回 Map<key, { tasks: Task[], milestones: Milestone[] }>；两类按 id 排序。 */
+function buildClusterItems(tasks = state.tasks, milestones = state.milestones) {
+  const items = new Map();
+  const ensure = (k) => {
+    if (!items.has(k)) items.set(k, { tasks: [], milestones: [] });
+    return items.get(k);
+  };
+  for (const t of tasks) ensure(clusterKey(t)).tasks.push(t);
+  for (const m of milestones) ensure(milestoneClusterKey(m)).milestones.push(m);
+  for (const bucket of items.values()) {
+    bucket.tasks.sort((a, b) => a.id - b.id);
+    bucket.milestones.sort((a, b) => a.id - b.id);
+  }
+  return items;
+}
+
+function clusterItemCount(bucket) {
+  return (bucket?.tasks?.length || 0) + (bucket?.milestones?.length || 0);
 }
 
 /* 簇内第 i 个节点的展开偏移: 0, -1, +1, -2, +2 ... 乘以步长 */
@@ -2395,15 +2417,17 @@ function dismissClusterFocus({ rerender = true, restoreFocus = false } = {}) {
   return true;
 }
 
-function renderClusterFocusLens({ key, tasks, line, anchorX, anchorY }) {
+function renderClusterFocusLens({ key, tasks, milestones = [], line, anchorX, anchorY }) {
   const wrap = $("#canvas-wrap");
-  if (!wrap || !tasks.length) return;
+  const totalCount = (tasks?.length || 0) + (milestones?.length || 0);
+  if (!wrap || totalCount === 0) return;
   wrap.querySelector(".cluster-focus-lens")?.remove();
   wrap.classList.add("cluster-focus-active");
 
+  const anchorDate = tasks?.[0]?.start_date || milestones?.[0]?.milestone_date;
   const lens = document.createElement("section");
   lens.className = "cluster-focus-lens";
-  lens.setAttribute("aria-label", `${line.name} ${tasks[0].start_date} 同日事务聚焦`);
+  lens.setAttribute("aria-label", `${line.name} ${anchorDate} 同日聚焦`);
   lens.dataset.clusterKey = key;
 
   const heading = document.createElement("div");
@@ -2413,9 +2437,13 @@ function renderClusterFocusLens({ key, tasks, line, anchorX, anchorY }) {
   eyebrow.className = "cluster-focus-eyebrow";
   eyebrow.textContent = "局部聚焦";
   const title = document.createElement("strong");
-  title.textContent = `${line.name} · ${tasks[0].start_date}`;
+  title.textContent = `${line.name} · ${anchorDate}`;
   const subtitle = document.createElement("span");
-  subtitle.textContent = `${tasks.length} 个同日事务 · 画布倍率保持不变`;
+  const subtitleParts = [];
+  if (tasks.length) subtitleParts.push(`${tasks.length} 个同日事务`);
+  if (milestones.length) subtitleParts.push(`${milestones.length} 个里程碑`);
+  subtitleParts.push("画布倍率保持不变");
+  subtitle.textContent = subtitleParts.join(" · ");
   titleBlock.append(eyebrow, title, subtitle);
   const close = document.createElement("button");
   close.type = "button";
@@ -2507,14 +2535,99 @@ function renderClusterFocusLens({ key, tasks, line, anchorX, anchorY }) {
     cards.appendChild(card);
   }
 
+  /* 里程碑卡片：单击选中（暂无跨视图选中态，仅高亮当前卡片），双击 / 点击"编辑"打开里程碑编辑框 */
+  for (const milestone of milestones) {
+    const card = document.createElement("article");
+    card.className = "cluster-focus-card cluster-focus-card-milestone";
+    card.dataset.milestoneId = milestone.id;
+    card.tabIndex = 0;
+    card.setAttribute("role", "button");
+    card.setAttribute("aria-label", `里程碑 ${milestone.name}`);
+
+    const cardTop = document.createElement("div");
+    cardTop.className = "cluster-focus-card-top";
+    const marker = document.createElement("i");
+    marker.className = "cluster-focus-milestone-marker";
+    marker.setAttribute("aria-hidden", "true");
+    const name = document.createElement("strong");
+    name.textContent = milestone.name;
+    const edit = document.createElement("button");
+    edit.type = "button";
+    edit.className = "cluster-focus-edit";
+    edit.textContent = "编辑";
+    edit.setAttribute("aria-label", `编辑里程碑 ${milestone.name}`);
+    edit.onclick = (event) => {
+      event.stopPropagation();
+      state.selectedLineId = line.id;
+      state.selectedTaskId = null;
+      dismissClusterFocus({ rerender: false });
+      renderToolbar();
+      openMilestoneModal(milestone);
+    };
+    cardTop.append(marker, name, edit);
+
+    const acceptanceTasks = milestoneAcceptanceTasks(milestone);
+    const done = acceptanceTasks.filter(isDone).length;
+    const total = acceptanceTasks.length;
+    const unconfigured = total === 0;
+
+    const meta = document.createElement("div");
+    meta.className = "cluster-focus-card-meta";
+    const badge = document.createElement("span");
+    badge.className = "cluster-focus-status cluster-focus-milestone-badge";
+    badge.textContent = "里程碑";
+    const progress = document.createElement("span");
+    progress.textContent = unconfigured ? "未配置验收" : `验收 ${done}/${total}`;
+    meta.append(badge, progress);
+
+    const dates = document.createElement("div");
+    dates.className = "cluster-focus-card-dates";
+    dates.textContent = milestone.milestone_date;
+    if (milestone.target_description) {
+      const target = document.createElement("span");
+      target.className = "cluster-focus-milestone-target";
+      target.textContent = milestone.target_description;
+      target.title = milestone.target_description;
+      dates.appendChild(target);
+    }
+    card.append(cardTop, meta, dates);
+
+    const openEdit = () => {
+      state.selectedLineId = line.id;
+      state.selectedTaskId = null;
+      dismissClusterFocus({ rerender: false });
+      renderToolbar();
+      openMilestoneModal(milestone);
+    };
+    const highlightCard = () => {
+      for (const c of cards.querySelectorAll(".cluster-focus-card")) {
+        c.classList.remove("selected");
+        c.setAttribute("aria-pressed", "false");
+      }
+      card.classList.add("selected");
+      card.setAttribute("aria-pressed", "true");
+    };
+    card.addEventListener("click", highlightCard);
+    card.addEventListener("dblclick", openEdit);
+    card.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openEdit();
+      }
+    });
+    cards.appendChild(card);
+  }
+
   const footer = document.createElement("div");
   footer.className = "cluster-focus-footer";
   const hint = document.createElement("span");
-  hint.textContent = "单击选择 · 双击编辑 · Esc 退出";
+  hint.textContent = milestones.length
+    ? "事务：单击选择 · 双击编辑；里程碑：双击编辑 · Esc 退出"
+    : "单击选择 · 双击编辑 · Esc 退出";
   footer.appendChild(hint);
   lens.append(heading, cards, footer);
 
-  const lensWidth = Math.min(Math.max(360, Math.min(tasks.length, 3) * 210),
+  const lensWidth = Math.min(Math.max(360, Math.min(totalCount, 3) * 210),
     Math.max(240, wrap.clientWidth - 32));
   cards.style.maxHeight = `${Math.min(420, Math.max(120, wrap.clientHeight - 170))}px`;
   lens.style.width = `${lensWidth}px`;
@@ -2643,11 +2756,15 @@ function renderCanvas() {
 
   /* 同线同天分簇；标准密度聚合，详细密度自动水平排开。 */
   const clusters = buildClusters(canvasTasks);
-  let focusedClusterTasks = state.focusedClusterKey ?
-    clusters.get(state.focusedClusterKey) : null;
-  if (!focusedClusterTasks || focusedClusterTasks.length < 2 || autoSpreadSameDay) {
+  /* 集群项包含同线同日的事务和里程碑，用于聚合节点判定与放大镜列表。 */
+  const clusterItems = buildClusterItems(canvasTasks, state.milestones);
+  let focusedClusterItems = state.focusedClusterKey ?
+    clusterItems.get(state.focusedClusterKey) : null;
+  if (!focusedClusterItems ||
+      clusterItemCount(focusedClusterItems) < 2 ||
+      autoSpreadSameDay) {
     state.focusedClusterKey = null;
-    focusedClusterTasks = null;
+    focusedClusterItems = null;
   }
 
   /* 详细密度下，泳道高度按自动排开后的标签最大分层量自适应。 */
@@ -3153,55 +3270,97 @@ function renderCanvas() {
     }
   };
 
-  for (const [key, arr] of clusters) {
-    const line = lineById(arr[0].line_id);
+  /* 里程碑图层：在事务集群循环之前先创建，供聚合节点直接向该图层追加。 */
+  const gMilestones = svgEl("g", { class: "milestone-layer" }, root);
+  /* 记录被聚合节点"吸收"的里程碑 id，后续 milestone 独立渲染循环会跳过它们。 */
+  const absorbedMilestoneIds = new Set();
+
+  /* 遍历"集群项"（同线同日的事务 + 里程碑）。
+     - 折叠态（!autoSpreadSameDay）：itemCount >= 2 时画聚合节点，可点击弹出放大镜；
+       特别地，即便只有 1 个事务 + 1 个里程碑（视觉重叠），也走聚合逻辑。
+     - 展开态（autoSpreadSameDay）：事务水平排开，里程碑保持原位（走独立循环渲染）。 */
+  for (const [key, bucket] of clusterItems) {
+    const { tasks: taskArr, milestones: msArr } = bucket;
+    if (!taskArr.length && !msArr.length) continue;
+    const anchorTask = taskArr[0] || null;
+    const anchorMilestone = msArr[0] || null;
+    const line = lineById((anchorTask || anchorMilestone).line_id);
     if (!line || !rows.has(line.id)) continue;
     const baseY = lineY(line.id);
-    const cx = nodeX(arr[0]);
+    const clusterX = anchorTask
+      ? nodeX(anchorTask)
+      : Math.max(x(anchorMilestone.milestone_date),
+                 lineGeometry(line).horizontalStart.x);
+    const itemCount = taskArr.length + msArr.length;
 
-    /* 单事务：直接画 */
-    if (arr.length === 1) {
-      drawTask(arr[0], baseY, false);
+    /* 单事务、无里程碑：直接画事务节点 */
+    if (taskArr.length === 1 && msArr.length === 0) {
+      drawTask(taskArr[0], baseY, false);
+      continue;
+    }
+    /* 只有里程碑（无事务）：留给下方 milestone 循环处理（含单个/多个聚合） */
+    if (taskArr.length === 0) {
+      if (!autoSpreadSameDay && msArr.length >= 2) {
+        drawMilestoneCluster({
+          key, milestones: msArr, line, cx: clusterX, cy: baseY,
+        });
+        for (const m of msArr) absorbedMilestoneIds.add(m.id);
+      }
       continue;
     }
 
+    /* 有事务、且（多事务 或 有里程碑同日）：折叠态显示聚合节点 */
     if (!autoSpreadSameDay) {
       /* ---- 折叠态：一个聚合节点，颜色 = 最不成熟的状态 ---- */
-      const st = leastMatureStatus(arr);
+      const st = leastMatureStatus(taskArr);
       const g = svgEl("g", {
-        class: `cluster-node${taskFocusClass(arr.map((task) => task.id))}`,
+        class: `cluster-node${taskFocusClass(taskArr.map((task) => task.id))}`,
       }, gTasks);
-      const clusterMatchesFilter = arr.some((task) => filterMatchedTaskIds.has(task.id));
-      for (const task of arr) {
-        state.canvasTaskPositions.set(task.id, { x: cx, y: baseY });
+      const clusterMatchesFilter = taskArr.some((task) => filterMatchedTaskIds.has(task.id));
+      for (const task of taskArr) {
+        state.canvasTaskPositions.set(task.id, { x: clusterX, y: baseY });
       }
       /* 底层错位圆角正方形暗示"这是一叠节点" */
       const backNode = svgEl("rect", {
-        ...roundedSquareAttrs(cx + 3, baseY + 3, 13),
+        ...roundedSquareAttrs(clusterX + 3, baseY + 3, 13),
         class: `task-node ${statusClass(st)}` +
           (hasActiveCanvasFilter && clusterMatchesFilter ? " filter-match" : ""),
         opacity: .35,
       }, g);
       const node = svgEl("rect", {
-        ...roundedSquareAttrs(cx, baseY, 13),
+        ...roundedSquareAttrs(clusterX, baseY, 13),
         class: `task-node cluster-focus-node ${statusClass(st)}` +
           (hasActiveCanvasFilter && clusterMatchesFilter ? " filter-match" : ""),
         role: "button", tabindex: 0,
-        "aria-label": `${arr[0].start_date} 同天 ${arr.length} 个事务，局部放大查看`,
+        "aria-label": `${anchorTask.start_date} 同天 ${itemCount} 项（含 ${taskArr.length} 个事务` +
+          (msArr.length ? `、${msArr.length} 个里程碑` : "") + "），局部放大查看",
         "data-cluster-key": key,
       }, g);
       backNode.style.fill = statusColor(st);
       node.style.fill = statusColor(st);
-      /* 数量徽标 */
+      /* 数量徽标（含里程碑） */
       const badge = svgEl("text", {
-        x: cx, y: baseY + 3.5, "text-anchor": "middle", class: "cluster-count",
+        x: clusterX, y: baseY + 3.5, "text-anchor": "middle", class: "cluster-count",
       }, g);
-      badge.textContent = arr.length;
+      badge.textContent = itemCount;
+
+      /* 含里程碑时，右上角叠一颗小星以示意 */
+      if (msArr.length) {
+        svgEl("polygon", {
+          points: fivePointStarPoints(clusterX + 11, baseY - 11, 5, 2.2),
+          class: "cluster-milestone-mark",
+          "aria-hidden": "true",
+        }, g);
+      }
 
       const title = svgEl("title", {}, node);
-      title.textContent =
-        `${arr[0].start_date} 同天 ${arr.length} 个事务（单击临时聚焦）\n` +
-        arr.map((t) => `· ${t.name}【${t.status}】${t.owner ? " @" + t.owner : ""}`).join("\n");
+      const titleLines = [
+        `${anchorTask.start_date} 同天 ${itemCount} 项（单击临时聚焦）`,
+        ...taskArr.map((t) =>
+          `· 事务 ${t.name}【${t.status}】${t.owner ? " @" + t.owner : ""}`),
+        ...msArr.map((m) => `· 里程碑 ${m.name}`),
+      ];
+      title.textContent = titleLines.join("\n");
 
       /* 顶层重叠节点负责临时聚焦，标准密度不再提供手动展开/折叠。 */
       const openFocus = (event) => {
@@ -3219,29 +3378,83 @@ function renderCanvas() {
 
       /* 折叠态标签：显示"N项"及最不成熟状态 */
       const parts = [];
-      if (density !== "overview" && state.show.name) parts.push(`${arr.length}项事务`);
+      if (density !== "overview" && state.show.name) {
+        parts.push(msArr.length ? `${itemCount}项（含里程碑）` : `${taskArr.length}项事务`);
+      }
       if (density !== "overview" && state.show.status) parts.push(st);
       if (parts.length) {
         const e = svgEl("text", {
-          x: cx, y: baseY - 18, "text-anchor": "middle", class: "task-label t-name",
+          x: clusterX, y: baseY - 18, "text-anchor": "middle", class: "task-label t-name",
         }, g);
         e.textContent = parts.join(" · ");
       }
+
+      /* 里程碑被聚合节点吸收，避免独立里程碑循环重复绘制。 */
+      for (const m of msArr) absorbedMilestoneIds.add(m.id);
     } else {
       /* 详细密度下自动水平排开，并留足最大节点直径。 */
-      const totalSpread = (arr.length - 1) * SAME_DAY_SPREAD_STEP;
-      const firstX = Math.max(
-        cx - totalSpread / 2,
-        lineGeometry(line).horizontalStart.x
-      );
-      const xs = arr.map((_, i) => firstX + i * SAME_DAY_SPREAD_STEP);
-      arr.forEach((t, i) => drawTask(t, baseY, false, xs[i], i));
+      if (taskArr.length >= 2) {
+        const totalSpread = (taskArr.length - 1) * SAME_DAY_SPREAD_STEP;
+        const firstX = Math.max(
+          clusterX - totalSpread / 2,
+          lineGeometry(line).horizontalStart.x
+        );
+        const xs = taskArr.map((_, i) => firstX + i * SAME_DAY_SPREAD_STEP);
+        taskArr.forEach((t, i) => drawTask(t, baseY, false, xs[i], i));
+      } else {
+        /* 展开态下"单事务 + 里程碑"仍按普通事务节点渲染 */
+        drawTask(taskArr[0], baseY, false);
+      }
+      /* 展开态下里程碑不吸收，走独立循环渲染 */
     }
   }
 
+  /* 里程碑聚合节点（仅当同线同日出现 ≥ 2 个里程碑且非展开态时使用）。
+     视觉上采用两层星形错位堆叠，中央标注数量。 */
+  function drawMilestoneCluster({ key, milestones, line, cx, cy }) {
+    const layer = svgEl("g", {
+      class: "milestone-item milestone-cluster",
+      "data-milestone-cluster-key": key,
+    }, gMilestones);
+    // 底层错位星（较暗）
+    svgEl("polygon", {
+      points: fivePointStarPoints(cx + 3, cy + 3),
+      class: "milestone-node milestone-cluster-back",
+      "aria-hidden": "true",
+    }, layer);
+    const node = svgEl("polygon", {
+      points: fivePointStarPoints(cx, cy),
+      class: "milestone-node cluster-focus-node milestone-cluster-front",
+      role: "button", tabindex: 0,
+      "data-cluster-key": key,
+      "aria-label": `${milestones[0].milestone_date} 同天 ${milestones.length} 个里程碑，局部放大查看`,
+    }, layer);
+    const badge = svgEl("text", {
+      x: cx, y: cy + 4, "text-anchor": "middle",
+      class: "cluster-count milestone-cluster-count",
+    }, layer);
+    badge.textContent = milestones.length;
+    const title = svgEl("title", {}, node);
+    title.textContent =
+      `${milestones[0].milestone_date} 同天 ${milestones.length} 个里程碑（单击临时聚焦）\n` +
+      milestones.map((m) => `· ${m.name}`).join("\n");
+    const openFocus = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.focusedClusterKey = key;
+      state.selectedLineId = line.id;
+      state.selectedTaskId = null;
+      render();
+    };
+    node.addEventListener("click", openFocus);
+    node.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") openFocus(event);
+    });
+  }
+
   /* ---- 里程碑节点：按验收事务状态占比，以成熟度从低到高填充竖向色带。 ---- */
-  const gMilestones = svgEl("g", { class: "milestone-layer" }, root);
   for (const milestone of state.milestones) {
+    if (absorbedMilestoneIds.has(milestone.id)) continue;
     const line = lineById(milestone.line_id);
     if (!line || !rows.has(line.id)) continue;
     const tasks = milestoneAcceptanceTasks(milestone);
@@ -3413,10 +3626,16 @@ function renderCanvas() {
     title.textContent = `${dependent?.name || "事务"} 依赖 ${prerequisite?.name || "事务"}`;
   }
 
-  if (focusedClusterTasks) {
-    const focusedLine = lineById(focusedClusterTasks[0].line_id);
+  if (focusedClusterItems) {
+    const focusedTasks = focusedClusterItems.tasks || [];
+    const focusedMilestones = focusedClusterItems.milestones || [];
+    const anchor = focusedTasks[0] || focusedMilestones[0];
+    const focusedLine = anchor ? lineById(anchor.line_id) : null;
     if (focusedLine && rows.has(focusedLine.id)) {
-      const anchorX = nodeX(focusedClusterTasks[0]);
+      const anchorX = focusedTasks[0]
+        ? nodeX(focusedTasks[0])
+        : Math.max(x(focusedMilestones[0].milestone_date),
+                   lineGeometry(focusedLine).horizontalStart.x);
       const anchorY = lineY(focusedLine.id);
       const anchorLayer = svgEl("g", {
         class: "cluster-focus-anchor-layer", "aria-hidden": "true",
@@ -3429,7 +3648,8 @@ function renderCanvas() {
       }, anchorLayer);
       renderClusterFocusLens({
         key: state.focusedClusterKey,
-        tasks: focusedClusterTasks,
+        tasks: focusedTasks,
+        milestones: focusedMilestones,
         line: focusedLine,
         anchorX,
         anchorY,
@@ -3748,8 +3968,14 @@ function locateTask(id) {
   if (canvasDensityLevel(state.zoom) === "overview") {
     state.zoom = CANVAS_OVERVIEW_MAX_ZOOM;
   }
-  const sameDay = state.tasks.filter((x) => x.line_id === t.line_id && x.start_date === t.start_date);
-  state.focusedClusterKey = sameDay.length > 1 ? clusterKey(t) : null;
+  const sameDayTasks = state.tasks.filter(
+    (x) => x.line_id === t.line_id && x.start_date === t.start_date
+  );
+  const sameDayMilestones = state.milestones.filter(
+    (m) => m.line_id === t.line_id && m.milestone_date === t.start_date
+  );
+  const sameDayItems = sameDayTasks.length + sameDayMilestones.length;
+  state.focusedClusterKey = sameDayItems > 1 ? clusterKey(t) : null;
   switchView("canvas");
   requestAnimationFrame(() => scrollToCanvasTask(id));
 }

@@ -1123,6 +1123,47 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .cluster-focus-footer { display: flex; align-items: center; gap: 10px; padding-top: 2px; }
 .cluster-focus-footer span { color: #8c959f; font-size: 10px; }
 
+/* 里程碑卡片：紫色主题以区别事务卡片 */
+.cluster-focus-card-milestone { border-color: #d0bff5; background: #faf7ff; }
+.cluster-focus-card-milestone:hover,
+.cluster-focus-card-milestone:focus-visible {
+  border-color: #8250df; box-shadow: 0 5px 14px rgba(130, 80, 223, .16);
+}
+.cluster-focus-card-milestone.selected {
+  border-color: #8250df; box-shadow: 0 0 0 2px rgba(130, 80, 223, .18);
+  background: #f4ecff;
+}
+.cluster-focus-milestone-marker {
+  width: 12px; height: 12px; background: #8250df;
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+  box-shadow: 0 0 0 3px rgba(130, 80, 223, .14);
+}
+.cluster-focus-milestone-badge {
+  background: rgba(130, 80, 223, .12); color: #6f42c1;
+}
+.cluster-focus-milestone-target {
+  overflow: hidden; max-width: 60%; color: #8c959f;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 里程碑聚合节点：错位星形堆叠 + 中央数量徽标 */
+.milestone-cluster-back {
+  fill: #b48ee9; stroke: #fff; stroke-width: 2; opacity: .55;
+  pointer-events: none;
+}
+.milestone-cluster-front {
+  fill: #8250df; stroke: #fff; stroke-width: 2.2; cursor: pointer;
+  filter: drop-shadow(0 1px 2px rgba(31, 35, 40, .35));
+}
+.milestone-cluster-count {
+  fill: #fff; font-size: 10px; font-weight: 700; pointer-events: none;
+}
+/* 事务聚合节点右上角的里程碑小星标记 */
+.cluster-milestone-mark {
+  fill: #8250df; stroke: #fff; stroke-width: 1; pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(31, 35, 40, .3));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .cluster-focus-anchor-halo { animation: none; }
   .cluster-focus-lens, .cluster-focus-card { transition: none; }
