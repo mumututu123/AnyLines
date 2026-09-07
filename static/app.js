@@ -54,6 +54,7 @@ const MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024;
 /* ---------------------------------------------- 界面偏好记忆 (localStorage) */
 const PREFS_KEY = "anyline.prefs";
 const THEME_KEY = "anyline.theme";
+const auditView = { page: 1, total: 0, pageSize: 25, request: 0, previousView: "canvas", filters: {} };
 
 function storedTheme() {
   try {
@@ -88,7 +89,7 @@ function savePrefs() {
   try {
     localStorage.setItem(PREFS_KEY, JSON.stringify({
       show: state.show,
-      view: state.view,
+      view: state.view === "audit" ? auditView.previousView : state.view,
       zoom: state.zoom,
       sort: state.sort,
       dashboardRange: state.dashboardRange,
@@ -209,6 +210,8 @@ async function api(url, method = "GET", body = null) {
 }
 
 function showLoggedOut() {
+  if (state.view === "audit") switchView(auditView.previousView);
+  clearAuditView();
   closeAccountMenu();
   closeTableCellPreview();
   closeTaskImageViewer({ restoreFocus: false });
@@ -275,6 +278,11 @@ function applySession(data) {
   select.title = isArchived ? "当前项目空间已归档，仅可浏览" : "切换项目空间";
   $("#btn-workspaces").classList.toggle("hidden", !canManageWorkspaces);
   $("#btn-members").classList.toggle("hidden", !isCurrentAdmin || isArchived);
+  $("#btn-audit").classList.toggle("hidden", !isCurrentAdmin);
+  if (state.view === "audit" && (!isCurrentAdmin || auditView.workspaceId !== state.currentWorkspace?.id)) {
+    clearAuditView();
+    switchView(auditView.previousView);
+  }
   $("#btn-statuses").classList.toggle("hidden", isArchived);
   const displayName = (state.user.display_name || state.user.username || "").trim();
   const accountName = state.user.username || displayName;
@@ -315,6 +323,8 @@ function toggleAccountMenu() {
 }
 
 function resetWorkspaceState() {
+  if (state.view === "audit") switchView(auditView.previousView);
+  clearAuditView();
   state.selectedLineId = null;
   state.selectedTaskId = null;
   state.selectedTaskIds.clear();
@@ -542,7 +552,7 @@ function render() {
   renderActiveFilters();
   if (state.view === "dashboard") renderDashboard();
   else if (state.view === "canvas") renderCanvas();
-  else renderTable();
+  else if (state.view === "table") renderTable();
 }
 
 /* ---------------------------------------------------------------- toolbar */
@@ -5727,6 +5737,157 @@ $("#btn-password").onclick = () => {
   closeAccountMenu();
   openPasswordModal();
 };
+$("#btn-audit").onclick = () => {
+  closeAccountMenu();
+  if (state.currentWorkspace?.role !== "admin") return;
+  if (state.view !== "audit") auditView.previousView = state.view;
+  clearAuditView();
+  auditView.workspaceId = state.currentWorkspace.id;
+  $("#audit-workspace").textContent = state.currentWorkspace.name;
+  switchView("audit");
+  $("#audit-title").focus();
+  loadAuditPage(1);
+};
+
+function clearAuditView() {
+  auditView.request++;
+  auditView.filters = {};
+  auditView.page = 1;
+  auditView.total = 0;
+  $("#audit-rows").replaceChildren();
+  $("#audit-message").textContent = "";
+  $("#audit-page-info").textContent = "";
+  auditView.resetting = true;
+  $("#audit-filters").reset();
+  auditView.resetting = false;
+}
+
+async function loadAuditPage(page) {
+  const requestId = ++auditView.request;
+  const workspaceId = state.currentWorkspace?.id;
+  if (state.currentWorkspace?.role !== "admin" || state.view !== "audit") return;
+  const params = new URLSearchParams({ ...auditView.filters, page, page_size: auditView.pageSize });
+  $("#audit-message").textContent = "正在查询…";
+  $("#audit-rows").replaceChildren();
+  $("#audit-prev").disabled = true;
+  $("#audit-next").disabled = true;
+  const isCurrent = () => requestId === auditView.request && state.view === "audit" &&
+    state.currentWorkspace?.id === workspaceId;
+  try {
+    const data = await api(`/api/audit?${params}`);
+    if (!isCurrent()) return;
+    if (data.workspace_id !== workspaceId) throw new Error("项目空间已改变，请重新打开审计页面");
+    auditView.page = page;
+    auditView.total = data.total;
+    for (const [name, labels, placeholder] of [
+      ["operation", data.operations, "全部操作"], ["object_type", data.object_types, "全部对象"],
+    ]) {
+      const select = $("#audit-filters").elements.namedItem(name);
+      const value = select.value;
+      select.replaceChildren(new Option(placeholder, ""));
+      for (const [key, label] of Object.entries(labels)) select.add(new Option(label, key));
+      select.value = value;
+    }
+    for (const item of data.items) {
+      const row = document.createElement("tr");
+      for (const value of [new Date(item.created_at).toLocaleString("zh-CN", { hour12: false }),
+        item.username, data.operations[item.operation] || item.operation,
+        `${data.object_types[item.object_type] || item.object_type} #${item.object_id} · ${item.object_name}`]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        row.append(cell);
+      }
+      const cell = document.createElement("td");
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "查看快照";
+      button.onclick = () => openAuditSnapshot(item, button);
+      cell.append(button);
+      row.append(cell);
+      $("#audit-rows").append(row);
+    }
+    const pages = Math.max(1, Math.ceil(data.total / auditView.pageSize));
+    $("#audit-message").textContent = data.total ? "" : "暂无符合条件的审计记录";
+    $("#audit-page-info").textContent = `共 ${data.total} 条 · 第 ${page} / ${pages} 页`;
+    $("#audit-prev").disabled = page <= 1;
+    $("#audit-next").disabled = page >= pages;
+  } catch (error) {
+    if (isCurrent()) {
+      $("#audit-message").textContent = error.message || "查询失败，请重试";
+      $("#audit-page-info").textContent = "";
+    }
+  }
+}
+
+async function openAuditSnapshot(item, button) {
+  const workspaceId = state.currentWorkspace?.id;
+  const requestId = auditView.request;
+  button.disabled = true;
+  try {
+    const data = await api(`/api/audit/${item.id}`);
+    if (state.view !== "audit" || state.currentWorkspace?.id !== workspaceId ||
+        requestId !== auditView.request || data.workspace_id !== workspaceId) return;
+    openModal("对象快照", (body) => {
+      const info = document.createElement("p");
+      info.className = "audit-snapshot-info";
+      info.textContent = `${data.username} · ${data.object_name} · ${new Date(data.created_at).toLocaleString("zh-CN")}`;
+      body.append(info);
+      if (data.snapshot.password_changed) {
+        const note = document.createElement("p");
+        note.textContent = "本次操作修改了密码，快照不记录密码内容。";
+        body.append(note);
+      }
+      const columns = document.createElement("div");
+      columns.className = "audit-snapshot-columns";
+      for (const [key, label] of [["before", "操作前"], ["after", "操作后"]]) {
+        const section = document.createElement("section");
+        const heading = document.createElement("h4");
+        heading.textContent = label;
+        const pre = document.createElement("pre");
+        pre.textContent = data.snapshot[key] === null ? "对象不存在" : JSON.stringify(data.snapshot[key], null, 2);
+        section.append(heading, pre);
+        columns.append(section);
+      }
+      body.append(columns);
+    }, () => true, { onClosed: () => button.isConnected && button.focus() });
+    $("#modal").classList.add("modal-wide");
+    $("#modal-ok").classList.add("hidden");
+    $("#modal-cancel").textContent = "关闭";
+    $("#modal-cancel").focus();
+  } catch (_error) {
+    // api() displays the error; leave the list available for retry.
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$("#audit-filters").onsubmit = (event) => {
+  event.preventDefault();
+  const filters = {};
+  for (const [key, raw] of new FormData(event.currentTarget)) {
+    const value = raw.trim();
+    if (!value) continue;
+    if (key === "start" || key === "end") {
+      const time = new Date(value);
+      if (Number.isNaN(time.getTime())) return;
+      if (key === "end") time.setSeconds(59, 999);
+      filters[key] = time.toISOString();
+    } else filters[key] = value;
+  }
+  if (filters.start && filters.end && filters.start > filters.end) {
+    $("#audit-message").textContent = "开始时间不能晚于结束时间";
+    return;
+  }
+  auditView.filters = filters;
+  loadAuditPage(1);
+};
+$("#audit-filters").onreset = () => {
+  auditView.filters = {};
+  if (!auditView.resetting && state.view === "audit") queueMicrotask(() => loadAuditPage(1));
+};
+$("#audit-prev").onclick = () => loadAuditPage(Math.max(1, auditView.page - 1));
+$("#audit-next").onclick = () => loadAuditPage(auditView.page + 1);
+$("#audit-back").onclick = () => switchView(auditView.previousView);
 $("#btn-logout").onclick = async () => {
   closeAccountMenu();
   await api("/api/auth/logout", "POST");
@@ -5734,6 +5895,8 @@ $("#btn-logout").onclick = async () => {
 };
 
 function switchView(v) {
+  if (v === "audit" && state.currentWorkspace?.role !== "admin") v = "canvas";
+  if (state.view === "audit" && v !== "audit") auditView.request++;
   closeTableCellPreview();
   closeCanvasContextMenu();
   if (v !== "canvas") dismissClusterFocus({ rerender: false });
@@ -5746,7 +5909,8 @@ function switchView(v) {
   $("#dashboard-view").classList.toggle("hidden", v !== "dashboard");
   $("#canvas-view").classList.toggle("hidden", v !== "canvas");
   $("#table-view").classList.toggle("hidden", v !== "table");
-  $("#workbench").classList.remove("hidden");
+  $("#audit-view").classList.toggle("hidden", v !== "audit");
+  $("#workbench").classList.toggle("hidden", v === "audit");
   $("#workbench").classList.toggle("dashboard-mode", v === "dashboard");
   savePrefs();
   render();

@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from datetime import date, timedelta
+from urllib.parse import urlencode
 
 from openpyxl import Workbook, load_workbook
 from PIL import Image
@@ -157,6 +158,168 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 201, data)
         return data["user_id"]
+
+    def audit_records(self, **filters):
+        status, data = self.request("GET", "/api/audit?" + urlencode(filters))
+        self.assertEqual(status, 200, data)
+        return data
+
+    def audit_snapshot(self, record_id):
+        status, data = self.request("GET", f"/api/audit/{record_id}")
+        self.assertEqual(status, 200, data)
+        return data["snapshot"]
+
+    def test_audit_records_member_changes_and_filters(self):
+        self.add_member("audit_member", "审计成员")
+        line_id = self.create_line()
+        self.login("audit_member", "member123")
+        task_id = self.create_task(line_id, "原始任务", owner="审计成员")
+        self.assertEqual(self.request("PATCH", f"/api/tasks/{task_id}", {"name": "新任务"})[0], 200)
+        self.login("admin", "admin123")
+        data = self.audit_records(username="audit_member", object_type="task", object_id=task_id)
+        self.assertEqual(data["total"], 2)
+        updated, created = data["items"]
+        self.assertEqual(updated["operation"], "update")
+        snapshot = self.audit_snapshot(updated["id"])
+        self.assertEqual(snapshot["before"]["name"], "原始任务")
+        self.assertEqual(snapshot["after"]["name"], "新任务")
+        self.assertIsNone(self.audit_snapshot(created["id"])["before"])
+        filtered = self.audit_records(username="audit_member", operation="update", q="新任务",
+                                     start=updated["created_at"], end=updated["created_at"])
+        self.assertEqual(filtered["total"], 1)
+        page1 = self.audit_records(object_type="task", page_size=1)
+        page2 = self.audit_records(object_type="task", page_size=1, page=2)
+        self.assertNotEqual(page1["items"][0]["id"], page2["items"][0]["id"])
+        self.assertEqual(self.audit_records(q="%' OR 1=1 --")["total"], 0)
+        for query in ("page=0", "page_size=101", "page=bad", "start=bad",
+                      "start=2026-10-01T00:00:00Z&end=2026-09-01T00:00:00Z"):
+            self.assertEqual(self.request("GET", "/api/audit?" + query)[0], 400)
+
+    def test_audit_access_is_scoped_to_current_workspace_admin(self):
+        original = self.request("GET", "/api/auth/session")[1]["current_workspace"]["id"]
+        self.add_member("audit_reader", "普通成员")
+        self.create_line("空间一的线")
+        record = self.audit_records(object_type="line")["items"][0]
+        other = self.request("POST", "/api/workspaces", {"name": "空间二"})[1]["id"]
+        self.assertEqual(self.audit_records(object_type="line")["total"], 0)
+        self.assertEqual(self.request("GET", f"/api/audit/{record['id']}")[0], 404)
+        self.request("PATCH", f"/api/workspaces/{original}", {"description": "跨空间管理"})
+        self.assertEqual(self.audit_records(operation="update")["total"], 0)
+        self.request("POST", f"/api/workspaces/{original}/select")
+        self.assertEqual(self.audit_records(operation="update", object_type="workspace")["total"], 1)
+        self.request("POST", f"/api/workspaces/{original}/archive")
+        self.assertGreater(self.audit_records()["total"], 0)
+        self.request("POST", f"/api/workspaces/{original}/restore")
+        self.login("audit_reader", "member123")
+        self.assertEqual(self.request("GET", "/api/audit")[0], 403)
+        self.assertEqual(self.request("GET", f"/api/audit/{record['id']}")[0], 403)
+        self.cookie = None
+        self.assertEqual(self.request("GET", "/api/audit")[0], 401)
+
+    def test_audit_bulk_undo_redo_cascade_restore_and_purge(self):
+        line = self.create_line()
+        child = self.create_line("支线", parent_id=line)
+        first, second = self.create_task(line), self.create_task(child)
+        milestone = self.create_milestone(child)
+        self.request("PATCH", "/api/tasks/bulk", {"ids": [first, second], "patch": {"priority": "低"}})
+        records = self.audit_records(operation="bulk_update", object_type="task")["items"]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["request_id"], records[1]["request_id"])
+        self.request("POST", "/api/undo")
+        self.assertEqual(self.audit_records(operation="undo", object_type="task")["total"], 2)
+        self.request("POST", "/api/redo")
+        self.assertEqual(self.audit_records(operation="redo", object_type="task")["total"], 2)
+        self.assertEqual(self.request("DELETE", f"/api/lines/{line}")[0], 200)
+        deleted = self.audit_records(operation="delete")["items"]
+        self.assertEqual(len(deleted), 5)
+        batch = self.audit_snapshot(deleted[0]["id"])["after"]["del_batch"]
+        self.assertEqual(self.request("POST", "/api/trash/restore", {"batch": batch})[0], 200)
+        self.assertEqual(self.audit_records(operation="restore")["total"], 5)
+        self.request("DELETE", f"/api/lines/{line}")
+        count = self.audit_records()["total"]
+        self.assertEqual(self.request("POST", "/api/trash/purge")[0], 200)
+        self.assertGreater(self.audit_records()["total"], count)
+        purged = self.audit_records(operation="purge", object_type="task")["items"]
+        self.assertEqual(len(purged), 2)
+        snapshot = self.audit_snapshot(purged[0]["id"])
+        self.assertIsNone(snapshot["after"])
+        self.assertEqual(snapshot["before"]["content"], "内容")
+        with sqlite3.connect(anyline.app.config["DATABASE"]) as db:
+            for sql in ("UPDATE audit_logs SET username='other'", "DELETE FROM audit_logs"):
+                with self.assertRaises(sqlite3.IntegrityError):
+                    db.execute(sql)
+
+    def test_audit_dependencies_attachments_comments_and_settings(self):
+        line = self.create_line()
+        first, second = self.create_task(line), self.create_task(line)
+        self.request("POST", f"/api/tasks/{second}/dependencies", {"prerequisite_task_id": first})
+        record = self.audit_records(object_type="task", object_id=second)["items"][0]
+        self.assertEqual(self.audit_snapshot(record["id"])["after"]["dependencies"], [first])
+        payload = {"attachments": [{"name": "记录.txt", "data_url": "data:text/plain;base64,c2VjcmV0LWZpbGU="}]}
+        self.assertEqual(self.request("PATCH", f"/api/tasks/{second}", payload)[0], 200)
+        record = self.audit_records(object_type="task", object_id=second)["items"][0]
+        attachment = self.audit_snapshot(record["id"])["after"]["attachments"][0]
+        self.assertEqual(attachment["filename"], "记录.txt")
+        self.assertEqual(len(attachment["sha256"]), 64)
+        self.assertNotIn("data", attachment)
+        self.request("POST", f"/api/tasks/{second}/comments", {"content": "需要确认"})
+        comment = self.audit_records(object_type="comment")["items"][0]
+        self.assertEqual(self.audit_snapshot(comment["id"])["after"]["content"], "需要确认")
+        self.request("DELETE", f"/api/tasks/{second}/follow")
+        self.request("POST", f"/api/tasks/{second}/follow")
+        self.assertGreater(self.audit_records(operation="follow")["total"], 0)
+        self.request("PUT", "/api/statuses", {"statuses": ["未启动", "进行中", "已闭环"]})
+        self.assertEqual(self.audit_records(object_type="settings")["total"], 1)
+        before = self.audit_records()["total"]
+        self.assertEqual(self.request("PATCH", f"/api/tasks/{second}", {"status": "已闭环"})[0], 409)
+        self.request("GET", "/api/state")
+        self.request("GET", "/api/notifications")
+        self.request("POST", "/api/notifications/read-all")
+        self.assertEqual(self.audit_records()["total"], before)
+
+    def test_audit_import_is_per_object_and_retained_on_workspace_delete(self):
+        original = self.request("GET", "/api/auth/session")[1]["current_workspace"]["id"]
+        _, content = self.request("GET", "/api/data/import-template")
+        book = load_workbook(io.BytesIO(content))
+        book["线导入"].append(["main", "", "审计导入线", "", "", self.today, None])
+        book["事务导入"].append(["main", "", "导入事务", "内容", "", "", "", "中",
+                                 "系统管理员", "进行中", self.today, self.today + timedelta(days=1)])
+        output = io.BytesIO()
+        book.save(output)
+        book.close()
+        self.assertEqual(self.upload_xlsx(output.getvalue(), path="/api/data/import")[0], 201)
+        self.assertEqual(self.audit_records(operation="import", object_type="line")["total"], 1)
+        self.assertEqual(self.audit_records(operation="import", object_type="task")["total"], 1)
+        previous = self.audit_records()["total"]
+        self.assertEqual(self.upload_xlsx(b"invalid", path="/api/data/import")[0], 400)
+        self.assertEqual(self.audit_records()["total"], previous)
+        self.request("POST", "/api/workspaces", {"name": "保留空间"})
+        self.assertEqual(self.request("DELETE", f"/api/workspaces/{original}", {"confirmation": "默认项目"})[0], 200)
+        with sqlite3.connect(anyline.app.config["DATABASE"]) as db:
+            self.assertGreater(db.execute("SELECT COUNT(*) FROM audit_logs WHERE workspace_id=?", (original,)).fetchone()[0], previous)
+        self.assertEqual(self.audit_records(operation="import")["total"], 0)
+
+    def test_audit_account_secrets_are_redacted(self):
+        member = self.add_member("audit_account", "测试成员")
+        workspace = self.request("GET", "/api/auth/session")[1]["current_workspace"]["id"]
+        self.request("PATCH", f"/api/workspaces/{workspace}/members/{member}", {"password": "new-secret-123"})
+        record = self.audit_records(object_type="member", operation="update")["items"][0]
+        self.assertTrue(self.audit_snapshot(record["id"])["password_changed"])
+        self.request("PUT", "/api/auth/password", {"current_password": "admin123", "new_password": "admin-new-123"})
+        self.assertEqual(self.audit_records(operation="password")["total"], 1)
+        with sqlite3.connect(anyline.app.config["DATABASE"]) as db:
+            text = " ".join(row[0] for row in db.execute("SELECT snapshot FROM audit_logs"))
+        for secret in ("password_hash", "new-secret-123", "admin-new-123", "member123", "admin123"):
+            self.assertNotIn(secret, text)
+
+    def test_audit_failure_rolls_back_business_edit(self):
+        with sqlite3.connect(anyline.app.config["DATABASE"]) as db:
+            db.execute("CREATE TRIGGER reject_audit BEFORE INSERT ON audit_logs BEGIN "
+                       "SELECT RAISE(ABORT, 'simulated audit failure'); END")
+        status, _ = self.request("POST", "/api/lines", {"name": "不应保存", "fork_date": self.today.isoformat()})
+        self.assertEqual(status, 500)
+        self.assertEqual(self.request("GET", "/api/state")[1]["lines"], [])
+        self.assertEqual(self.audit_records()["total"], 0)
 
     def test_index_and_empty_state(self):
         status, body = self.request("GET", "/")

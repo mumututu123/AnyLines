@@ -7,6 +7,7 @@ import re
 import sqlite3
 import base64
 import binascii
+import audit
 from zipfile import BadZipFile
 from io import BytesIO
 from datetime import date, datetime, timezone
@@ -141,7 +142,7 @@ app.config.update(
 # ---------------------------------------------------------------- db helpers
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(app.config["DATABASE"])
+        g.db = sqlite3.connect(app.config["DATABASE"], factory=audit.Connection)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
     return g.db
@@ -157,6 +158,7 @@ def close_db(_exc):
 def init_db(db_path=None):
     db = sqlite3.connect(db_path or app.config["DATABASE"])
     db.row_factory = sqlite3.Row
+    audit.initialize(db)
     db.executescript(
         """
         CREATE TABLE IF NOT EXISTS lines (
@@ -1234,7 +1236,87 @@ def load_authenticated_context():
     g.workspace = current
     if request.endpoint in CURRENT_WORKSPACE_WRITE_ENDPOINTS:
         require_workspace_writable()
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.endpoint in (
+            CURRENT_WORKSPACE_WRITE_ENDPOINTS | audit.ENDPOINTS):
+        target_id = (request.view_args or {}).get("workspace_id", current["id"])
+        if "workspace_id" in (request.view_args or {}):
+            require_workspace_admin(target_id)
+        if request.endpoint == "create_workspace":
+            target_id = None
+        audit.begin(db, target_id, user, request.endpoint)
     return None
+
+
+@app.after_request
+def finish_audit_request(response):
+    db = g.get("db")
+    if db is not None and db.audit_context is not None:
+        created_id = None
+        if request.endpoint == "create_workspace" and response.status_code == 201:
+            created_id = response.get_json()["id"]
+        audit.finish(db, request.method, 200 <= response.status_code < 300, created_id)
+    if request.path.startswith("/api/audit"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.route("/api/audit")
+def query_audit():
+    require_workspace_admin()
+    db = get_db()
+    conditions, values = ["workspace_id=?"], [current_workspace_id()]
+    for field in ("username", "operation", "object_type", "object_id"):
+        value = request.args.get(field, "").strip()
+        if value:
+            conditions.append(f"{field}=?")
+            values.append(value)
+    query = request.args.get("q", "").strip()
+    if query:
+        conditions.append("(instr(object_name,?)>0 OR instr(object_id,?)>0)")
+        values.extend([query, query])
+    dates = {}
+    for field, comparator in (("start", ">="), ("end", "<=")):
+        value = request.args.get(field, "").strip()
+        if value:
+            try:
+                parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    raise ValueError()
+            except ValueError:
+                raise ApiError("查询时间必须包含时区")
+            dates[field] = parsed.astimezone(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+            conditions.append(f"created_at{comparator}?")
+            values.append(dates[field])
+    if dates.get("start", "") > dates.get("end", "9999"):
+        raise ApiError("开始时间不能晚于结束时间")
+    try:
+        page = int(request.args.get("page", "1"))
+        page_size = int(request.args.get("page_size", "25"))
+        if page < 1 or not 1 <= page_size <= 100:
+            raise ValueError()
+    except ValueError:
+        raise ApiError("分页参数无效，每页应为 1-100 条")
+    where = " AND ".join(conditions)
+    total = db.execute(f"SELECT COUNT(*) FROM audit_logs WHERE {where}", values).fetchone()[0]
+    rows = [dict(row) for row in db.execute(
+        f"SELECT id,username,operation,object_type,object_id,object_name,created_at,request_id "
+        f"FROM audit_logs WHERE {where} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+        values + [page_size, (page - 1) * page_size])]
+    return jsonify({"items": rows, "total": total, "page": page, "page_size": page_size,
+                    "workspace_id": current_workspace_id(), "operations": audit.OPERATIONS,
+                    "object_types": audit.OBJECT_TYPES})
+
+
+@app.route("/api/audit/<int:record_id>")
+def audit_detail(record_id):
+    require_workspace_admin()
+    row = get_db().execute("SELECT * FROM audit_logs WHERE id=? AND workspace_id=?",
+                           (record_id, current_workspace_id())).fetchone()
+    if row is None:
+        raise ApiError("审计记录不存在", 404)
+    result = dict(row)
+    result["snapshot"] = json.loads(result["snapshot"])
+    return jsonify(result)
 
 
 # ---------------------------------------------------- collaboration helpers

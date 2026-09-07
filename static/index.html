@@ -107,6 +107,7 @@
       <button id="btn-statuses" type="button" role="menuitem">状态设置</button>
       <button id="btn-trash" type="button" role="menuitem">回收站</button>
       <button id="btn-password" type="button" role="menuitem">修改密码</button>
+      <button id="btn-audit" class="admin-only hidden" type="button" role="menuitem">操作审计</button>
       <button id="btn-logout" type="button" role="menuitem">退出</button>
     </div>
     <input id="avatar-file" class="hidden" type="file"
@@ -415,6 +416,38 @@
       <tbody id="task-tbody"></tbody>
     </table>
   </div>
+</main>
+
+<main id="audit-view" class="app-surface hidden" aria-labelledby="audit-title">
+  <div class="audit-heading">
+    <div><h1 id="audit-title" tabindex="-1">操作审计</h1><p id="audit-workspace"></p></div>
+    <button id="audit-back" type="button">返回工作台</button>
+  </div>
+  <p class="audit-note">记录功能启用后的成功编辑操作，可查看操作前后的对象快照。</p>
+  <form id="audit-filters">
+    <label>用户账号<input name="username" placeholder="完整账号" maxlength="40"></label>
+    <label>操作类型<select name="operation"><option value="">全部操作</option></select></label>
+    <label>对象类型<select name="object_type"><option value="">全部对象</option></select></label>
+    <label>操作对象<input name="q" placeholder="对象名称或 ID"></label>
+    <label>开始时间<input name="start" type="datetime-local"></label>
+    <label>结束时间<input name="end" type="datetime-local"></label>
+    <div class="audit-filter-actions">
+      <button type="submit" class="primary">查询</button>
+      <button type="reset">重置</button>
+    </div>
+  </form>
+  <p id="audit-message" role="status" aria-live="polite"></p>
+  <div class="audit-table-wrap">
+    <table class="audit-table">
+      <thead><tr><th>操作时间</th><th>用户账号</th><th>操作类型</th><th>操作对象</th><th>对象快照</th></tr></thead>
+      <tbody id="audit-rows"></tbody>
+    </table>
+  </div>
+  <nav class="audit-pagination" aria-label="审计分页">
+    <span id="audit-page-info"></span>
+    <button id="audit-prev" type="button">上一页</button>
+    <button id="audit-next" type="button">下一页</button>
+  </nav>
 </main>
 
 <!-- 表格单元格完整内容预览 -->
