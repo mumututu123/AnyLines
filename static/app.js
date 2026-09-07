@@ -78,7 +78,6 @@ function applyTheme(theme, { persist = false } = {}) {
     toggle.setAttribute("aria-label", label);
     toggle.setAttribute("title", label);
     toggle.setAttribute("aria-pressed", String(isDark));
-    toggle.textContent = isDark ? "外观：日间模式" : "外观：夜间模式";
   }
   if (persist) {
     try { localStorage.setItem(THEME_KEY, resolved); } catch (_error) { /* 忽略存储限制 */ }
