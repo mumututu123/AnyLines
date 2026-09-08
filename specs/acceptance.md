@@ -34,6 +34,7 @@
 | AL-COL-003 | `ensure_due_notifications,pollNotificationCount` | `test_collaboration_comments_mentions_followers_and_notifications`；源码审阅 | 部分；连续轮询及跨日边界需补专项测试 |
 | AL-VIEW-001 | `renderCanvas,renderTable,taskDependencyFocus` | `test_canvas_dependency_focus_visual_encoding_and_semantic_zoom`；`test_same_day_tasks_spread_horizontally_at_high_zoom` | 部分为源码断言，不宣称完整视觉自动化 |
 | AL-DASH-001 | `renderDashboard,update_dashboard_snapshot` | `test_dashboard_snapshot_metrics_and_same_day_update`；`test_dashboard_risk_bubbles_use_stable_click_targets` | 聚合接口与部分源码；打印和报告口径需人工核对 |
+| AL-DASH-002 | `DashboardAnalysis`；场景历史接口 | `test_dashboard_history_preserves_scenes_and_workspace_scope`；`test_dashboard_history_migrates_existing_summary_snapshots`；`test_dashboard_history_retention_and_archived_read_access`；`check_dashboard_analysis.cjs`；`check_dashboard_analysis_ui.cjs` | 历史及个人数据隔离、迁移、保留上限、推演计算、六项交互与主题窄屏；实际执行结果见变更规格 |
 | AL-REC-001 | `delete_line,restore_trash,purge_deleted` | `test_recursive_delete_restore_and_purge`；`test_restore_dependency_order`；`test_line_delete_restores_its_milestones_with_same_batch` | 批次、依赖恢复和级联 |
 | AL-REC-002 | `on_edit,restore_snapshot,undo,redo` | `test_general_undo_for_canvas_edits`；`test_redo_restores_undo_and_is_cleared_by_a_new_edit` | 单步快照恢复；多人交错操作需补验收 |
 | AL-UX-001 | `applyTheme`、头像菜单结构及样式 | 审计浏览器检查中的暗色展示；源码审阅 | 部分；系统主题、存储同步及按钮切换需人工 |

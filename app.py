@@ -348,6 +348,8 @@ def init_db(db_path=None):
     ensure_column(db, "users", "avatar_data", "BLOB")
     ensure_column(db, "users", "avatar_updated_at", "TEXT")
     ensure_column(db, "workspaces", "archived_at", "TEXT")
+    ensure_column(db, "dashboard_snapshots", "scene", "TEXT")
+    ensure_column(db, "dashboard_snapshots", "captured_at", "TEXT")
     today = date.today().isoformat()
 
     admin_username = os.environ.get("ANYLINE_ADMIN_USERNAME", "admin").strip() or "admin"
@@ -2570,7 +2572,7 @@ def workspace_member(workspace_id, user_id):
     return jsonify({"ok": True})
 
 
-def update_dashboard_snapshot(db, workspace_id, tasks, dependencies):
+def update_dashboard_snapshot(db, workspace_id, tasks, dependencies, lines, milestones):
     today = date.today().isoformat()
     done_statuses = {"已闭环", "已取消"}
     task_by_id = {task["id"]: task for task in tasks}
@@ -2603,17 +2605,37 @@ def update_dashboard_snapshot(db, workspace_id, tasks, dependencies):
     }
     db.execute(
         "INSERT INTO dashboard_snapshots("
-        "workspace_id,snapshot_date,total,done,overdue,risk,blocked,status_counts"
-        ") VALUES(?,?,?,?,?,?,?,?) "
+        "workspace_id,snapshot_date,total,done,overdue,risk,blocked,status_counts,scene,captured_at"
+        ") VALUES(?,?,?,?,?,?,?,?,?,?) "
         "ON CONFLICT(workspace_id,snapshot_date) DO UPDATE SET "
         "total=excluded.total,done=excluded.done,overdue=excluded.overdue,"
         "risk=excluded.risk,blocked=excluded.blocked,"
-        "status_counts=excluded.status_counts",
+        "status_counts=excluded.status_counts,scene=excluded.scene,"
+        "captured_at=excluded.captured_at",
         (
             workspace_id, today, metrics["total"], metrics["done"],
             metrics["overdue"], metrics["risk"], metrics["blocked"],
             json.dumps(status_counts, ensure_ascii=False, sort_keys=True),
+            json.dumps({
+                "tasks": [{key: task[key] for key in (
+                    "id", "line_id", "name", "owner", "priority", "status",
+                    "start_date", "end_date",
+                )} for task in tasks],
+                "lines": [{key: line[key] for key in (
+                    "id", "name", "parent_id", "fork_date", "merge_date", "color",
+                )} for line in lines],
+                "dependencies": dependencies,
+                "milestones": milestones,
+            }, ensure_ascii=False, separators=(",", ":")),
+            now_iso(),
         ),
+    )
+    db.execute(
+        "UPDATE dashboard_snapshots SET scene=NULL,captured_at=NULL "
+        "WHERE workspace_id=? AND scene IS NOT NULL AND snapshot_date NOT IN ("
+        "SELECT snapshot_date FROM dashboard_snapshots WHERE workspace_id=? "
+        "AND scene IS NOT NULL ORDER BY snapshot_date DESC LIMIT 90)",
+        (workspace_id, workspace_id),
     )
     db.commit()
     rows = db.execute(
@@ -2631,6 +2653,32 @@ def update_dashboard_snapshot(db, workspace_id, tasks, dependencies):
             snapshot["status_counts"] = {}
         snapshots.append(snapshot)
     return snapshots
+
+
+@app.route("/api/dashboard/history")
+def dashboard_history():
+    rows = get_db().execute(
+        "SELECT snapshot_date,captured_at,total,done FROM dashboard_snapshots "
+        "WHERE workspace_id=? AND scene IS NOT NULL "
+        "ORDER BY snapshot_date DESC LIMIT 90", (current_workspace_id(),)
+    ).fetchall()
+    return jsonify({"workspace_id": current_workspace_id(),
+                    "snapshots": [dict(row) for row in reversed(rows)]})
+
+
+@app.route("/api/dashboard/history/<snapshot_date>")
+def dashboard_history_scene(snapshot_date):
+    row = get_db().execute(
+        "SELECT snapshot_date,captured_at,scene FROM dashboard_snapshots "
+        "WHERE workspace_id=? AND snapshot_date=? AND scene IS NOT NULL",
+        (current_workspace_id(), snapshot_date),
+    ).fetchone()
+    if row is None:
+        raise ApiError("该日期没有可回放的场景快照", 404)
+    return jsonify({"workspace_id": current_workspace_id(),
+                    "snapshot_date": row["snapshot_date"],
+                    "captured_at": row["captured_at"],
+                    "scene": json.loads(row["scene"])})
 
 
 @app.route("/api/state")
@@ -2711,7 +2759,7 @@ def api_state():
         (workspace_id, workspace_id, workspace_id),
     )]
     dashboard_snapshots = update_dashboard_snapshot(
-        db, workspace_id, tasks, dependencies
+        db, workspace_id, tasks, dependencies, lines, milestone_rows
     )
     ensure_due_notifications(db, workspace_id, g.user["id"])
     db.commit()

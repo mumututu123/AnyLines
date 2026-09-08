@@ -76,6 +76,7 @@ erDiagram
 | `workspace_meta` | `workspace_id, key, value` | 状态名称、颜色及删除批次控制数据；不同键有不同内容语义 |
 | `undo_snapshots / redo_snapshots` | `workspace_id, snapshot, created_at` | 每空间各一份，JSON 保存可恢复业务状态 |
 | `dashboard_snapshots` | `workspace_id, snapshot_date, total, done, overdue, risk, blocked, status_counts` | 空间与日期联合主键，同日更新聚合值 |
+| `dashboard_snapshots.scene / captured_at` | 可空场景 JSON 与 UTC 采集时间 | 启动时补列；状态加载时保存线、事务地图字段、依赖和里程碑。仅保留最近 90 个记录日的场景正文，旧聚合不回填历史。目录与单日场景分开读取 |
 | `task_followers / task_comments / task_activities` | 空间、事务、用户或作者、时间和内容 | 协作订阅、评论与业务动态 |
 | `notifications` | `workspace_id, user_id, task_id, kind, message, dedupe_key, read_at` | 个人站内通知；唯一去重键按空间及用户隔离 |
 | `audit_logs` | 见审计专项 | 不依赖可删除业务对象继续存在，保存历史用户账号与对象名称 |
@@ -123,6 +124,7 @@ erDiagram
 | 日夜主题 | `localStorage` 的 `anyline.theme` | 显式选择优先，支持系统偏好与浏览器 storage 同步 |
 | 新建事务草稿 | 页面内存中的 `Map` | 按空间和线隔离；不承诺刷新恢复 |
 | 审计筛选与分页 | `auditView` | 查询页会话；切换空间、退出时清理 |
+| 项目地图分析 | `DashboardAnalysis`，`anyline.analysis.v1.<userId>.<workspaceId>.*` | 独立前端模块；变化确认点、基线与讲解路径存于浏览器，切换上下文时清理内存。打开页面不会移动确认点；回放带请求代次检查并在离开或隐藏页面时停止 |
 
 审计查询和快照详情使用请求序号及空间 ID 检查异步响应，避免旧请求覆盖新空间页面。快照使用文本节点展示 JSON，不将用户数据作为 HTML 注入。
 

@@ -210,6 +210,7 @@ async function api(url, method = "GET", body = null) {
 }
 
 function showLoggedOut() {
+  DashboardAnalysis.reset();
   if (state.view === "audit") switchView(auditView.previousView);
   clearAuditView();
   closeAccountMenu();
@@ -323,6 +324,7 @@ function toggleAccountMenu() {
 }
 
 function resetWorkspaceState() {
+  DashboardAnalysis.reset();
   if (state.view === "audit") switchView(auditView.previousView);
   clearAuditView();
   state.selectedLineId = null;
@@ -528,6 +530,7 @@ async function reload() {
   state.unreadNotifications = d.unread_notifications || 0;
   state.today = d.today;
   state.dashboardSnapshots = d.dashboard_snapshots || [];
+  DashboardAnalysis.invalidateHistory();
   for (const id of [...state.hiddenBranchIds]) {
     if (!state.lines.some((line) => line.id === id && line.parent_id !== null)) {
       state.hiddenBranchIds.delete(id);
@@ -1220,6 +1223,7 @@ function renderDashboard() {
   renderDashboardDueHeatmap(tasks);
   renderDashboardRiskMatrix(tasks, dependency);
   renderDashboardExceptions(tasks, dependency);
+  DashboardAnalysis.render();
 }
 
 function renderDashboardKpis(tasks, dependency, activeFilters = false) {
@@ -5901,6 +5905,7 @@ $("#btn-logout").onclick = async () => {
 };
 
 function switchView(v) {
+  if (v !== "dashboard") DashboardAnalysis.stop();
   if (v === "audit" && state.currentWorkspace?.role !== "admin") v = "canvas";
   if (state.view === "audit" && v !== "audit") auditView.request++;
   closeTableCellPreview();

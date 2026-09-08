@@ -7,6 +7,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from datetime import date, timedelta
 from urllib.parse import urlencode
 
@@ -1283,6 +1284,75 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(snapshot["risk"], 0)
         self.assertEqual(snapshot["blocked"], 0)
 
+    def test_dashboard_history_preserves_scenes_and_workspace_scope(self):
+        self.assertEqual(self.request("GET", "/api/dashboard/history")[1]["snapshots"], [])
+        self.assertEqual(self.request("GET", "/api/dashboard/history/2020-01-01")[0], 404)
+        line_id = self.create_line()
+        task_id = self.create_task(line_id, "原计划", content="不存入历史的正文")
+        next_id = self.create_task(line_id, "后续事务", prerequisite_ids=[task_id])
+        milestone_id = self.create_milestone(line_id, [next_id])
+        self.request("GET", "/api/state")
+        today = self.today.isoformat()
+        yesterday = (self.today - timedelta(days=1)).isoformat()
+        old_day = (self.today - timedelta(days=2)).isoformat()
+        _, current = self.request("GET", f"/api/dashboard/history/{today}")
+        original = current["scene"]
+        self.assertEqual(original["tasks"][0]["name"], "原计划")
+        self.assertNotIn("content", original["tasks"][0])
+        self.assertNotIn("不存入历史的正文", json.dumps(original, ensure_ascii=False))
+        self.assertEqual(original["milestones"][0]["id"], milestone_id)
+        self.assertEqual(original["dependencies"][0]["prerequisite_task_id"], task_id)
+        workspace_id = current["workspace_id"]
+        with closing(sqlite3.connect(anyline.app.config["DATABASE"])) as db, db:
+            db.execute("UPDATE dashboard_snapshots SET snapshot_date=? WHERE workspace_id=?",
+                       (yesterday, workspace_id))
+            db.execute("INSERT INTO dashboard_snapshots "
+                       "(workspace_id,snapshot_date,total,done,overdue,risk,blocked,status_counts) "
+                       "VALUES(?,?,1,0,0,0,0,'{}')", (workspace_id, old_day))
+        self.request("PATCH", f"/api/tasks/{task_id}", {"name": "调整后的计划"})
+        self.request("GET", "/api/state")
+        _, history = self.request("GET", "/api/dashboard/history")
+        self.assertEqual([item["snapshot_date"] for item in history["snapshots"]], [yesterday, today])
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{old_day}")[0], 404)
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{yesterday}")[1]["scene"], original)
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{today}")[1]["scene"]["tasks"][0]["name"], "调整后的计划")
+        self.add_member("history_reader", "历史阅读者")
+        self.login("history_reader", "member123")
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{yesterday}")[0], 200)
+        self.assertEqual(self.request("GET", "/api/audit")[0], 403)
+        self.login("admin", "admin123")
+        self.request("POST", "/api/workspaces", {"name": "另一个空间"})
+        self.assertEqual(self.request("GET", "/api/dashboard/history")[1]["snapshots"], [])
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{yesterday}")[0], 404)
+        self.request("GET", "/api/state")
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{today}")[1]["scene"]["tasks"], [])
+        self.request("POST", "/api/auth/logout")
+        self.assertEqual(self.request("GET", "/api/dashboard/history")[0], 401)
+
+    def test_dashboard_history_retention_and_archived_read_access(self):
+        self.create_task(self.create_line(), "历史保留测试")
+        self.request("GET", "/api/state")
+        workspace_id = self.request("GET", "/api/auth/session")[1]["current_workspace"]["id"]
+        oldest = (self.today - timedelta(days=90)).isoformat()
+        with closing(sqlite3.connect(anyline.app.config["DATABASE"])) as db, db:
+            for offset in range(1, 91):
+                db.execute(
+                    "INSERT INTO dashboard_snapshots "
+                    "SELECT workspace_id,?,total,done,overdue,risk,blocked,status_counts,scene,captured_at "
+                    "FROM dashboard_snapshots WHERE workspace_id=? AND snapshot_date=?",
+                    ((self.today - timedelta(days=offset)).isoformat(), workspace_id, self.today.isoformat()),
+                )
+        self.request("GET", "/api/state")
+        _, history = self.request("GET", "/api/dashboard/history")
+        self.assertEqual(len(history["snapshots"]), 90)
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{oldest}")[0], 404)
+        with closing(sqlite3.connect(anyline.app.config["DATABASE"])) as db:
+            self.assertEqual(db.execute("SELECT total,scene FROM dashboard_snapshots WHERE snapshot_date=?",
+                                        (oldest,)).fetchone(), (1, None))
+        self.assertEqual(self.request("POST", f"/api/workspaces/{workspace_id}/archive")[0], 200)
+        self.assertEqual(self.request("GET", "/api/dashboard/history")[0], 200)
+        self.assertEqual(self.request("GET", f"/api/dashboard/history/{self.today.isoformat()}")[0], 200)
+
     def test_dashboard_risk_bubbles_use_stable_click_targets(self):
         status, script = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)
@@ -2153,6 +2223,20 @@ class AnyLineHttpTests(unittest.TestCase):
 
 
 class DatabaseMigrationTests(unittest.TestCase):
+    def test_dashboard_history_migrates_existing_summary_snapshots(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "dashboard-legacy.db")
+            with closing(sqlite3.connect(db_path)) as db, db:
+                db.execute("CREATE TABLE dashboard_snapshots (workspace_id INTEGER, snapshot_date TEXT, "
+                           "total INTEGER, done INTEGER, overdue INTEGER, risk INTEGER, blocked INTEGER, "
+                           "status_counts TEXT, PRIMARY KEY(workspace_id,snapshot_date))")
+                db.execute("INSERT INTO dashboard_snapshots VALUES(1,'2026-01-01',3,1,0,0,0,'{}')")
+            anyline.init_db(db_path)
+            anyline.init_db(db_path)
+            with closing(sqlite3.connect(db_path)) as db:
+                row = db.execute("SELECT total,done,scene,captured_at FROM dashboard_snapshots").fetchone()
+            self.assertEqual(row, (3, 1, None, None))
+
     def test_legacy_schema_is_migrated(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "legacy.db")

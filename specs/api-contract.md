@@ -59,6 +59,8 @@
 | 方法 | 路径 | 输入 / 结果 | 权限 |
 | --- | --- | --- | --- |
 | GET | `/api/state` | 当前空间聚合状态，结构见第 3 节 | 成员 |
+| GET | `/api/dashboard/history` | `workspace_id,snapshots`；最近 90 个场景记录日，按日期升序，条目含 `snapshot_date,captured_at,total,done` | 成员，允许已归档空间 |
+| GET | `/api/dashboard/history/:date` | `workspace_id,snapshot_date,captured_at,scene`；场景含 `tasks,lines,dependencies,milestones`，无记录返回 404 | 当前空间成员，允许已归档空间 |
 | GET | `/api/statuses` | `statuses,colors` | 成员 |
 | PUT | `/api/statuses` | `statuses,colors?` → `ok,statuses,colors` | 可编辑成员 |
 | POST | `/api/lines` | 线创建字段 → id | 可编辑成员 |

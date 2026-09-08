@@ -18,6 +18,7 @@
   })();
 </script>
 <link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/dashboard-analysis.css">
 </head>
 <body class="auth-pending">
 <section id="login-view">
@@ -264,6 +265,13 @@
 
   <details class="dashboard-supporting">
     <summary>辅助分析</summary>
+    <section id="dashboard-analysis" class="dashboard-section analysis-studio" aria-labelledby="analysis-title">
+      <div class="dashboard-section-heading">
+        <div><h2 id="analysis-title">项目地图</h2><p class="analysis-note">先选择你想回答的问题。所有分析都使用完整项目，不受顶部筛选和汇报周期影响；推演与回放不会修改真实计划。</p></div>
+      </div>
+      <div id="analysis-tabs" class="analysis-tabs" role="tablist" aria-label="项目地图分析工具"></div>
+      <div id="analysis-panel" role="tabpanel" tabindex="0"></div>
+    </section>
     <div class="dashboard-grid dashboard-grid-equal">
       <section class="dashboard-section" aria-labelledby="dashboard-status-trend-title">
       <div class="dashboard-section-heading">
@@ -489,6 +497,7 @@
 
 <div id="toast" class="hidden"></div>
 
+<script src="/static/dashboard-analysis.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>
