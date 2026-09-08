@@ -5433,9 +5433,9 @@ function openWorkspaceManagementModal() {
         nameLine.appendChild(nameInput);
       }
       if (workspace.id === state.currentWorkspace?.id) {
-        const current = document.createElement("span");
-        current.className = "workspace-badge";
-        current.textContent = "当前";
+        const current = document.createElement("small");
+        current.className = "workspace-current-indicator";
+        current.textContent = "当前项目";
         nameLine.appendChild(current);
       }
       if (workspace.archived_at) {

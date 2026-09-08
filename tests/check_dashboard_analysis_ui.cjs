@@ -114,6 +114,9 @@ const assert = require('node:assert/strict');
     console.log('Checking analysis tools.');
     await evaluate(`openWorkspaceManagementModal()`);
     await until(`document.querySelector('.workspace-management-row[data-workspace-id="' + state.currentWorkspace.id + '"] .workspace-management-name-input')`);
+    assert.equal(await evaluate(`document.querySelector('.workspace-current-indicator').tagName`), 'SMALL');
+    assert.equal(await evaluate(`document.querySelector('.workspace-current-indicator').textContent`), '当前项目');
+    assert.equal(await evaluate(`document.querySelectorAll('.workspace-badge:not(.archived)').length`), 0);
     await evaluate(`(() => {
       const row = document.querySelector('.workspace-management-row[data-workspace-id="' + state.currentWorkspace.id + '"]');
       row.querySelector('.workspace-management-name-input').value = '发布协作项目';
