@@ -1398,6 +1398,10 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .my-todo-intro {
   margin-bottom: 10px; color: #57606a; font-size: 12px;
 }
+.my-notification-intro {
+  margin-bottom: 12px; padding: 9px 11px; border-left: 3px solid #0969da;
+  background: #f6f8fa; color: #57606a; font-size: 12px; line-height: 1.6;
+}
 .my-todo-summary {
   display: flex; flex: 0 0 auto; gap: 8px; margin-bottom: 14px;
   padding: 2px 2px 8px; overflow-x: auto;
@@ -1949,7 +1953,7 @@ html[data-theme="dark"] :is(
   .my-status-tabs, .import-template-panel, .task-attachment-drop-zone,
   .task-more-details, #modal-body .status-add, .trash-row button,
   .comment-composer, #modal-body .dependency-option:hover,
-  #modal-body .notification-row:hover
+  #modal-body .notification-row:hover, .my-notification-intro
 ) {
   background-color: var(--dark-subtle);
   color: var(--dark-text);
@@ -1983,6 +1987,7 @@ html[data-theme="dark"] :is(
   #canvas-legend, .shortcut-list dd, .cluster-focus-card-meta,
   #cell-preview-close, #modal-body .my-status-tabs button,
   .my-status-notification-toolbar, #modal-body label, .my-todo-intro,
+  .my-notification-intro,
   .my-todo-stat span, .import-template-panel span,
   .task-import-drop-zone span:last-child, .task-attachment-prompt,
   .dependency-selected-count, .milestone-acceptance-task > span,

@@ -678,7 +678,7 @@ async function loadNotifications(container, options = {}) {
     icon.className = `notification-kind kind-${notice.kind}`;
     icon.textContent = {
       mention: "@", comment: "评", assigned: "派", status_changed: "变",
-      dependency_unblocked: "通", due_soon: "临", overdue: "超",
+      dependency_unblocked: "通",
     }[notice.kind] || "知";
     const main = document.createElement("span");
     main.className = "notification-main";
@@ -717,10 +717,13 @@ async function loadNotifications(container, options = {}) {
 
 function renderMyNotificationsPanel(container, options = {}) {
   container.innerHTML = "";
+  const intro = document.createElement("div");
+  intro.className = "my-notification-intro";
+  intro.textContent = "只显示成员协作产生的指派、提及、评论、状态变化和依赖解除；临期与超期请在“我的待办”查看。";
   const toolbar = document.createElement("div");
   toolbar.className = "my-status-notification-toolbar";
   const summary = document.createElement("span");
-  summary.textContent = `当前 ${state.unreadNotifications || 0} 条未读通知`;
+  summary.textContent = `当前 ${state.unreadNotifications || 0} 条未读协作消息`;
   const markAll = document.createElement("button");
   markAll.type = "button";
   markAll.className = "notification-read-all";
@@ -732,7 +735,7 @@ function renderMyNotificationsPanel(container, options = {}) {
     renderMyStatusEntry();
     options.onUnreadChanged?.(0);
     markAll.disabled = true;
-    summary.textContent = "当前 0 条未读通知";
+    summary.textContent = "当前 0 条未读协作消息";
     await loadNotifications(listHost, options);
   };
   toolbar.append(summary, markAll);
@@ -742,11 +745,11 @@ function renderMyNotificationsPanel(container, options = {}) {
   loading.className = "notification-empty";
   loading.textContent = "正在加载通知…";
   listHost.appendChild(loading);
-  container.append(toolbar, listHost);
+  container.append(intro, toolbar, listHost);
   loadNotifications(listHost, {
     ...options,
     onUnreadChanged: (count) => {
-      summary.textContent = `当前 ${count} 条未读通知`;
+      summary.textContent = `当前 ${count} 条未读协作消息`;
       markAll.disabled = count === 0;
       options.onUnreadChanged?.(count);
     },

@@ -87,9 +87,9 @@
 | POST | `/api/tasks/:id/follow` | `ok,following:true` | 可编辑成员 |
 | DELETE | `/api/tasks/:id/follow` | `ok,following:false` | 可编辑成员 |
 | POST | `/api/tasks/:id/comments` | `content` → `id,created_at` | 可编辑成员 |
-| GET | `/api/notifications` | `notifications,unread_count`；最多 100 条，未读优先 | 成员本人 |
-| POST | `/api/notifications/read-all` | `ok,unread_count:0` | 成员本人 |
-| POST | `/api/notifications/:id/read` | `ok,unread_count` | 成员本人 |
+| GET | `/api/notifications` | `notifications,unread_count`；仅返回 `assigned,mention,comment,status_changed,dependency_unblocked`，最多 100 条，未读优先 | 成员本人 |
+| POST | `/api/notifications/read-all` | 将当前空间全部协作通知标为已读，返回 `ok,unread_count:0` | 成员本人 |
+| POST | `/api/notifications/:id/read` | 将指定协作通知标为已读并返回 `ok,unread_count`；非协作类型按不存在处理 | 成员本人 |
 | GET | `/api/data/import-template` | 统一 Excel 模板 | 成员 |
 | POST | `/api/data/import` | multipart 文件 → `ok,count,line_count,task_count,line_ids,task_ids,can_undo`，201 | 可编辑成员 |
 | POST | `/api/data/export` | `scope,ids?` → Excel | 成员 |

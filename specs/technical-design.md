@@ -78,7 +78,7 @@ erDiagram
 | `dashboard_snapshots` | `workspace_id, snapshot_date, total, done, overdue, risk, blocked, status_counts` | 空间与日期联合主键，同日更新聚合值 |
 | `dashboard_snapshots.scene / captured_at` | 可空场景 JSON 与 UTC 采集时间 | 启动时补列；状态加载时保存线、事务地图字段、依赖和里程碑。仅保留最近 90 个记录日的场景正文，旧聚合不回填历史。目录与单日场景分开读取 |
 | `task_followers / task_comments / task_activities` | 空间、事务、用户或作者、时间和内容 | 协作订阅、评论与业务动态 |
-| `notifications` | `workspace_id, user_id, task_id, kind, message, dedupe_key, read_at` | 个人站内通知；唯一去重键按空间及用户隔离 |
+| `notifications` | `workspace_id, user_id, task_id, kind, message, dedupe_key, read_at` | 协作通知；接口和未读数仅纳入指派、提及、评论、状态变化及依赖解除，按空间及用户隔离 |
 | `audit_logs` | 见审计专项 | 不依赖可删除业务对象继续存在，保存历史用户账号与对象名称 |
 
 线、事务、里程碑另含 `deleted, del_batch, deleted_at`，用于软删除和批次恢复。业务 ID 为整数；审计 `object_id` 为文本，可表示整数 ID、联合键或配置标识。

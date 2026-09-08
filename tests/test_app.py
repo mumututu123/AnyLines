@@ -2114,7 +2114,10 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
 
     def test_collaboration_comments_mentions_followers_and_notifications(self):
-        self.add_member("alice", "张三")
+        alice_id = self.add_member("alice", "张三")
+        workspace_id = self.request(
+            "GET", "/api/auth/session"
+        )[1]["current_workspace"]["id"]
         line_id = self.create_line()
         task_id = self.create_task(line_id, owner="张三")
 
@@ -2136,18 +2139,47 @@ class AnyLineHttpTests(unittest.TestCase):
             for item in collaboration["timeline"] if item["kind"] == "activity"
         ))
 
+        with closing(sqlite3.connect(anyline.app.config["DATABASE"])) as db, db:
+            stale_due = db.execute(
+                "INSERT INTO notifications("
+                "workspace_id,user_id,task_id,kind,message,created_at"
+                ") VALUES(?,?,?,?,?,?)",
+                (
+                    workspace_id, alice_id, task_id, "due_soon",
+                    "旧版临期提醒", "2026-09-08T00:00:00Z",
+                ),
+            ).lastrowid
+            db.execute(
+                "INSERT INTO notifications("
+                "workspace_id,user_id,task_id,kind,message,created_at"
+                ") VALUES(?,?,?,?,?,?)",
+                (
+                    workspace_id, alice_id, task_id, "overdue",
+                    "旧版超期提醒", "2026-09-08T00:00:01Z",
+                ),
+            )
+
         status, data = self.login("alice", "member123")
         self.assertEqual(status, 200, data)
+        self.assertEqual(
+            self.request("GET", "/api/state")[1]["unread_notifications"], 2
+        )
         status, notices = self.request("GET", "/api/notifications")
         self.assertEqual(status, 200, notices)
         kinds = {item["kind"] for item in notices["notifications"]}
         self.assertIn("assigned", kinds)
         self.assertIn("mention", kinds)
+        self.assertNotIn("due_soon", kinds)
+        self.assertNotIn("overdue", kinds)
+        self.assertEqual(notices["unread_count"], 2)
         mention = next(
             item for item in notices["notifications"] if item["kind"] == "mention"
         )
         self.assertEqual(mention["task_id"], task_id)
         self.assertEqual(mention["task_available"], 1)
+        self.assertEqual(
+            self.request("POST", f"/api/notifications/{stale_due}/read")[0], 404
+        )
 
         status, data = self.request("POST", f"/api/tasks/{task_id}/follow")
         self.assertEqual(status, 200, data)
@@ -2159,6 +2191,14 @@ class AnyLineHttpTests(unittest.TestCase):
         status, data = self.request("POST", "/api/notifications/read-all")
         self.assertEqual(status, 200, data)
         self.assertEqual(data["unread_count"], 0)
+        with closing(sqlite3.connect(anyline.app.config["DATABASE"])) as db:
+            remaining_due = db.execute(
+                "SELECT COUNT(*) FROM notifications WHERE workspace_id=? "
+                "AND user_id=? AND kind IN ('due_soon','overdue') "
+                "AND read_at IS NULL",
+                (workspace_id, alice_id),
+            ).fetchone()[0]
+        self.assertEqual(remaining_due, 2)
 
         status, data = self.request(
             "POST", f"/api/tasks/{task_id}/comments", {"content": "方案已经确认"}
@@ -2213,6 +2253,8 @@ class AnyLineHttpTests(unittest.TestCase):
         source = source.decode("utf-8")
         self.assertIn("function renderMyNotificationsPanel(", source)
         self.assertIn('notificationTab.textContent = `协作通知（${state.unreadNotifications || 0} 未读）`', source)
+        self.assertIn("只显示成员协作产生的指派、提及、评论、状态变化和依赖解除", source)
+        self.assertNotIn('due_soon: "临", overdue: "超"', source)
         self.assertIn("function createTaskCollaborationPanel(body, task)", source)
         self.assertIn("function createMentionAutocomplete(textarea, members, taskId)", source)
         self.assertIn('textarea.setAttribute("aria-autocomplete", "list")', source)

@@ -39,6 +39,12 @@ DEFAULT_STATUS_COLORS = {
 }
 FALLBACK_STATUS_COLOR = "#6e7781"
 PRIORITY_ENUM = ["低", "中", "高", "紧急"]
+COLLABORATION_NOTIFICATION_KINDS = (
+    "assigned", "mention", "comment", "status_changed", "dependency_unblocked",
+)
+COLLABORATION_NOTIFICATION_MARKS = ",".join(
+    "?" for _ in COLLABORATION_NOTIFICATION_KINDS
+)
 TASK_IMAGE_TYPES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 MAX_TASK_IMAGES = 8
 MAX_TASK_IMAGE_BYTES = 5 * 1024 * 1024
@@ -1423,41 +1429,6 @@ def mentioned_user_ids(db, workspace_id, content):
     return mentioned
 
 
-def ensure_due_notifications(db, workspace_id, user_id):
-    today = date.today()
-    rows = db.execute(
-        "SELECT DISTINCT t.id,t.name,t.end_date FROM tasks t "
-        "JOIN lines l ON l.id=t.line_id "
-        "LEFT JOIN users owner ON owner.display_name=t.owner AND owner.active=1 "
-        "LEFT JOIN workspace_members owner_member ON owner_member.user_id=owner.id "
-        "AND owner_member.workspace_id=t.workspace_id "
-        "LEFT JOIN task_followers follower ON follower.workspace_id=t.workspace_id "
-        "AND follower.task_id=t.id AND follower.user_id=? "
-        "WHERE t.workspace_id=? AND l.workspace_id=? AND t.deleted=0 AND l.deleted=0 "
-        "AND t.status NOT IN ('已闭环','已取消') AND t.end_date IS NOT NULL "
-        "AND (owner_member.user_id=? OR follower.user_id=?)",
-        (user_id, workspace_id, workspace_id, user_id, user_id),
-    ).fetchall()
-    for task in rows:
-        try:
-            days_left = (date.fromisoformat(task["end_date"]) - today).days
-        except (TypeError, ValueError):
-            continue
-        if days_left > 7:
-            continue
-        kind = "overdue" if days_left < 0 else "due_soon"
-        if days_left < 0:
-            message = f"事务「{task['name']}」已超期 {-days_left} 天"
-        elif days_left == 0:
-            message = f"事务「{task['name']}」今天到期"
-        else:
-            message = f"事务「{task['name']}」将在 {days_left} 天后到期"
-        add_notifications(
-            db, workspace_id, {user_id}, kind, message, task["id"],
-            dedupe_key=f"{kind}:{task['id']}:{task['end_date']}",
-        )
-
-
 def notify_dependents_unblocked(db, workspace_id, prerequisite_task_id,
                                 prerequisite_name, actor_id):
     rows = db.execute(
@@ -2761,12 +2732,12 @@ def api_state():
     dashboard_snapshots = update_dashboard_snapshot(
         db, workspace_id, tasks, dependencies, lines, milestone_rows
     )
-    ensure_due_notifications(db, workspace_id, g.user["id"])
     db.commit()
     unread_notifications = db.execute(
         "SELECT COUNT(*) AS count FROM notifications "
-        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL",
-        (workspace_id, g.user["id"]),
+        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL "
+        f"AND kind IN ({COLLABORATION_NOTIFICATION_MARKS})",
+        (workspace_id, g.user["id"], *COLLABORATION_NOTIFICATION_KINDS),
     ).fetchone()["count"]
     return jsonify({
         "lines": lines,
@@ -2794,8 +2765,6 @@ def api_state():
 def api_notifications():
     db = get_db()
     workspace_id = current_workspace_id()
-    ensure_due_notifications(db, workspace_id, g.user["id"])
-    db.commit()
     rows = [dict(row) for row in db.execute(
         "SELECT n.id,n.task_id,n.kind,n.message,n.read_at,n.created_at,"
         "actor.display_name AS actor_name,t.name AS task_name,"
@@ -2806,14 +2775,16 @@ def api_notifications():
         "LEFT JOIN tasks t ON t.id=n.task_id AND t.workspace_id=n.workspace_id "
         "LEFT JOIN lines l ON l.id=t.line_id AND l.workspace_id=n.workspace_id "
         "WHERE n.workspace_id=? AND n.user_id=? "
+        f"AND n.kind IN ({COLLABORATION_NOTIFICATION_MARKS}) "
         "ORDER BY CASE WHEN n.read_at IS NULL THEN 0 ELSE 1 END,n.created_at DESC,n.id DESC "
         "LIMIT 100",
-        (workspace_id, g.user["id"]),
+        (workspace_id, g.user["id"], *COLLABORATION_NOTIFICATION_KINDS),
     )]
     unread_count = db.execute(
         "SELECT COUNT(*) AS count FROM notifications "
-        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL",
-        (workspace_id, g.user["id"]),
+        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL "
+        f"AND kind IN ({COLLABORATION_NOTIFICATION_MARKS})",
+        (workspace_id, g.user["id"], *COLLABORATION_NOTIFICATION_KINDS),
     ).fetchone()["count"]
     return jsonify({
         "notifications": rows,
@@ -2826,8 +2797,12 @@ def read_all_notifications():
     db = get_db()
     db.execute(
         "UPDATE notifications SET read_at=? WHERE workspace_id=? AND user_id=? "
-        "AND read_at IS NULL",
-        (now_iso(), current_workspace_id(), g.user["id"]),
+        "AND read_at IS NULL "
+        f"AND kind IN ({COLLABORATION_NOTIFICATION_MARKS})",
+        (
+            now_iso(), current_workspace_id(), g.user["id"],
+            *COLLABORATION_NOTIFICATION_KINDS,
+        ),
     )
     db.commit()
     return jsonify({"ok": True, "unread_count": 0})
@@ -2838,16 +2813,24 @@ def read_notification(notification_id):
     db = get_db()
     result = db.execute(
         "UPDATE notifications SET read_at=COALESCE(read_at,?) "
-        "WHERE id=? AND workspace_id=? AND user_id=?",
-        (now_iso(), notification_id, current_workspace_id(), g.user["id"]),
+        "WHERE id=? AND workspace_id=? AND user_id=? "
+        f"AND kind IN ({COLLABORATION_NOTIFICATION_MARKS})",
+        (
+            now_iso(), notification_id, current_workspace_id(), g.user["id"],
+            *COLLABORATION_NOTIFICATION_KINDS,
+        ),
     )
     if result.rowcount == 0:
         raise ApiError("通知不存在", 404)
     db.commit()
     unread_count = db.execute(
         "SELECT COUNT(*) AS count FROM notifications "
-        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL",
-        (current_workspace_id(), g.user["id"]),
+        "WHERE workspace_id=? AND user_id=? AND read_at IS NULL "
+        f"AND kind IN ({COLLABORATION_NOTIFICATION_MARKS})",
+        (
+            current_workspace_id(), g.user["id"],
+            *COLLABORATION_NOTIFICATION_KINDS,
+        ),
     ).fetchone()["count"]
     return jsonify({"ok": True, "unread_count": unread_count})
 
