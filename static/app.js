@@ -4461,12 +4461,18 @@ function createDependencyPicker(body, task, selectedIds = [], parent = body) {
   wrapper.appendChild(picker);
   const refresh = () => {
     const keyword = search.value.trim().toLocaleLowerCase();
+    const focusedElement = document.activeElement;
+    const orderedChecks = [...body._dependencyChecks].sort(
+      (a, b) => Number(b.checkbox.checked) - Number(a.checkbox.checked)
+    );
     let visible = 0;
-    for (const item of body._dependencyChecks) {
+    for (const item of orderedChecks) {
       const matches = !keyword || item.searchText.includes(keyword);
       item.option.hidden = !matches;
+      picker.appendChild(item.option);
       if (matches) visible += 1;
     }
+    if (picker.contains(focusedElement)) focusedElement.focus({ preventScroll: true });
     empty.hidden = visible > 0;
     empty.textContent = candidates.length ? "未找到匹配事务" : "暂无其他事务";
     const selectedCount = body._dependencyChecks
