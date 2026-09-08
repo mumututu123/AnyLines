@@ -240,6 +240,7 @@ html[data-theme="dark"] :is(#audit-workspace, .audit-note, .audit-snapshot-info)
   white-space: nowrap;
 }
 .workspace-management-name { display: flex; align-items: center; gap: 7px; }
+.workspace-management-name-input { min-width: 180px; font-weight: 650; }
 .workspace-badge {
   border-radius: 10px; background: #ddf4ff; color: #0969da;
   padding: 2px 7px; font-size: 10px; font-weight: 500;
@@ -260,6 +261,7 @@ html[data-theme="dark"] :is(#audit-workspace, .audit-note, .audit-snapshot-info)
     align-items: stretch; flex-direction: column;
   }
   .workspace-management-actions { justify-content: flex-end; }
+  .workspace-management-name-input { min-width: 0; }
 }
 
 /* ---------------- top bar ---------------- */

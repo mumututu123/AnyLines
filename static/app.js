@@ -5421,9 +5421,17 @@ function openWorkspaceManagementModal() {
       info.className = "workspace-management-info";
       const nameLine = document.createElement("div");
       nameLine.className = "workspace-management-name";
-      const name = document.createElement("strong");
-      name.textContent = workspace.name;
-      nameLine.appendChild(name);
+      let nameInput = null;
+      if (workspace.archived_at) {
+        const name = document.createElement("strong");
+        name.textContent = workspace.name;
+        nameLine.appendChild(name);
+      } else {
+        nameInput = input("text", workspace.name);
+        nameInput.className = "workspace-management-name-input";
+        nameInput.setAttribute("aria-label", `修改项目“${workspace.name}”的名称`);
+        nameLine.appendChild(nameInput);
+      }
       if (workspace.id === state.currentWorkspace?.id) {
         const current = document.createElement("span");
         current.className = "workspace-badge";
@@ -5442,6 +5450,43 @@ function openWorkspaceManagementModal() {
 
       const actions = document.createElement("div");
       actions.className = "workspace-management-actions";
+      if (nameInput) {
+        const saveName = document.createElement("button");
+        saveName.type = "button";
+        saveName.textContent = "保存名称";
+        saveName.onclick = async () => {
+          const nextName = nameInput.value.trim();
+          if (!nextName) {
+            toast("项目名称不能为空");
+            nameInput.focus();
+            return;
+          }
+          if (nextName === workspace.name) {
+            toast("项目名称没有变化");
+            nameInput.focus();
+            return;
+          }
+          saveName.disabled = true;
+          try {
+            await api(`/api/workspaces/${workspace.id}`, "PATCH", { name: nextName });
+            await refreshSession();
+            await reload();
+            toast("项目名称已更新");
+            openWorkspaceManagementModal();
+          } finally {
+            if (saveName.isConnected) saveName.disabled = false;
+          }
+        };
+        nameInput.onkeydown = (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            saveName.click();
+          } else if (event.key === "Escape") {
+            nameInput.value = workspace.name;
+          }
+        };
+        actions.appendChild(saveName);
+      }
       if (workspace.archived_at) {
         const restore = document.createElement("button");
         restore.type = "button";
@@ -5476,6 +5521,7 @@ function openWorkspaceManagementModal() {
       remove.textContent = "删除";
       remove.onclick = () => openWorkspaceDeleteModal(workspace);
       actions.appendChild(remove);
+      row.dataset.workspaceId = workspace.id;
       row.append(info, actions);
       list.appendChild(row);
     }

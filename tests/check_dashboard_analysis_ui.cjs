@@ -112,6 +112,18 @@ const assert = require('node:assert/strict');
     await evaluate(`DashboardAnalysis.invalidateHistory(); reload()`);
     await until(`document.querySelectorAll('#analysis-tabs button').length === 6`);
     console.log('Checking analysis tools.');
+    await evaluate(`openWorkspaceManagementModal()`);
+    await until(`document.querySelector('.workspace-management-row[data-workspace-id="' + state.currentWorkspace.id + '"] .workspace-management-name-input')`);
+    await evaluate(`(() => {
+      const row = document.querySelector('.workspace-management-row[data-workspace-id="' + state.currentWorkspace.id + '"]');
+      row.querySelector('.workspace-management-name-input').value = '发布协作项目';
+      [...row.querySelectorAll('.workspace-management-actions button')]
+        .find(button => button.textContent === '保存名称').click();
+    })()`);
+    await until(`state.currentWorkspace.name === '发布协作项目' && document.querySelector('.workspace-management-name-input')?.value === '发布协作项目'`);
+    assert.equal(await evaluate(`document.querySelector('#workspace-select option:checked').textContent`), '发布协作项目');
+    await evaluate(`document.querySelector('#modal-cancel').click()`);
+    await until(`document.querySelector('#modal-mask').classList.contains('hidden')`);
     assert.equal(await evaluate(`document.querySelectorAll('#analysis-tabs small').length`), 6);
     assert.ok((await evaluate(`document.querySelector('#analysis-panel').textContent`)).includes('还没有可比较的确认点'));
     assert.equal(await evaluate(`Object.keys(localStorage).some(key => key.endsWith('.visit'))`), false);
