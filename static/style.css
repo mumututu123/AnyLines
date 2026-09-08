@@ -1826,7 +1826,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
     background: #fff; box-shadow: 0 3px 12px rgba(31, 35, 40, .09);
   }
   .task-collaboration-column.is-collapsed .task-collaboration > summary::before {
-    content: "‹";
+    content: "›";
   }
   .task-collaboration-column.is-collapsed .task-collaboration-summary-title {
     overflow: visible; letter-spacing: 2px; text-overflow: clip;

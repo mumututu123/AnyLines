@@ -211,6 +211,7 @@ const assert = require('node:assert/strict');
       const column = document.querySelector('.task-collaboration-column');
       return column.getBoundingClientRect().width <= 56 &&
         getComputedStyle(document.querySelector('.task-collaboration-summary-title')).writingMode === 'vertical-rl' &&
+        getComputedStyle(document.querySelector('.task-collaboration > summary'), '::before').content === '"›"' &&
         getComputedStyle(column, '::before').borderLeftWidth === '1px' &&
         Math.abs((summary.top + summary.height / 2) - (main.top + main.height / 2)) < 2;
     })()`), true);
