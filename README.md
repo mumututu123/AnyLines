@@ -156,6 +156,12 @@ node --experimental-websocket tests/check_audit_ui.cjs
 
 该检查使用独立临时数据库和浏览器目录，不修改项目业务数据。可通过 `ANYLINE_TEST_CHROME` 指定 Chrome 路径。
 
+## 自动发布
+
+GitHub Actions 工作流 [`.github/workflows/python-publish.yml`](.github/workflows/python-publish.yml) 每天北京时间 00:00 检查默认分支，也支持在 Actions 页面手动触发。只有相较最新 GitHub Release 标签存在新提交时，工作流才会运行测试并创建新 Release；没有新提交时不会重复发布。
+
+Release 标签格式为 `vYYYY.MM.DD-提交哈希前12位`，附件包含可直接部署的 ZIP、TAR.GZ 源码包及 `SHA256SUMS.txt` 校验文件。发行包包含 Flask 应用、静态资源、依赖清单和辅助脚本，不包含本地数据库、日志、测试及规格文档。
+
 也可以通过环境变量为服务指定其他数据库文件：
 
 ```powershell
