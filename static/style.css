@@ -1346,6 +1346,12 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   max-height: 84vh; overflow: auto; box-shadow: 0 8px 24px rgba(66,74,83,.25);
 }
 #modal.modal-wide { width: min(760px, calc(100vw - 32px)); }
+#modal.task-editor-modal { width: min(1080px, calc(100vw - 32px)); }
+#modal-body.task-editor-layout {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start;
+  gap: 18px;
+}
+.task-editor-main { min-width: 0; }
 #modal.task-list-modal { width: min(960px, calc(100vw - 32px)); }
 #modal.my-status-modal {
   display: flex; flex-direction: column; width: min(960px, calc(100vw - 32px));
@@ -1708,14 +1714,48 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 
 .task-collaboration {
-  margin-top: 10px; border: 1px solid #d8dee4; border-radius: 7px; background: #fff;
+  margin: 0; overflow: hidden; border: 1px solid #d8dee4; border-radius: 9px;
+  background: #fff; box-shadow: 0 3px 12px rgba(31, 35, 40, .07);
 }
+.task-collaboration-column {
+  position: sticky; top: 0; width: 320px; min-width: 0;
+  transition: width .18s ease;
+}
+.task-collaboration-column.is-collapsed { width: 184px; }
 .task-collaboration > summary {
-  padding: 10px 11px; color: #6639ba; font-size: 13px; font-weight: 650;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+  gap: 7px; min-height: 40px; padding: 9px 11px; list-style: none;
+  color: #6639ba; font-size: 13px; font-weight: 650;
   cursor: pointer; user-select: none;
 }
+.task-collaboration > summary::-webkit-details-marker { display: none; }
+.task-collaboration > summary::before {
+  content: "›"; display: inline-grid; place-items: center; width: 18px; height: 18px;
+  border-radius: 50%; background: #f6f0ff; color: #8250df; font-size: 18px;
+  line-height: 1; transition: transform .15s ease;
+}
+.task-collaboration[open] > summary::before { transform: rotate(90deg); }
+.task-collaboration-summary-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.task-collaboration-summary-meta {
+  padding: 2px 7px; border-radius: 999px; background: #f6f0ff;
+  color: #6639ba; font-size: 10px; font-weight: 600; white-space: nowrap;
+}
+.task-collaboration-summary-meta.is-empty { background: #f6f8fa; color: #8c959f; }
 .task-collaboration[open] > summary { border-bottom: 1px solid #d8dee4; }
-.task-collaboration-panel { padding: 11px; }
+.task-collaboration-panel {
+  max-height: min(60vh, 620px); overflow-y: auto; padding: 12px;
+}
+.collaboration-draft-intro {
+  display: grid; gap: 4px; margin-bottom: 10px; padding: 9px 10px;
+  border-radius: 7px; background: #f6f8fa; color: #57606a;
+  font-size: 11px; line-height: 1.5;
+}
+.collaboration-draft-intro strong { color: #24292f; font-size: 12px; }
+.collaboration-draft-note {
+  margin-top: 7px; color: #6e7781; font-size: 11px; text-align: right;
+}
 .collaboration-heading {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   margin-bottom: 10px; color: #57606a; font-size: 11px;
@@ -1758,11 +1798,23 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 }
 .collaboration-item.activity .collaboration-avatar { background: #eaeef2; color: #57606a; }
 .collaboration-meta { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.collaboration-meta strong { font-size: 12px; }
+.collaboration-meta strong {
+  min-width: 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .collaboration-meta time { color: #8c959f; font-size: 10px; white-space: nowrap; }
 .collaboration-detail {
   margin-top: 3px; color: #24292f; font-size: 12px; line-height: 1.55;
   overflow-wrap: anywhere; white-space: pre-wrap;
+}
+
+@media (max-width: 860px) {
+  #modal.task-editor-modal { width: min(760px, calc(100vw - 20px)); }
+  #modal-body.task-editor-layout { display: block; }
+  .task-collaboration-column, .task-collaboration-column.is-collapsed {
+    position: static; width: auto; margin-top: 12px;
+  }
+  .task-collaboration-panel { max-height: min(48vh, 440px); }
 }
 
 #toast {
@@ -1952,7 +2004,8 @@ html[data-theme="dark"] :is(
   #btn-toggle-children, .cluster-focus-close, .dependency-config-button,
   .my-status-tabs, .import-template-panel, .task-attachment-drop-zone,
   .task-more-details, #modal-body .status-add, .trash-row button,
-  .comment-composer, #modal-body .dependency-option:hover,
+  .comment-composer, .collaboration-draft-intro,
+  #modal-body .dependency-option:hover,
   #modal-body .notification-row:hover, .my-notification-intro
 ) {
   background-color: var(--dark-subtle);
@@ -1974,7 +2027,7 @@ html[data-theme="dark"] :is(
   #modal-body .dependency-option, .milestone-acceptance-task strong,
   #modal-body .milestone-acceptance-owner, #cell-preview-content,
   #modal-body .notification-row, #modal-body .mention-option,
-  .collaboration-detail
+  .collaboration-detail, .collaboration-draft-intro strong
 ) { color: var(--dark-text); }
 
 html[data-theme="dark"] :is(
@@ -1991,7 +2044,8 @@ html[data-theme="dark"] :is(
   .my-todo-stat span, .import-template-panel span,
   .task-import-drop-zone span:last-child, .task-attachment-prompt,
   .dependency-selected-count, .milestone-acceptance-task > span,
-  #modal-tools label, .collaboration-heading
+  #modal-tools label, .collaboration-heading, .collaboration-draft-intro,
+  .collaboration-draft-note
 ) { color: var(--dark-muted); }
 
 html[data-theme="dark"] :is(
@@ -2024,8 +2078,18 @@ html[data-theme="dark"] :is(
 
 html[data-theme="dark"] :is(
   .my-status-entry.has-unread, #modal-body .notification-row.unread,
-  #modal-body .collaboration-heading button.following
+  #modal-body .collaboration-heading button.following,
+  .task-collaboration > summary::before,
+  .task-collaboration-summary-meta:not(.is-empty)
 ) { background-color: #271f3d; }
+
+html[data-theme="dark"] :is(
+  .task-collaboration > summary::before,
+  .task-collaboration-summary-meta:not(.is-empty)
+) { color: #d2a8ff; }
+html[data-theme="dark"] .task-collaboration-summary-meta.is-empty {
+  background: var(--dark-subtle); color: var(--dark-faint);
+}
 
 html[data-theme="dark"] :is(.badge-overdue, .cluster-focus-health.badge-overdue,
   .import-error-summary, #modal-body .task-image-remove:hover, .kind-overdue) {

@@ -4037,13 +4037,15 @@ function centerCanvasPoint(x, y = null) {
 function openModal(title, bodyBuilder, onOk, options = {}) {
   $("#modal-title").textContent = title;
   $("#modal").classList.remove(
-    "modal-wide", "task-list-modal", "my-todo-modal", "my-status-modal"
+    "modal-wide", "task-list-modal", "my-todo-modal", "my-status-modal",
+    "task-editor-modal"
   );
   $("#modal-ok").textContent = "确定";
   $("#modal-ok").classList.remove("hidden", "danger");
   $("#modal-cancel").textContent = "取消";
   const body = $("#modal-body");
   body.innerHTML = "";
+  body.className = "";
   $("#modal-header-tools").innerHTML = "";
   $("#modal-tools").innerHTML = "";
   bodyBuilder(body);
@@ -4552,10 +4554,12 @@ function saveTaskCreateDraft(body, fallbackLineId, openingDraftKey) {
     attachments,
     attachmentReadPromises,
     moreOpen: Boolean(body._more?.open),
+    initialComment: body._initialComment?.value || "",
+    collaborationOpen: Boolean(body._collaborationDetails?.open),
   });
   const hasEnteredContent = [
     body._name.value, body._content.value, body._goal.value,
-    body._next.value, body._risk.value,
+    body._next.value, body._risk.value, body._initialComment?.value || "",
   ].some((value) => value.trim()) || prerequisiteIds.length > 0 ||
     images.length > 0 || attachments.length > 0;
   if (hasEnteredContent) toast("已暂存当前事务内容");
@@ -5020,6 +5024,20 @@ function createMentionAutocomplete(textarea, members, taskId) {
 
 function renderTaskCollaboration(panel, task, data) {
   if (!panel.isConnected) return;
+  const details = panel.closest(".task-collaboration");
+  const timelineCount = (data.timeline || []).length;
+  const followerCount = (data.followers || []).length;
+  const summaryMeta = details?.querySelector(".task-collaboration-summary-meta");
+  if (summaryMeta) {
+    summaryMeta.textContent = timelineCount ? `${timelineCount} 条动态` :
+      (followerCount ? `${followerCount} 人关注` : "暂无记录");
+    summaryMeta.classList.toggle("is-empty", !timelineCount && !followerCount);
+  }
+  if (details && !details.dataset.defaultOpenApplied) {
+    details.open = Boolean(timelineCount || followerCount);
+    details.dataset.defaultOpenApplied = "true";
+  }
+  details?.parentElement?.classList.toggle("is-collapsed", !details.open);
   panel.innerHTML = "";
   const heading = document.createElement("div");
   heading.className = "collaboration-heading";
@@ -5115,10 +5133,18 @@ async function loadTaskCollaboration(panel, task) {
 }
 
 function createTaskCollaborationPanel(body, task) {
+  const aside = document.createElement("aside");
+  aside.className = "task-collaboration-column is-collapsed";
   const details = document.createElement("details");
   details.className = "task-collaboration";
   const summary = document.createElement("summary");
-  summary.textContent = "协作与动态";
+  const summaryTitle = document.createElement("span");
+  summaryTitle.className = "task-collaboration-summary-title";
+  summaryTitle.textContent = "协作与动态";
+  const summaryMeta = document.createElement("small");
+  summaryMeta.className = "task-collaboration-summary-meta";
+  summaryMeta.textContent = "加载中";
+  summary.append(summaryTitle, summaryMeta);
   const panel = document.createElement("div");
   panel.className = "task-collaboration-panel";
   const loading = document.createElement("div");
@@ -5126,10 +5152,76 @@ function createTaskCollaborationPanel(body, task) {
   loading.textContent = "正在加载协作记录…";
   panel.appendChild(loading);
   details.append(summary, panel);
-  body.appendChild(details);
+  aside.appendChild(details);
+  body.appendChild(aside);
+  const syncCollapsedState = () => {
+    aside.classList.toggle("is-collapsed", !details.open);
+  };
+  details.addEventListener("toggle", syncCollapsedState);
+  syncCollapsedState();
   loadTaskCollaboration(panel, task).catch(() => {
-    if (panel.isConnected) panel.textContent = "协作记录加载失败，请稍后重试";
+    if (!panel.isConnected) return;
+    summaryMeta.textContent = "加载失败";
+    summaryMeta.classList.add("is-empty");
+    panel.textContent = "协作记录加载失败，请稍后重试";
   });
+}
+
+function createTaskCollaborationDraftPanel(body, draft) {
+  const aside = document.createElement("aside");
+  aside.className = "task-collaboration-column is-collapsed";
+  const details = document.createElement("details");
+  details.className = "task-collaboration task-collaboration-draft";
+  details.open = Boolean(draft?.collaborationOpen || draft?.initialComment?.trim());
+  body._collaborationDetails = details;
+  const summary = document.createElement("summary");
+  const summaryTitle = document.createElement("span");
+  summaryTitle.className = "task-collaboration-summary-title";
+  summaryTitle.textContent = "协作与动态";
+  const summaryMeta = document.createElement("small");
+  summaryMeta.className = "task-collaboration-summary-meta is-empty";
+  summaryMeta.textContent = draft?.initialComment?.trim() ? "1 条待发布" : "可添加动态";
+  summary.append(summaryTitle, summaryMeta);
+
+  const panel = document.createElement("div");
+  panel.className = "task-collaboration-panel";
+  const intro = document.createElement("div");
+  intro.className = "collaboration-draft-intro";
+  const introTitle = document.createElement("strong");
+  introTitle.textContent = "创建后自动关注";
+  const introText = document.createElement("span");
+  introText.textContent = "第一条动态会随事务一并发布，并通知被 @ 的成员。";
+  intro.append(introTitle, introText);
+  const composer = document.createElement("div");
+  composer.className = "comment-composer";
+  const textarea = document.createElement("textarea");
+  textarea.maxLength = 2000;
+  textarea.rows = 4;
+  textarea.value = draft?.initialComment || "";
+  textarea.placeholder = "补充背景、分工或需要同步的信息；输入 @ 可联想成员";
+  body._initialComment = textarea;
+  const inputWrap = createMentionAutocomplete(
+    textarea, state.collaborationMembers, "draft"
+  );
+  const note = document.createElement("div");
+  note.className = "collaboration-draft-note";
+  note.textContent = "保存事务时一并发布";
+  composer.append(inputWrap, note);
+  panel.append(intro, composer);
+  details.append(summary, panel);
+  aside.appendChild(details);
+  body.appendChild(aside);
+
+  const syncState = () => {
+    aside.classList.toggle("is-collapsed", !details.open);
+  };
+  details.addEventListener("toggle", syncState);
+  textarea.addEventListener("input", () => {
+    const hasComment = Boolean(textarea.value.trim());
+    summaryMeta.textContent = hasComment ? "1 条待发布" : "可添加动态";
+    summaryMeta.classList.toggle("is-empty", !hasComment);
+  });
+  syncState();
 }
 
 /* 新建/编辑事务 */
@@ -5142,6 +5234,10 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
     isNew && allowLineSelection ? "新建事务" :
       (isNew ? `新建事务（${lineById(lineId).name}）` : "编辑事务"),
     (body) => {
+      const editorMain = document.createElement("div");
+      editorMain.className = "task-editor-main";
+      body.appendChild(editorMain);
+      body.classList.add("task-editor-layout");
       if (isNew && allowLineSelection) {
         const rows = assignRows(true);
         const lines = [...state.lines].sort(
@@ -5176,14 +5272,14 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
         pickerWrap.className = "line-search-picker";
         pickerWrap.appendChild(picker);
         pickerWrap.appendChild(optionList);
-        field(body, "所属主线 / 支线", pickerWrap, true);
+        field(editorMain, "所属主线 / 支线", pickerWrap, true);
         body._line = picker;
         body._lineChoices = lineChoices;
       }
-      body._name = field(body, "事务名",
+      body._name = field(editorMain, "事务名",
         input("text", task ? task.name : (draft?.name || "")), true);
-      field(body, "事务内容", createTaskContentEditor(body, task, draft), true);
-      body._owner = field(body, "责任人",
+      field(editorMain, "事务内容", createTaskContentEditor(body, task, draft), true);
+      body._owner = field(editorMain, "责任人",
         ownerInput(task ? task.owner : (draft?.owner || ""), true), true);
       const sel = document.createElement("select");
       for (const s of state.statusEnum) {
@@ -5193,13 +5289,13 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
         sel.appendChild(o);
       }
       decorateStatusSelect(sel);
-      body._status = field(body, "进展状态", sel, true);
+      body._status = field(editorMain, "进展状态", sel, true);
       const initialLine = lineById(lineId);
       const initialStart = !task && initialLine && initialLine.fork_date > state.today ?
         initialLine.fork_date : state.today;
-      body._start = field(body, "起始日期",
+      body._start = field(editorMain, "起始日期",
         input("date", task ? task.start_date : (draft?.startDate || initialStart)), true);
-      body._end = field(body, "结束日期",
+      body._end = field(editorMain, "结束日期",
         input("date", task ? (task.end_date || "") :
           (draft?.endDate || initialStart)), true);
 
@@ -5226,8 +5322,9 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
         input("text", task ? task.next_action : (draft?.nextAction || "")));
       body._risk = field(more, "风险原因",
         input("text", task ? task.risk_reason : (draft?.riskReason || "")));
-      body.appendChild(more);
-      if (!isNew) createTaskCollaborationPanel(body, task);
+      editorMain.appendChild(more);
+      if (isNew) createTaskCollaborationDraftPanel(body, draft);
+      else createTaskCollaborationPanel(body, task);
 
       const syncEndDate = () => {
         body._end.min = body._start.value;
@@ -5296,6 +5393,9 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
             name: attachment.name,
             data_url: attachment.data_url,
           }),
+        ...(isNew ? {
+          initial_comment: body._initialComment?.value.trim() || "",
+        } : {}),
       };
       const requiredFields = [
         ["事务名", body._name], ["事务内容", body._content],
@@ -5335,10 +5435,8 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
       onClosed: options.onClosed,
     }
   );
-  if (task) {
-    $("#modal").classList.add("modal-wide");
-    requestAnimationFrame(() => autoResizeTaskContent($("#modal-body")._content));
-  }
+  $("#modal").classList.add("modal-wide", "task-editor-modal");
+  requestAnimationFrame(() => autoResizeTaskContent($("#modal-body")._content));
 }
 
 function openWorkspaceModal() {

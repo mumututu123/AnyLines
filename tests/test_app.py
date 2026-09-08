@@ -2256,12 +2256,42 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("只显示成员协作产生的指派、提及、评论、状态变化和依赖解除", source)
         self.assertNotIn('due_soon: "临", overdue: "超"', source)
         self.assertIn("function createTaskCollaborationPanel(body, task)", source)
+        self.assertIn("function createTaskCollaborationDraftPanel(body, draft)", source)
+        self.assertIn('body.classList.add("task-editor-layout")', source)
+        self.assertIn('details.open = Boolean(timelineCount || followerCount)', source)
         self.assertIn("function createMentionAutocomplete(textarea, members, taskId)", source)
         self.assertIn('textarea.setAttribute("aria-autocomplete", "list")', source)
         self.assertIn('.startsWith(query)', source)
         self.assertIn('event.key === "ArrowDown" || event.key === "ArrowUp"', source)
         self.assertIn('event.key === "Enter" || event.key === "Tab"', source)
         self.assertNotIn("插入 @成员", source)
+
+    def test_task_creation_can_publish_initial_collaboration_comment(self):
+        self.add_member("alice", "张三")
+        line_id = self.create_line()
+        task_id = self.create_task(
+            line_id,
+            "带首条动态的事务",
+            owner="张三",
+            initial_comment="@张三 请一起确认交付范围",
+        )
+
+        status, collaboration = self.request(
+            "GET", f"/api/tasks/{task_id}/collaboration"
+        )
+        self.assertEqual(status, 200, collaboration)
+        comments = [
+            item for item in collaboration["timeline"]
+            if item["kind"] == "comment"
+        ]
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(comments[0]["detail"], "@张三 请一起确认交付范围")
+
+        status, _ = self.login("alice", "member123")
+        self.assertEqual(status, 200)
+        status, notices = self.request("GET", "/api/notifications")
+        self.assertEqual(status, 200, notices)
+        self.assertIn("mention", {item["kind"] for item in notices["notifications"]})
 
 
 class DatabaseMigrationTests(unittest.TestCase):

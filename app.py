@@ -1429,6 +1429,35 @@ def mentioned_user_ids(db, workspace_id, content):
     return mentioned
 
 
+def insert_task_comment(db, workspace_id, task_id, task_name, owner, content):
+    created_at = now_iso()
+    cur = db.execute(
+        "INSERT INTO task_comments(workspace_id,task_id,author_id,content,created_at) "
+        "VALUES(?,?,?,?,?)",
+        (workspace_id, task_id, g.user["id"], content, created_at),
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO task_followers(workspace_id,task_id,user_id,created_at) "
+        "VALUES(?,?,?,?)", (workspace_id, task_id, g.user["id"], created_at),
+    )
+    mentioned = mentioned_user_ids(db, workspace_id, content) - {g.user["id"]}
+    audience = task_audience_user_ids(
+        db, workspace_id, task_id, owner
+    ) - mentioned
+    actor_name = g.user["display_name"]
+    add_notifications(
+        db, workspace_id, mentioned, "mention",
+        f"{actor_name} 在事务「{task_name}」中提到了你",
+        task_id, g.user["id"],
+    )
+    add_notifications(
+        db, workspace_id, audience, "comment",
+        f"{actor_name} 评论了事务「{task_name}」",
+        task_id, g.user["id"],
+    )
+    return cur.lastrowid, created_at
+
+
 def notify_dependents_unblocked(db, workspace_id, prerequisite_task_id,
                                 prerequisite_name, actor_id):
     rows = db.execute(
@@ -2908,33 +2937,11 @@ def add_task_comment(task_id):
     db = get_db()
     workspace_id = current_workspace_id()
     task = active_task(db, workspace_id, task_id)
-    created_at = now_iso()
-    cur = db.execute(
-        "INSERT INTO task_comments(workspace_id,task_id,author_id,content,created_at) "
-        "VALUES(?,?,?,?,?)",
-        (workspace_id, task_id, g.user["id"], content, created_at),
-    )
-    db.execute(
-        "INSERT OR IGNORE INTO task_followers(workspace_id,task_id,user_id,created_at) "
-        "VALUES(?,?,?,?)", (workspace_id, task_id, g.user["id"], created_at),
-    )
-    mentioned = mentioned_user_ids(db, workspace_id, content) - {g.user["id"]}
-    audience = task_audience_user_ids(
-        db, workspace_id, task_id, task["owner"]
-    ) - mentioned
-    actor_name = g.user["display_name"]
-    add_notifications(
-        db, workspace_id, mentioned, "mention",
-        f"{actor_name} 在事务「{task['name']}」中提到了你",
-        task_id, g.user["id"],
-    )
-    add_notifications(
-        db, workspace_id, audience, "comment",
-        f"{actor_name} 评论了事务「{task['name']}」",
-        task_id, g.user["id"],
+    comment_id, created_at = insert_task_comment(
+        db, workspace_id, task_id, task["name"], task["owner"], content
     )
     db.commit()
-    return jsonify({"id": cur.lastrowid, "created_at": created_at}), 201
+    return jsonify({"id": comment_id, "created_at": created_at}), 201
 
 
 @app.route("/api/task-images/<int:image_id>")
@@ -3690,6 +3697,11 @@ def create_task():
     owner = text_field(d, "owner", "责任人").strip()
     next_action = text_field(d, "next_action", "下一步动作")
     risk_reason = text_field(d, "risk_reason", "风险原因")
+    initial_comment = text_field(
+        d, "initial_comment", "首条协作动态"
+    ).strip()
+    if len(initial_comment) > 2000:
+        raise ApiError("首条协作动态不能超过 2000 个字符")
     for label, value in (("事务内容", content), ("责任人", owner),
                          ("起始日期", start_date), ("结束日期", end_date)):
         if not value.strip():
@@ -3744,6 +3756,10 @@ def create_task():
         f"{g.user['display_name']} 将事务「{name}」指派给你",
         cur.lastrowid, g.user["id"],
     )
+    if initial_comment:
+        insert_task_comment(
+            db, workspace_id, cur.lastrowid, name, owner, initial_comment
+        )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
 

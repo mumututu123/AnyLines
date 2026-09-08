@@ -66,7 +66,7 @@
 | POST | `/api/lines` | 线创建字段 → id | 可编辑成员 |
 | PATCH | `/api/lines/:id` | 线可修改字段 → ok | 可编辑成员 |
 | DELETE | `/api/lines/:id` | 级联软删除 → ok 及恢复相关标志 | 可编辑成员 |
-| POST | `/api/tasks` | 事务创建字段 → id | 可编辑成员 |
+| POST | `/api/tasks` | 事务创建字段（可含 `initial_comment` 首条协作动态）→ id | 可编辑成员 |
 | PATCH | `/api/tasks/:id` | 事务可修改字段 → ok | 可编辑成员 |
 | DELETE | `/api/tasks/:id` | 软删除 → `ok,can_undo` | 可编辑成员 |
 | POST | `/api/tasks/:id/dependencies` | `prerequisite_task_id` → `ok,created`；新增 201，已存在 200 | 可编辑成员 |

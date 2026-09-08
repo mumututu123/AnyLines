@@ -29,7 +29,7 @@
 | AL-FILE-001 | 图片/附件校验、替换和下载 | `test_task_content_images_are_persisted_served_and_undoable`；`test_task_attachments_are_downloadable_editable_and_undoable` | 存取、修改、恢复和无效文件 |
 | AL-IO-001 | `import_data,import_lines,import_tasks` | `test_unified_excel_import_is_atomic_across_sheets`；`test_line_excel_import_is_atomic_on_invalid_hierarchy`；`test_excel_import_template_and_atomic_import` | 跨表与层级失败原子性 |
 | AL-IO-002 | `export_data,export_tasks,export_lines` | `test_unified_excel_import_export_and_selected_lineage`；`test_excel_export_all_and_selected` | 选中导出、祖先线与回导 |
-| AL-COL-001 | 关注、评论、提及、活动与通知函数 | `test_collaboration_comments_mentions_followers_and_notifications`；`test_status_activity_and_dependency_unblocked_notification` | 协作核心接口 |
+| AL-COL-001 | 关注、评论、提及、活动与通知函数；新建和编辑事务右侧协作栏 | `test_collaboration_comments_mentions_followers_and_notifications`；`test_task_creation_can_publish_initial_collaboration_comment`；`test_status_activity_and_dependency_unblocked_notification`；`check_dashboard_analysis_ui.cjs` | 协作接口、随新事务发布首条动态、桌面右栏及有无记录时的默认展开状态 |
 | AL-COL-002 | `personalTodoTasks,openMyStatusModal` | `test_personal_todo_entry_count_and_statistics` | 主要为源码断言，跨真实姓名数据需人工核对 |
 | AL-COL-003 | `COLLABORATION_NOTIFICATION_KINDS,pollNotificationCount` | `test_collaboration_comments_mentions_followers_and_notifications`；源码审阅 | 协作类型白名单、历史到期通知隔离及轮询；连续轮询边界需补专项测试 |
 | AL-VIEW-001 | `renderCanvas,renderTable,taskDependencyFocus` | `test_canvas_dependency_focus_visual_encoding_and_semantic_zoom`；`test_same_day_tasks_spread_horizontally_at_high_zoom` | 部分为源码断言，不宣称完整视觉自动化 |

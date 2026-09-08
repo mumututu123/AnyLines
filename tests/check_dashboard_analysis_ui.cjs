@@ -161,6 +161,7 @@ const assert = require('node:assert/strict');
     assert.equal(await evaluate(`document.querySelectorAll('.analysis-delay-gantt .analysis-milestone-before').length`), 1);
     assert.ok((await evaluate(`document.querySelector('.analysis-delay-gantt svg').textContent`)).includes('延期起点 · 方案再次调整'));
     assert.equal(await evaluate(`state.tasks.find(item => item.id === 2).start_date`), '2026-09-04');
+    await cdp('Emulation.setDeviceMetricsOverride', { width: 900, height: 900, deviceScaleFactor: 1, mobile: false });
     await evaluate(`(() => {
       const map = document.querySelector('.analysis-delay-gantt .analysis-map');
       map.scrollLeft = 90;
@@ -168,7 +169,21 @@ const assert = require('node:assert/strict');
         .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     })()`);
     await until(`!document.querySelector('#modal-mask').classList.contains('hidden') && document.querySelector('#modal-title').textContent === '编辑事务'`);
+    await until(`document.querySelector('.task-collaboration-summary-meta').textContent !== '加载中'`);
     assert.equal(await evaluate(`document.querySelector('#modal-body')._name.value`), '方案再次调整');
+    assert.equal(await evaluate(`document.querySelector('#modal').classList.contains('task-editor-modal')`), true);
+    assert.equal(await evaluate(`document.querySelector('.task-collaboration').open`), true);
+    assert.equal(await evaluate(`document.querySelector('.task-collaboration-column').classList.contains('is-collapsed')`), false);
+    await delay(250);
+    assert.equal(await evaluate(`(() => {
+      const main = document.querySelector('.task-editor-main').getBoundingClientRect();
+      const aside = document.querySelector('.task-collaboration-column').getBoundingClientRect();
+      return aside.left >= main.right;
+    })()`), true);
+    const taskEditorScreenshot = await cdp('Page.captureScreenshot', { format: 'png' });
+    const taskEditorScreenshotPath = path.join(temporary, 'task-editor-collaboration.png');
+    writeFileSync(taskEditorScreenshotPath, Buffer.from(taskEditorScreenshot.data, 'base64'));
+    console.log('Task editor screenshot: ' + taskEditorScreenshotPath);
     await evaluate(`document.querySelector('#modal-ok').click()`);
     await until(`document.querySelector('#modal-mask').classList.contains('hidden') && document.querySelector('.analysis-delay-gantt [data-analysis-kind="task"][data-analysis-id="1"]')`);
     await delay(100);
@@ -176,6 +191,21 @@ const assert = require('node:assert/strict');
     assert.equal(await evaluate(`document.querySelector('#analysis-delay-days').value`), '3');
     assert.equal(await evaluate(`document.activeElement?.dataset.analysisId`), '1');
     assert.equal(await evaluate(`document.querySelector('.analysis-delay-gantt .analysis-map').scrollLeft`), 90);
+    await evaluate(`(() => {
+      window.taskCollaborationFetch = window.fetch;
+      window.fetch = function(url, options) {
+        if (url === '/api/tasks/3/collaboration') return Promise.resolve(new Response(JSON.stringify({
+          following: false, followers: [], members: state.collaborationMembers, timeline: []
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+        return window.taskCollaborationFetch(url, options);
+      };
+      openTaskModal(state.tasks.find(item => item.id === 3));
+    })()`);
+    await until(`document.querySelector('.task-collaboration-summary-meta').textContent === '暂无记录'`);
+    assert.equal(await evaluate(`document.querySelector('.task-collaboration').open`), false);
+    assert.equal(await evaluate(`document.querySelector('.task-collaboration-column').classList.contains('is-collapsed')`), true);
+    await evaluate(`window.fetch = window.taskCollaborationFetch; delete window.taskCollaborationFetch; document.querySelector('#modal-cancel').click()`);
+    await until(`document.querySelector('#modal-mask').classList.contains('hidden')`);
     await evaluate(`document.querySelector('.analysis-delay-gantt [data-analysis-kind="milestone"][data-analysis-id="1"]')
       .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
     await until(`!document.querySelector('#modal-mask').classList.contains('hidden') && document.querySelector('#modal-title').textContent === '编辑里程碑'`);
@@ -255,6 +285,31 @@ const assert = require('node:assert/strict');
     const screenshotPath = path.join(temporary, 'dashboard-analysis.png');
     writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
     console.log('Screenshot: ' + screenshotPath);
+    await evaluate(`openTaskModal(null, 1)`);
+    await until(`!document.querySelector('#modal-mask').classList.contains('hidden') && document.querySelector('#modal-title').textContent.startsWith('新建事务')`);
+    assert.equal(await evaluate(`document.querySelector('#modal').classList.contains('task-editor-modal')`), true);
+    assert.equal(await evaluate(`Boolean(document.querySelector('.task-collaboration-draft'))`), true);
+    assert.equal(await evaluate(`document.querySelector('.task-collaboration-draft').open`), false);
+    await evaluate(`(() => {
+      document.querySelector('.task-collaboration-draft > summary').click();
+      const body = document.querySelector('#modal-body');
+      body._name.value = '带首条动态的新事务'; body._content.value = '协作创建内容';
+      body._owner.value = '系统管理员';
+      body._initialComment.value = '请同步首条协作动态';
+      body._initialComment.dispatchEvent(new Event('input', { bubbles: true }));
+    })()`);
+    assert.equal(await evaluate(`document.querySelector('.task-collaboration-summary-meta').textContent`), '1 条待发布');
+    const taskCreationScreenshot = await cdp('Page.captureScreenshot', { format: 'png' });
+    const taskCreationScreenshotPath = path.join(temporary, 'task-creation-collaboration.png');
+    writeFileSync(taskCreationScreenshotPath, Buffer.from(taskCreationScreenshot.data, 'base64'));
+    console.log('Task creation screenshot: ' + taskCreationScreenshotPath);
+    await evaluate(`document.querySelector('#modal-ok').click()`);
+    await until(`document.querySelector('#modal-mask').classList.contains('hidden') && state.tasks.some(item => item.name === '带首条动态的新事务')`);
+    assert.equal(await evaluate(`(async () => {
+      const task = state.tasks.find(item => item.name === '带首条动态的新事务');
+      const collaboration = await api('/api/tasks/' + task.id + '/collaboration');
+      return collaboration.timeline.some(item => item.kind === 'comment' && item.detail === '请同步首条协作动态');
+    })()`), true);
     await evaluate(`(async () => { await api('/api/workspaces', 'POST', { name: '另一个空间' }); resetWorkspaceState(); await refreshSession(); await reload(); })()`);
     await tab('baseline');
     assert.ok((await evaluate(`document.querySelector('#analysis-panel').textContent`)).includes('保存当前计划作为基线'));
