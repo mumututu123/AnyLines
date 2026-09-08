@@ -69,6 +69,7 @@ html[data-theme="dark"] .analysis-studio {
 .analysis-map svg { display: block; width: max(960px, 100%); height: auto; }
 .analysis-map g[role="button"] { cursor: pointer; }
 .analysis-map g[role="button"]:hover .analysis-row-label { fill: var(--analysis-accent); }
+.analysis-delay-gantt .analysis-openable-row:hover .analysis-row-label { text-decoration: underline; }
 .analysis-row-label { fill: var(--analysis-text); font-size: 12px; }
 .analysis-line-label { font-weight: 700; }
 .analysis-axis { fill: var(--analysis-muted); font-size: 11px; }

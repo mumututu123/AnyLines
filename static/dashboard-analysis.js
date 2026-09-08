@@ -463,10 +463,11 @@ const DashboardAnalysis = (() => {
         };
         const gantt = el("section", undefined, "analysis-delay-gantt");
         gantt.appendChild(el("h4", "预计日期变化", "analysis-result-title"));
-        note(gantt, "每行只对照原计划与推演后的日期；橙色突出指定事务增加的时间，行尾显示本次影响天数。主线和支线仅用于分组，不绘制依赖连线。");
+        note(gantt, "每行只对照原计划与推演后的日期；橙色突出指定事务增加的时间，行尾显示本次影响天数。主线和支线仅用于分组；双击事务或里程碑泳道可打开详情。");
         delayLegend(gantt);
         drawMap(gantt, affectedScene, { ghost: originalScene, readonly: true,
-          comparisonMode: "delay", sourceId: context.delayTask, showDependencies: false });
+          comparisonMode: "delay", sourceId: context.delayTask, showDependencies: false,
+          openDetails: true });
         result.appendChild(gantt);
       }
     }
@@ -707,7 +708,7 @@ const DashboardAnalysis = (() => {
   }
   function drawMap(host, scene, { ghost = null, highlight = new Set(), readonly = false,
     dependencyDirection = "prerequisite", comparisonMode = "overlay", sourceId = null,
-    showDependencies = true } = {}) {
+    showDependencies = true, openDetails = false } = {}) {
     if (!scene.tasks.length && !scene.lines.length && !ghost?.tasks.length) {
       dashboardEmpty(host, "项目地图为空，创建主线和事务后即可开始分析。"); return;
     }
@@ -768,6 +769,26 @@ const DashboardAnalysis = (() => {
     }
     const info = el("p", delayComparison ? "点击泳道查看原计划与推演后的准确日期" : "点击节点查看日期与状态", "analysis-map-info");
     info.setAttribute("aria-live", "polite");
+    const openRowDetails = (kind, id) => {
+      const task = kind === "task" ? taskById(id) : null;
+      const milestone = kind === "milestone" ? state.milestones.find(item => item.id === id) : null;
+      if (!task && !milestone) return;
+      const interaction = {
+        mapLeft: wrap.scrollLeft, mapTop: wrap.scrollTop,
+        pageX: window.scrollX, pageY: window.scrollY,
+      };
+      const restore = () => requestAnimationFrame(() => {
+        const nextWrap = document.querySelector(".analysis-delay-gantt .analysis-map");
+        if (!nextWrap) return;
+        nextWrap.scrollLeft = interaction.mapLeft;
+        nextWrap.scrollTop = interaction.mapTop;
+        window.scrollTo(interaction.pageX, interaction.pageY);
+        const target = nextWrap.querySelector(`[data-analysis-kind="${kind}"][data-analysis-id="${id}"]`);
+        (target || nextWrap).focus({ preventScroll: true });
+      });
+      if (task) openTaskModal(task, task.line_id, false, { onClosed: restore });
+      else openMilestoneModal(milestone, milestone.line_id, null, { onClosed: restore });
+    };
     const lineY = new Map(rows.map((row, i) => [row, i]).filter(([row]) => row.kind === "line")
       .map(([row, i]) => [row.item.id, 48 + i * 36]));
     rows.forEach((row, index) => {
@@ -842,9 +863,23 @@ const DashboardAnalysis = (() => {
       }
       dashboardSvg("title", {}, group).textContent = description;
       group.setAttribute("tabindex", "0"); group.setAttribute("role", "button"); group.setAttribute("aria-label", description);
+      const canOpenDetails = openDetails && !removed && ["task", "milestone"].includes(row.kind);
+      if (canOpenDetails) {
+        group.classList.add("analysis-openable-row");
+        group.dataset.analysisKind = row.kind;
+        group.dataset.analysisId = item.id;
+        group.setAttribute("aria-label", `${description} · 双击或按回车打开详情`);
+      }
       const activate = () => { info.textContent = description; };
       group.onclick = activate;
-      group.onkeydown = event => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); activate(); } };
+      group.onkeydown = event => {
+        if (event.key === "Enter" && canOpenDetails) { event.preventDefault(); openRowDetails(row.kind, item.id); }
+        else if (["Enter", " "].includes(event.key)) { event.preventDefault(); activate(); }
+      };
+      if (canOpenDetails) group.ondblclick = event => {
+        event.preventDefault();
+        openRowDetails(row.kind, item.id);
+      };
       if (!readonly && row.kind === "task" && !removed) group.ondblclick = () => { const task = taskById(item.id); if (task) openTaskModal(task); };
     });
     host.append(wrap, info);

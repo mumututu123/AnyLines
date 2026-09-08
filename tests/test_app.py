@@ -991,7 +991,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('option.addEventListener("dblclick"', source)
         self.assertIn('event.target.closest?.(".milestone-acceptance-checkbox")', source)
         self.assertIn("onClosed: () => {", source)
-        self.assertIn("openMilestoneModal(currentMilestone, line.id, savedDraft)", source)
+        self.assertIn("openMilestoneModal(currentMilestone, line.id, savedDraft, options)", source)
         self.assertIn("function fivePointStarPoints(", source)
         self.assertIn("function milestoneStatusBands(tasks)", source)
         self.assertIn("28 * band.ratio", source)

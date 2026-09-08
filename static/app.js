@@ -4317,7 +4317,7 @@ function milestoneModalDraft(body) {
   };
 }
 
-function openMilestoneModal(milestone, lineId = null, draft = null) {
+function openMilestoneModal(milestone, lineId = null, draft = null, options = {}) {
   if (!ensureWorkspaceEditable()) return;
   const isNew = !milestone;
   const line = lineById(isNew ? lineId : milestone.line_id);
@@ -4353,7 +4353,7 @@ function openMilestoneModal(milestone, lineId = null, draft = null) {
             onClosed: () => {
               const currentMilestone = milestone ?
                 state.milestones.find((item) => item.id === milestone.id) || milestone : null;
-              openMilestoneModal(currentMilestone, line.id, savedDraft);
+              openMilestoneModal(currentMilestone, line.id, savedDraft, options);
             },
           });
         },
@@ -4374,6 +4374,7 @@ function openMilestoneModal(milestone, lineId = null, draft = null) {
         $("#modal-mask").classList.add("hidden");
         toast("已删除里程碑，可按 Ctrl+Z 撤销");
         await reload();
+        if (options.onClosed) options.onClosed("delete");
       };
       $("#modal-header-tools").appendChild(remove);
     }
@@ -4405,7 +4406,7 @@ function openMilestoneModal(milestone, lineId = null, draft = null) {
       toast("里程碑已更新");
       await reload();
     }
-  });
+  }, { onClosed: options.onClosed });
   $("#modal").classList.add("modal-wide");
 }
 

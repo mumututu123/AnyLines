@@ -140,6 +140,29 @@ const assert = require('node:assert/strict');
     assert.equal(await evaluate(`document.querySelectorAll('.analysis-delay-gantt .analysis-milestone-before').length`), 1);
     assert.ok((await evaluate(`document.querySelector('.analysis-delay-gantt svg').textContent`)).includes('延期起点 · 方案再次调整'));
     assert.equal(await evaluate(`state.tasks.find(item => item.id === 2).start_date`), '2026-09-04');
+    await evaluate(`(() => {
+      const map = document.querySelector('.analysis-delay-gantt .analysis-map');
+      map.scrollLeft = 90;
+      map.querySelector('[data-analysis-kind="task"][data-analysis-id="1"]')
+        .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    })()`);
+    await until(`!document.querySelector('#modal-mask').classList.contains('hidden') && document.querySelector('#modal-title').textContent === '编辑事务'`);
+    assert.equal(await evaluate(`document.querySelector('#modal-body')._name.value`), '方案再次调整');
+    await evaluate(`document.querySelector('#modal-ok').click()`);
+    await until(`document.querySelector('#modal-mask').classList.contains('hidden') && document.querySelector('.analysis-delay-gantt [data-analysis-kind="task"][data-analysis-id="1"]')`);
+    await delay(100);
+    assert.equal(await evaluate(`document.querySelector('#analysis-tab-delay').getAttribute('aria-selected')`), 'true');
+    assert.equal(await evaluate(`document.querySelector('#analysis-delay-days').value`), '3');
+    assert.equal(await evaluate(`document.activeElement?.dataset.analysisId`), '1');
+    assert.equal(await evaluate(`document.querySelector('.analysis-delay-gantt .analysis-map').scrollLeft`), 90);
+    await evaluate(`document.querySelector('.analysis-delay-gantt [data-analysis-kind="milestone"][data-analysis-id="1"]')
+      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`);
+    await until(`!document.querySelector('#modal-mask').classList.contains('hidden') && document.querySelector('#modal-title').textContent === '编辑里程碑'`);
+    assert.equal(await evaluate(`document.querySelector('#modal-body')._name.value`), '正式发布');
+    await evaluate(`document.querySelector('#modal-cancel').click()`);
+    await until(`document.querySelector('#modal-mask').classList.contains('hidden')`);
+    await delay(50);
+    assert.equal(await evaluate(`document.activeElement?.dataset.analysisKind`), 'milestone');
     await evaluate(`document.querySelector('#analysis-delay-days').value = '-1'; document.querySelector('#analysis-delay-days').dispatchEvent(new Event('input'))`);
     assert.ok((await evaluate(`document.querySelector('#analysis-delay-result').textContent`)).includes('整数'));
     await evaluate(`document.querySelector('#analysis-delay-days').value = '0'; document.querySelector('#analysis-delay-days').dispatchEvent(new Event('input'))`);
