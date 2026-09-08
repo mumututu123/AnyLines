@@ -59,6 +59,12 @@ html[data-theme="dark"] .analysis-studio {
 .analysis-map-legend i.previous { border: 1px dashed var(--analysis-muted); background: transparent; }
 .analysis-map-legend i.changed { width: 10px; height: 10px; border: 2px solid var(--analysis-accent); border-radius: 50%; background: transparent; }
 .analysis-map-legend i.dependency { height: 0; border-top: 1px solid var(--analysis-muted); border-radius: 0; background: transparent; }
+.analysis-delay-legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 5px 0 12px; color: var(--analysis-muted); font-size: 11px; }
+.analysis-delay-legend span { display: inline-flex; align-items: center; gap: 7px; }
+.analysis-delay-legend i { display: inline-block; width: 24px; border-radius: 4px; }
+.analysis-delay-legend i.before { height: 5px; background: #afb8c1; }
+.analysis-delay-legend i.after { height: 8px; background: #54aeff; }
+.analysis-delay-legend i.extension { height: 8px; background: #fb8f44; }
 .analysis-map { overflow: auto; max-height: 480px; border: 1px solid var(--analysis-border); border-radius: 8px; background: var(--analysis-bg); }
 .analysis-map svg { display: block; width: max(960px, 100%); height: auto; }
 .analysis-map g[role="button"] { cursor: pointer; }
@@ -77,6 +83,17 @@ html[data-theme="dark"] .analysis-studio {
 .analysis-delay-gantt .analysis-result-title { margin-top: 0; font-size: 15px; }
 .analysis-delay-gantt .analysis-map { max-height: 560px; background: var(--analysis-bg); }
 .analysis-delay-gantt .analysis-line-label { fill: var(--analysis-accent); }
+.analysis-delay-source-row { fill: #fff4e8; }
+html[data-theme="dark"] .analysis-delay-source-row { fill: #2b2118; }
+.analysis-source-label { fill: #bc4c00; font-weight: 700; }
+html[data-theme="dark"] .analysis-source-label { fill: #ffa657; }
+.analysis-plan-before { fill: #afb8c1; }
+.analysis-plan-after { fill: #54aeff; }
+.analysis-delay-extension { fill: #fb8f44; }
+.analysis-delay-value { fill: #bc4c00; font-size: 11px; font-weight: 700; }
+html[data-theme="dark"] .analysis-delay-value { fill: #ffa657; }
+.analysis-milestone-before { fill: #afb8c1; }
+.analysis-milestone-after { fill: #bf8700; }
 .analysis-list { max-height: 380px; overflow: auto; margin-top: 16px; }
 .analysis-list > p { padding: 10px; border-bottom: 1px solid var(--analysis-border); font-size: 13px; line-height: 1.6; }
 .analysis-result-title { margin: 17px 0 6px; font-size: 13px; }

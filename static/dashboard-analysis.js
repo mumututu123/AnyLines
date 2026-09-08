@@ -62,6 +62,17 @@ const DashboardAnalysis = (() => {
     add("dependency", dependencyLabel);
     host.appendChild(legend);
   }
+  function delayLegend(host) {
+    const legend = el("div", undefined, "analysis-delay-legend");
+    const add = (className, text) => {
+      const item = el("span"); item.append(el("i", undefined, className), document.createTextNode(text));
+      legend.appendChild(item);
+    };
+    add("before", "原计划");
+    add("after", "推演后");
+    add("extension", "指定事务新增时间");
+    host.appendChild(legend);
+  }
   function mapDetails(host, scene, options = {}, label = "展开时间图查看位置变化") {
     const details = el("details", undefined, "analysis-map-details");
     details.appendChild(el("summary", label));
@@ -452,10 +463,10 @@ const DashboardAnalysis = (() => {
         };
         const gantt = el("section", undefined, "analysis-delay-gantt");
         gantt.appendChild(el("h4", "预计日期变化", "analysis-result-title"));
-        note(gantt, "甘特泳道只展示本次推演涉及的主线、支线、事务和里程碑。点击一条泳道可查看推演后的准确日期；横向滚动可查看完整时间范围。");
-        mapLegend(gantt, true, "推演后日期", "推演前日期", "箭头表示延期传递方向");
-        drawMap(gantt, affectedScene, { ghost: originalScene, highlight: affectedIds, readonly: true,
-          dependencyDirection: "downstream" });
+        note(gantt, "每行只对照原计划与推演后的日期；橙色突出指定事务增加的时间，行尾显示本次影响天数。主线和支线仅用于分组，不绘制依赖连线。");
+        delayLegend(gantt);
+        drawMap(gantt, affectedScene, { ghost: originalScene, readonly: true,
+          comparisonMode: "delay", sourceId: context.delayTask, showDependencies: false });
         result.appendChild(gantt);
       }
     }
@@ -695,7 +706,8 @@ const DashboardAnalysis = (() => {
       milestones: [milestone] }, { highlight: ids }, "展开时间图，查看验收事务的位置");
   }
   function drawMap(host, scene, { ghost = null, highlight = new Set(), readonly = false,
-    dependencyDirection = "prerequisite" } = {}) {
+    dependencyDirection = "prerequisite", comparisonMode = "overlay", sourceId = null,
+    showDependencies = true } = {}) {
     if (!scene.tasks.length && !scene.lines.length && !ghost?.tasks.length) {
       dashboardEmpty(host, "项目地图为空，创建主线和事务后即可开始分析。"); return;
     }
@@ -712,7 +724,7 @@ const DashboardAnalysis = (() => {
     if (!dates.length) { dashboardEmpty(host, "暂无可绘制的日期"); return; }
     const first = dates[0], last = dates.at(-1);
     const span = Math.max(1, daysBetween(first, last));
-    const width = 960, left = 220, right = 35;
+    const width = 960, left = 220, right = comparisonMode === "delay" ? 70 : 35;
     const x = value => left + daysBetween(first, value) / span * (width - left - right);
     const rows = [];
     for (const line of lines) {
@@ -724,13 +736,19 @@ const DashboardAnalysis = (() => {
     const height = 60 + rows.length * 36;
     const wrap = el("div", undefined, "analysis-map"); wrap.tabIndex = 0;
     wrap.setAttribute("role", "region"); wrap.setAttribute("aria-label", "可滚动项目地图");
+    const delayComparison = comparisonMode === "delay";
     const dependencyDescription = dependencyDirection === "downstream" ? "箭头表示延期传递方向" : "箭头指向前置事务";
+    const mapDescription = delayComparison ? "延期影响甘特图，灰色为原计划，蓝色为推演后，橙色为指定事务新增时间" :
+      `项目时间地图，${dependencyDescription}，虚线为比较计划`;
     const svg = dashboardSvg("svg", { viewBox: `0 0 ${width} ${height}`, width, height, role: "group",
-      "aria-label": `项目时间地图，${dependencyDescription}，虚线为比较计划` }, wrap);
-    const defs = dashboardSvg("defs", {}, svg);
-    const markerId = `analysis-arrow-${++mapSequence}`;
-    const marker = dashboardSvg("marker", { id: markerId, viewBox: "0 0 8 8", refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: "auto" }, defs);
-    dashboardSvg("path", { d: "M0 0 L8 4 L0 8 Z", fill: "#8c959f" }, marker);
+      "aria-label": mapDescription }, wrap);
+    let markerId = null;
+    if (showDependencies) {
+      const defs = dashboardSvg("defs", {}, svg);
+      markerId = `analysis-arrow-${++mapSequence}`;
+      const marker = dashboardSvg("marker", { id: markerId, viewBox: "0 0 8 8", refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: "auto" }, defs);
+      dashboardSvg("path", { d: "M0 0 L8 4 L0 8 Z", fill: "#8c959f" }, marker);
+    }
     const ticks = new Set(Array.from({ length: 5 }, (_, i) => Math.round(span * i / 4)));
     for (const offset of ticks) {
       const tickDate = dashboardDateIso(dashboardAddDays(first, offset));
@@ -741,55 +759,86 @@ const DashboardAnalysis = (() => {
     }
     const positions = new Map();
     rows.forEach((row, index) => { if (row.kind === "task" && currentIds.has(row.item.id)) positions.set(row.item.id, { x: x(row.item.start_date), y: 48 + index * 36 }); });
-    for (const edge of scene.dependencies) {
+    for (const edge of showDependencies ? scene.dependencies : []) {
       const fromId = dependencyDirection === "downstream" ? edge.prerequisite_task_id : edge.dependent_task_id;
       const toId = dependencyDirection === "downstream" ? edge.dependent_task_id : edge.prerequisite_task_id;
       const from = positions.get(fromId), to = positions.get(toId);
       if (from && to) dashboardSvg("path", { d: `M${from.x} ${from.y} C${from.x + 30} ${from.y},${to.x + 30} ${to.y},${to.x + 7} ${to.y}`,
         class: "analysis-edge", "marker-end": `url(#${markerId})` }, svg);
     }
-    const info = el("p", "点击节点查看日期与状态", "analysis-map-info"); info.setAttribute("aria-live", "polite");
+    const info = el("p", delayComparison ? "点击泳道查看原计划与推演后的准确日期" : "点击节点查看日期与状态", "analysis-map-info");
+    info.setAttribute("aria-live", "polite");
     const lineY = new Map(rows.map((row, i) => [row, i]).filter(([row]) => row.kind === "line")
       .map(([row, i]) => [row.item.id, 48 + i * 36]));
     rows.forEach((row, index) => {
       const item = row.item, y = 48 + index * 36;
       const group = dashboardSvg("g", {}, svg);
-      const label = dashboardSvg("text", { x: 8, y: y + 4, class: `analysis-row-label ${row.kind === "line" ? "analysis-line-label" : ""}` }, group);
       const removed = row.kind === "task" && !currentIds.has(item.id);
       const shortName = item.name.length > 15 ? item.name.slice(0, 15) + "…" : item.name;
-      label.textContent = `${row.kind === "line" ? `${item.parent_id === null ? "主线" : "支线"} · ` : row.kind === "milestone" ? "★ " : ""}${shortName}${removed ? "（已移除）" : ""}`;
+      const isSource = delayComparison && row.kind === "task" && item.id === sourceId;
+      if (isSource) dashboardSvg("rect", { x: 0, y: y - 16, width, height: 32, class: "analysis-delay-source-row" }, group);
+      const label = dashboardSvg("text", { x: 8, y: y + 4,
+        class: `analysis-row-label ${row.kind === "line" ? "analysis-line-label" : ""}${isSource ? " analysis-source-label" : ""}` }, group);
+      label.textContent = `${isSource ? "延期起点 · " : row.kind === "line" ? `${item.parent_id === null ? "主线" : "支线"} · ` : row.kind === "milestone" ? "★ " : ""}${shortName}${removed ? "（已移除）" : ""}`;
       let description;
       if (row.kind === "line") {
-        const start = x(item.fork_date), end = item.merge_date ? x(item.merge_date) : width - right;
-        dashboardSvg("line", { x1: start, x2: end, y1: y, y2: y, stroke: item.color || "#8c959f", "stroke-width": 2 }, group);
-        if (lineY.has(item.parent_id)) dashboardSvg("line", { x1: start, x2: start, y1: lineY.get(item.parent_id), y2: y, class: "analysis-edge" }, group);
-        dashboardSvg("circle", { cx: start, cy: y, r: 4, fill: item.color || "#8c959f" }, group);
-        if (item.merge_date) dashboardSvg("circle", { cx: end, cy: y, r: 5, class: "analysis-ghost" }, group);
+        if (!delayComparison) {
+          const start = x(item.fork_date), end = item.merge_date ? x(item.merge_date) : width - right;
+          dashboardSvg("line", { x1: start, x2: end, y1: y, y2: y, stroke: item.color || "#8c959f", "stroke-width": 2 }, group);
+          if (lineY.has(item.parent_id)) dashboardSvg("line", { x1: start, x2: start, y1: lineY.get(item.parent_id), y2: y, class: "analysis-edge" }, group);
+          dashboardSvg("circle", { cx: start, cy: y, r: 4, fill: item.color || "#8c959f" }, group);
+          if (item.merge_date) dashboardSvg("circle", { cx: end, cy: y, r: 5, class: "analysis-ghost" }, group);
+        }
         description = `${item.name} · 起始 ${item.fork_date}${item.merge_date ? ` · 反合 ${item.merge_date}` : ""}`;
       } else if (row.kind === "milestone") {
         const prior = oldMilestones.get(item.id);
-        if (prior && prior.milestone_date !== item.milestone_date) {
+        if (delayComparison) {
+          const oldDate = prior?.milestone_date || item.milestone_date;
+          dashboardSvg("circle", { cx: x(oldDate), cy: y - 4, r: 4, class: "analysis-milestone-before" }, group);
+          dashboardSvg("rect", { x: x(item.milestone_date) - 5, y: y + 1, width: 10, height: 10,
+            transform: `rotate(45 ${x(item.milestone_date)} ${y + 6})`, class: "analysis-milestone-after" }, group);
+          const amount = Math.max(0, daysBetween(oldDate, item.milestone_date));
+          if (amount) dashboardSvg("text", { x: Math.min(width - 34, x(item.milestone_date) + 10), y: y + 5,
+            class: "analysis-delay-value" }, group).textContent = `+${amount}天`;
+        } else if (prior && prior.milestone_date !== item.milestone_date) {
           dashboardSvg("line", { x1: x(prior.milestone_date), x2: x(item.milestone_date), y1: y, y2: y,
             class: "analysis-ghost" }, group);
           dashboardSvg("text", { x: x(prior.milestone_date), y: y + 6,
             class: "analysis-star analysis-star-ghost", "text-anchor": "middle" }, group).textContent = "☆";
         }
-        dashboardSvg("text", { x: x(item.milestone_date), y: y + 6, class: "analysis-star", "text-anchor": "middle" }, group).textContent = "★";
+        if (!delayComparison) dashboardSvg("text", { x: x(item.milestone_date), y: y + 6, class: "analysis-star", "text-anchor": "middle" }, group).textContent = "★";
         description = `${item.name} · 目标 ${prior && prior.milestone_date !== item.milestone_date ?
           `${prior.milestone_date} → ${item.milestone_date}` : item.milestone_date} · ${item.acceptance_task_ids.length} 项验收事务`;
       } else {
         const prior = oldTasks.get(item.id);
-        if (prior) {
+        if (delayComparison && prior && !removed) {
+          const priorEnd = prior.end_date || prior.start_date;
+          const currentEnd = item.end_date || item.start_date;
+          dashboardSvg("rect", { x: x(prior.start_date) - 4, y: y - 8,
+            width: Math.max(8, x(priorEnd) - x(prior.start_date) + 8), height: 5, rx: 3,
+            class: "analysis-plan-before" }, group);
+          dashboardSvg("rect", { x: x(item.start_date) - 4, y: y + 1,
+            width: Math.max(8, x(currentEnd) - x(item.start_date) + 8), height: 8, rx: 4,
+            class: "analysis-plan-after" }, group);
+          const amount = Math.max(0, daysBetween(isSource ? priorEnd : prior.start_date,
+            isSource ? currentEnd : item.start_date));
+          if (isSource && amount) dashboardSvg("rect", { x: x(priorEnd), y: y + 1,
+            width: Math.max(3, x(currentEnd) - x(priorEnd) + 4), height: 8, rx: 4,
+            class: "analysis-delay-extension" }, group);
+          if (amount) dashboardSvg("text", { x: Math.min(width - 34, x(currentEnd) + 10), y: y + 7,
+            class: "analysis-delay-value" }, group).textContent = `+${amount}天`;
+        } else if (prior) {
           dashboardSvg("rect", { x: x(prior.start_date) - 4, y: y - 9, width: Math.max(8, x(prior.end_date || prior.start_date) - x(prior.start_date) + 8), height: 18, rx: 5, class: "analysis-ghost" }, group);
           if (prior.start_date !== item.start_date) dashboardSvg("line", { x1: x(prior.start_date), x2: x(item.start_date), y1: y, y2: y, class: "analysis-ghost" }, group);
         }
-        if (!removed) {
+        if (!removed && !delayComparison) {
           const color = statusColor(item.status);
           dashboardSvg("rect", { x: x(item.start_date) - 4, y: y - 5, width: Math.max(8, x(item.end_date || item.start_date) - x(item.start_date) + 8), height: 10, rx: 5, fill: color, opacity: .5 }, group);
           if (highlight.has(item.id)) dashboardSvg("circle", { cx: x(item.start_date), cy: y, r: 11, class: "analysis-highlight" }, group);
           dashboardSvg("circle", { cx: x(item.start_date), cy: y, r: 5, fill: color }, group);
         }
-        description = `${item.name}${removed ? "（已移除）" : ""} · ${item.status} · ${item.owner || "未分配"} · ${item.start_date} → ${item.end_date || "未设结束日期"}`;
+        description = delayComparison && prior ? `${isSource ? "延期起点" : "受影响事务"} · ${item.name} · 原计划 ${prior.start_date} → ${prior.end_date || "未设结束日期"} · 推演后 ${item.start_date} → ${item.end_date || "未设结束日期"}` :
+          `${item.name}${removed ? "（已移除）" : ""} · ${item.status} · ${item.owner || "未分配"} · ${item.start_date} → ${item.end_date || "未设结束日期"}`;
       }
       dashboardSvg("title", {}, group).textContent = description;
       group.setAttribute("tabindex", "0"); group.setAttribute("role", "button"); group.setAttribute("aria-label", description);
