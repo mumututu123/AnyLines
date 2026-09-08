@@ -1733,7 +1733,7 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   border-radius: 50%; background: #f6f0ff; color: #8250df; font-size: 18px;
   line-height: 1; transition: transform .15s ease;
 }
-.task-collaboration[open] > summary::before { transform: rotate(90deg); }
+.task-collaboration[open] > summary::before { content: "‹"; transform: none; }
 .task-collaboration-summary-title {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

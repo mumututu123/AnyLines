@@ -174,6 +174,7 @@ const assert = require('node:assert/strict');
     assert.equal(await evaluate(`document.querySelector('#modal').classList.contains('task-editor-modal')`), true);
     assert.equal(await evaluate(`document.querySelector('.task-collaboration').open`), true);
     assert.equal(await evaluate(`document.querySelector('.task-collaboration-column').classList.contains('is-collapsed')`), false);
+    assert.equal(await evaluate(`getComputedStyle(document.querySelector('.task-collaboration > summary'), '::before').content`), '"‹"');
     await delay(250);
     assert.equal(await evaluate(`(() => {
       const main = document.querySelector('.task-editor-main').getBoundingClientRect();
