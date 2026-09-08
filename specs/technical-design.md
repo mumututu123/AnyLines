@@ -67,7 +67,7 @@ erDiagram
 | `workspaces` | `id, name, description, created_by, archived_at` | 项目空间；归档日期为空表示未归档 |
 | `workspace_members` | `workspace_id, user_id, role, joined_at` | 空间与用户联合主键；角色为 admin/member |
 | `lines` | `id, workspace_id, parent_id, name, description, color, fork_date, merge_date` | 父线为空表示主线；颜色可为空；修改接口不支持任意重挂父线 |
-| `tasks` | `id, workspace_id, line_id, name, content, goal, owner, priority, next_action, risk_reason, status, start_date, end_date, status_since` | `owner` 当前存姓名文本；旧数据可缺字段，新建需遵守业务必填约束 |
+| `tasks` | `id, workspace_id, line_id, name, content, goal, owner, owners, priority, next_action, risk_reason, status, start_date, end_date, status_since` | `owners` 以有序 JSON 数组保存一个或多个成员姓名；前端标签的勾选及拖拽顺序原样写入，`owner` 保留首位责任人以兼容旧数据和旧客户端 |
 | `task_dependencies` | `workspace_id, dependent_task_id, prerequisite_task_id` | 联合主键，禁止自依赖；有效对象、循环与闭环条件由应用校验 |
 | `milestones` | `id, workspace_id, line_id, name, target_description, milestone_date` | 归属线固定，验收关系单独存储 |
 | `milestone_tasks` | `workspace_id, milestone_id, task_id` | 同空间里程碑与验收事务关联 |

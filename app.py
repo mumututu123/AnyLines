@@ -93,7 +93,7 @@ DATA_TASK_EXPORT_COLUMNS = (
     ("下一步动作", "next_action", 28),
     ("风险原因", "risk_reason", 28),
     ("优先级", "priority", 12),
-    ("责任人", "owner", 16),
+    ("责任人", "owner", 28),
     ("进展状态", "status", 14),
     ("起始日期", "start_date", 14),
     ("结束日期", "end_date", 14),
@@ -111,7 +111,7 @@ TASK_EXPORT_COLUMNS = (
     ("下一步动作", "next_action", 28),
     ("风险原因", "risk_reason", 28),
     ("优先级", "priority", 12),
-    ("责任人", "owner", 16),
+    ("责任人", "owner", 28),
     ("进展状态", "status", 14),
     ("起始日期", "start_date", 14),
     ("结束日期", "end_date", 14),
@@ -127,7 +127,7 @@ TASK_IMPORT_COLUMNS = (
     ("下一步动作", "next_action", 28, False),
     ("风险原因", "risk_reason", 28, False),
     ("优先级", "priority", 12, False),
-    ("责任人", "owner", 16, True),
+    ("责任人", "owner", 28, True),
     ("进展状态", "status", 14, True),
     ("起始日期", "start_date", 14, True),
     ("结束日期", "end_date", 14, True),
@@ -187,6 +187,7 @@ def init_db(db_path=None):
             content      TEXT DEFAULT '',
             goal         TEXT DEFAULT '',
             owner        TEXT DEFAULT '',
+            owners       TEXT NOT NULL DEFAULT '[]',
             priority     TEXT NOT NULL DEFAULT '中',
             next_action  TEXT DEFAULT '',
             risk_reason  TEXT DEFAULT '',
@@ -349,6 +350,7 @@ def init_db(db_path=None):
     ensure_column(db, "tasks", "deleted_at", "TEXT")
     ensure_column(db, "tasks", "updated_at", "TEXT")
     ensure_column(db, "tasks", "workspace_id", "INTEGER")
+    ensure_column(db, "tasks", "owners", "TEXT NOT NULL DEFAULT '[]'")
     ensure_column(db, "users", "managed_by", "INTEGER")
     ensure_column(db, "users", "avatar_mime", "TEXT")
     ensure_column(db, "users", "avatar_data", "BLOB")
@@ -463,6 +465,15 @@ def init_db(db_path=None):
     )
     db.execute("UPDATE lines SET updated_at=? WHERE updated_at IS NULL", (today,))
     db.execute("UPDATE tasks SET updated_at=? WHERE updated_at IS NULL", (today,))
+    for task in db.execute("SELECT id,owner,owners FROM tasks").fetchall():
+        owners = task_owner_names(task)
+        encoded = encode_task_owners(owners)
+        primary = owners[0] if owners else ""
+        if task["owners"] != encoded or task["owner"] != primary:
+            db.execute(
+                "UPDATE tasks SET owner=?,owners=? WHERE id=?",
+                (primary, encoded, task["id"]),
+            )
     db.commit()
     db.close()
 
@@ -499,6 +510,78 @@ def text_field(data, key, label, default="", nullable=False):
     if not isinstance(value, str):
         raise ApiError(f"{label} 必须是字符串")
     return value
+
+
+def task_owner_names(task):
+    """读取事务责任人列表，并兼容只保存 owner 的历史数据。"""
+    try:
+        raw = task["owners"]
+    except (KeyError, IndexError):
+        raw = None
+    values = []
+    if isinstance(raw, list):
+        values = raw
+    elif isinstance(raw, str) and raw:
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            decoded = []
+        if isinstance(decoded, list):
+            values = decoded
+    try:
+        legacy_owner = task["owner"]
+    except (KeyError, IndexError):
+        legacy_owner = ""
+    if not values and isinstance(legacy_owner, str) and legacy_owner.strip():
+        values = [legacy_owner]
+    cleaned = []
+    for value in values:
+        if isinstance(value, str):
+            value = value.strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+    return cleaned
+
+
+def encode_task_owners(owners):
+    return json.dumps(owners, ensure_ascii=False, separators=(",", ":"))
+
+
+def validate_task_owners(value, member_names):
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ApiError("责任人必须是字符串数组")
+    owners = []
+    for item in value:
+        name = item.strip()
+        if not name:
+            raise ApiError("责任人不能为空")
+        if name not in owners:
+            owners.append(name)
+    if not owners:
+        raise ApiError("责任人不能为空")
+    invalid = [name for name in owners if name not in member_names]
+    if invalid:
+        raise ApiError("责任人不是当前项目空间成员")
+    return owners
+
+
+def requested_task_owners(data, member_names, fallback=None):
+    if "owners" in data:
+        return validate_task_owners(data["owners"], member_names)
+    if "owner" in data:
+        owner = text_field(data, "owner", "责任人").strip()
+        return validate_task_owners([owner] if owner else [], member_names)
+    if fallback is None:
+        return validate_task_owners([], member_names)
+    return list(fallback)
+
+
+def task_dict(row):
+    result = dict(row)
+    owners = task_owner_names(result)
+    result["owners"] = owners
+    result["owner"] = owners[0] if owners else ""
+    return result
 
 
 def line_color(value):
@@ -734,6 +817,8 @@ def task_import_template_workbook(db, workspace_id):
         sheet.column_dimensions[get_column_letter(index)].width = width
         if label in {"所属线ID", "所属线路径"}:
             cell.comment = Comment("两列至少填写一项；同时填写时必须指向同一条线。", "AnyLine")
+        elif label == "责任人":
+            cell.comment = Comment("必填；多个责任人使用中文顿号“、”分隔。", "AnyLine")
         elif required:
             cell.comment = Comment("必填字段", "AnyLine")
 
@@ -743,7 +828,7 @@ def task_import_template_workbook(db, workspace_id):
         ("导入规则", "从第 2 行开始填写；空白行会自动忽略。任意一行校验失败时整批不导入。"),
         ("所属线", "所属线ID与所属线路径至少填写一项，建议从“项目数据”工作表复制。"),
         ("必填字段", "事务名、事务内容、责任人、进展状态、起始日期、结束日期。"),
-        ("责任人", "必须从当前项目空间成员中选择；成员变更后请重新下载模板。"),
+        ("责任人", "必须从当前项目空间成员中选择；多人用中文顿号“、”分隔。"),
         ("日期格式", "使用 YYYY-MM-DD；结束日期不能早于起始日期。"),
         ("优先级", "留空时默认为“中”。"),
         ("导入范围", f"单次最多 {MAX_TASK_IMPORT_ROWS} 条事务，仅创建新事务，不导入图片和依赖关系。"),
@@ -786,7 +871,6 @@ def task_import_template_workbook(db, workspace_id):
     validations = [
         ("priority", 1, len(PRIORITY_ENUM), "ImportPriorities"),
         ("status", 2, len(statuses), "ImportStatuses"),
-        ("owner", 3, len(owners), "ImportOwners"),
     ]
     for key, option_column, count, range_name in validations:
         if not count:
@@ -855,6 +939,14 @@ def import_cell_text(value):
     if isinstance(value, (date, datetime)):
         return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
     return str(value).strip()
+
+
+def import_owner_names(value):
+    text = import_cell_text(value)
+    return [
+        name.strip() for name in re.split(r"[、,，;；]", text)
+        if name.strip()
+    ]
 
 
 def import_cell_date(value, label):
@@ -1118,12 +1210,19 @@ def parse_task_import_sheet(sheet, db, workspace_id, imported_lines=None):
                                ("owner", "责任人"), ("status", "进展状态")):
                 if not task[key]:
                     raise ValueError(f"{label}不能为空")
+            task["owners"] = []
+            for owner_name in import_owner_names(task["owner"]):
+                if owner_name not in task["owners"]:
+                    task["owners"].append(owner_name)
+            if not task["owners"]:
+                raise ValueError("责任人不能为空")
             if task["priority"] not in PRIORITY_ENUM:
                 raise ValueError("非法的优先级")
             if task["status"] not in statuses:
                 raise ValueError("非法的进展状态")
-            if task["owner"] not in owners:
+            if any(owner_name not in owners for owner_name in task["owners"]):
                 raise ValueError("责任人不是当前项目空间成员")
+            task["owner"] = task["owners"][0]
             validate_date_range(task["start_date"], task["end_date"])
             if task["start_date"] < line["fork_date"]:
                 raise ValueError("事务起始日期不能早于所属线起始日期")
@@ -1355,32 +1454,36 @@ def workspace_member_rows(db, workspace_id):
     ).fetchall()
 
 
-def owner_user_ids(db, workspace_id, owner):
-    if not owner:
+def owner_user_ids(db, workspace_id, owners):
+    if isinstance(owners, str):
+        owners = [owners]
+    owners = [owner for owner in (owners or []) if owner]
+    if not owners:
         return set()
+    marks = ",".join("?" for _ in owners)
     return {
         row["id"] for row in db.execute(
             "SELECT u.id FROM workspace_members m JOIN users u ON u.id=m.user_id "
-            "WHERE m.workspace_id=? AND u.active=1 AND u.display_name=?",
-            (workspace_id, owner),
+            f"WHERE m.workspace_id=? AND u.active=1 AND u.display_name IN ({marks})",
+            [workspace_id] + owners,
         )
     }
 
 
-def task_audience_user_ids(db, workspace_id, task_id, owner=None):
+def task_audience_user_ids(db, workspace_id, task_id, owners=None):
     followers = {
         row["user_id"] for row in db.execute(
             "SELECT user_id FROM task_followers WHERE workspace_id=? AND task_id=?",
             (workspace_id, task_id),
         )
     }
-    if owner is None:
+    if owners is None:
         row = db.execute(
-            "SELECT owner FROM tasks WHERE id=? AND workspace_id=?",
+            "SELECT owner,owners FROM tasks WHERE id=? AND workspace_id=?",
             (task_id, workspace_id),
         ).fetchone()
-        owner = row["owner"] if row else ""
-    return followers | owner_user_ids(db, workspace_id, owner)
+        owners = task_owner_names(row) if row else []
+    return followers | owner_user_ids(db, workspace_id, owners)
 
 
 def add_notifications(db, workspace_id, user_ids, kind, message, task_id=None,
@@ -1429,7 +1532,7 @@ def mentioned_user_ids(db, workspace_id, content):
     return mentioned
 
 
-def insert_task_comment(db, workspace_id, task_id, task_name, owner, content):
+def insert_task_comment(db, workspace_id, task_id, task_name, owners, content):
     created_at = now_iso()
     cur = db.execute(
         "INSERT INTO task_comments(workspace_id,task_id,author_id,content,created_at) "
@@ -1442,7 +1545,7 @@ def insert_task_comment(db, workspace_id, task_id, task_name, owner, content):
     )
     mentioned = mentioned_user_ids(db, workspace_id, content) - {g.user["id"]}
     audience = task_audience_user_ids(
-        db, workspace_id, task_id, owner
+        db, workspace_id, task_id, owners
     ) - mentioned
     actor_name = g.user["display_name"]
     add_notifications(
@@ -1461,7 +1564,7 @@ def insert_task_comment(db, workspace_id, task_id, task_name, owner, content):
 def notify_dependents_unblocked(db, workspace_id, prerequisite_task_id,
                                 prerequisite_name, actor_id):
     rows = db.execute(
-        "SELECT dependent.id,dependent.name,dependent.owner "
+        "SELECT dependent.id,dependent.name,dependent.owner,dependent.owners "
         "FROM task_dependencies edge "
         "JOIN tasks dependent ON dependent.id=edge.dependent_task_id "
         "JOIN lines line ON line.id=dependent.line_id "
@@ -1480,7 +1583,9 @@ def notify_dependents_unblocked(db, workspace_id, prerequisite_task_id,
     for task in rows:
         add_notifications(
             db, workspace_id,
-            task_audience_user_ids(db, workspace_id, task["id"], task["owner"]),
+            task_audience_user_ids(
+                db, workspace_id, task["id"], task_owner_names(task)
+            ),
             "dependency_unblocked",
             f"前置事务「{prerequisite_name}」已完成，「{task['name']}」可以继续推进",
             task["id"], actor_id,
@@ -1489,7 +1594,7 @@ def notify_dependents_unblocked(db, workspace_id, prerequisite_task_id,
 
 def notify_task_if_unblocked(db, workspace_id, task_id, actor_id, message):
     task = db.execute(
-        "SELECT id,name,owner,status FROM tasks WHERE id=? AND workspace_id=? "
+        "SELECT id,name,owner,owners,status FROM tasks WHERE id=? AND workspace_id=? "
         "AND deleted=0", (task_id, workspace_id),
     ).fetchone()
     if not task or task["status"] in {"已闭环", "已取消"}:
@@ -1505,7 +1610,9 @@ def notify_task_if_unblocked(db, workspace_id, task_id, actor_id, message):
     if not blocked:
         add_notifications(
             db, workspace_id,
-            task_audience_user_ids(db, workspace_id, task_id, task["owner"]),
+            task_audience_user_ids(
+                db, workspace_id, task_id, task_owner_names(task)
+            ),
             "dependency_unblocked", message, task_id, actor_id,
         )
 
@@ -2618,8 +2725,8 @@ def update_dashboard_snapshot(db, workspace_id, tasks, dependencies, lines, mile
             json.dumps(status_counts, ensure_ascii=False, sort_keys=True),
             json.dumps({
                 "tasks": [{key: task[key] for key in (
-                    "id", "line_id", "name", "owner", "priority", "status",
-                    "start_date", "end_date",
+                    "id", "line_id", "name", "owner", "owners", "priority",
+                    "status", "start_date", "end_date",
                 )} for task in tasks],
                 "lines": [{key: line[key] for key in (
                     "id", "name", "parent_id", "fork_date", "merge_date", "color",
@@ -2690,8 +2797,8 @@ def api_state():
         "SELECT id,name,description,color,parent_id,fork_date,merge_date,updated_at "
         "FROM lines "
         "WHERE workspace_id=? AND deleted=0 ORDER BY id", (workspace_id,))]
-    tasks = [dict(r) for r in db.execute(
-        "SELECT t.id,t.line_id,t.name,t.content,t.goal,t.owner,t.priority,"
+    tasks = [task_dict(r) for r in db.execute(
+        "SELECT t.id,t.line_id,t.name,t.content,t.goal,t.owner,t.owners,t.priority,"
         "t.next_action,t.risk_reason,t.status,t.start_date,t.end_date,"
         "t.status_since,t.updated_at FROM tasks t "
         "JOIN lines l ON l.id=t.line_id "
@@ -2938,7 +3045,7 @@ def add_task_comment(task_id):
     workspace_id = current_workspace_id()
     task = active_task(db, workspace_id, task_id)
     comment_id, created_at = insert_task_comment(
-        db, workspace_id, task_id, task["name"], task["owner"], content
+        db, workspace_id, task_id, task["name"], task_owner_names(task), content
     )
     db.commit()
     return jsonify({"id": comment_id, "created_at": created_at}), 201
@@ -3153,12 +3260,13 @@ def import_data():
     for task in task_rows:
         line_id = ids_by_key.get(task["_line_import_key"], task["line_id"])
         cur = db.execute(
-            "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,priority,"
+            "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,owners,priority,"
             "next_action,risk_reason,status,start_date,end_date,status_since,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 workspace_id, line_id, task["name"], task["content"], task["goal"],
-                task["owner"], task["priority"], task["next_action"],
+                task["owner"], encode_task_owners(task["owners"]),
+                task["priority"], task["next_action"],
                 task["risk_reason"], task["status"], task["start_date"],
                 task["end_date"], today, today,
             ),
@@ -3204,7 +3312,7 @@ def export_data():
     db = get_db()
     task_rows = [dict(row) for row in db.execute(
         "SELECT t.id,t.line_id,t.name,t.content,t.goal,t.next_action,t.risk_reason,"
-        "t.priority,t.owner,t.status,t.start_date,t.end_date,t.status_since,t.updated_at "
+        "t.priority,t.owner,t.owners,t.status,t.start_date,t.end_date,t.status_since,t.updated_at "
         "FROM tasks t JOIN lines l ON l.id=t.line_id "
         "WHERE t.workspace_id=? AND l.workspace_id=? AND t.deleted=0 AND l.deleted=0" +
         id_clause + " ORDER BY t.start_date,t.id",
@@ -3228,6 +3336,7 @@ def export_data():
         line_rows = [line for line in all_lines if line["id"] in included_ids]
     for task in task_rows:
         task["line_path"] = line_by_id[task["line_id"]]["path"]
+        task["owner"] = "、".join(task_owner_names(task))
     output = data_export_workbook(line_rows, task_rows)
     scope_name = "全部数据" if scope == "all" else "选中事务及关联线"
     return send_file(
@@ -3694,7 +3803,10 @@ def create_task():
     end_date = text_field(d, "end_date", "结束日期").strip()
     content = text_field(d, "content", "事务内容")
     goal = text_field(d, "goal", "闭环目标")
-    owner = text_field(d, "owner", "责任人").strip()
+    owners = requested_task_owners(
+        d, get_workspace_member_names(db, workspace_id)
+    )
+    owner = owners[0]
     next_action = text_field(d, "next_action", "下一步动作")
     risk_reason = text_field(d, "risk_reason", "风险原因")
     initial_comment = text_field(
@@ -3702,12 +3814,10 @@ def create_task():
     ).strip()
     if len(initial_comment) > 2000:
         raise ApiError("首条协作动态不能超过 2000 个字符")
-    for label, value in (("事务内容", content), ("责任人", owner),
+    for label, value in (("事务内容", content),
                          ("起始日期", start_date), ("结束日期", end_date)):
         if not value.strip():
             raise ApiError(f"{label}不能为空")
-    if owner not in get_workspace_member_names(db, workspace_id):
-        raise ApiError("责任人不是当前项目空间成员")
     prerequisite_ids = validate_dependencies(
         db, workspace_id, None, d.get("prerequisite_ids", [])
     )
@@ -3727,11 +3837,12 @@ def create_task():
         return jsonify({"error": "事务起始日期不能早于所属线起始日期"}), 400
     on_edit(db)
     cur = db.execute(
-        "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,priority,next_action,"
+        "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,owners,priority,next_action,"
         "risk_reason,status,start_date,end_date,status_since,updated_at) "
-        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            workspace_id, line_id, name, content, goal, owner, priority,
+            workspace_id, line_id, name, content, goal, owner,
+            encode_task_owners(owners), priority,
             next_action, risk_reason,
             status, start_date, end_date, today,
             today,
@@ -3752,13 +3863,13 @@ def create_task():
         db, workspace_id, cur.lastrowid, "created", "创建了事务"
     )
     add_notifications(
-        db, workspace_id, owner_user_ids(db, workspace_id, owner), "assigned",
+        db, workspace_id, owner_user_ids(db, workspace_id, owners), "assigned",
         f"{g.user['display_name']} 将事务「{name}」指派给你",
         cur.lastrowid, g.user["id"],
     )
     if initial_comment:
         insert_task_comment(
-            db, workspace_id, cur.lastrowid, name, owner, initial_comment
+            db, workspace_id, cur.lastrowid, name, owners, initial_comment
         )
     db.commit()
     return jsonify({"id": cur.lastrowid}), 201
@@ -3780,6 +3891,13 @@ def update_task(tid):
     ).fetchone()
     if not row:
         return jsonify({"error": "事务不存在"}), 404
+    old_owners = task_owner_names(row)
+    new_owners = old_owners
+    owners_supplied = "owners" in d or "owner" in d
+    if owners_supplied:
+        new_owners = requested_task_owners(
+            d, get_workspace_member_names(db, workspace_id), old_owners
+        )
     new_start = text_field(d, "start_date", "起始日期", row["start_date"])
     new_end = text_field(
         d, "end_date", "结束日期", row["end_date"], nullable=True
@@ -3823,11 +3941,16 @@ def update_task(tid):
     changed_labels = []
     field_labels = {
         "line_id": "所属线", "name": "事务名", "content": "事务内容",
-        "goal": "闭环目标", "owner": "责任人", "priority": "优先级",
+        "goal": "闭环目标", "priority": "优先级",
         "next_action": "下一步动作", "risk_reason": "风险原因",
         "status": "进展状态", "start_date": "起始日期", "end_date": "结束日期",
     }
-    for k in ("line_id", "name", "content", "goal", "owner", "priority",
+    if owners_supplied:
+        fields.extend(["owner=?", "owners=?"])
+        vals.extend([new_owners[0], encode_task_owners(new_owners)])
+        if new_owners != old_owners:
+            changed_labels.append("责任人")
+    for k in ("line_id", "name", "content", "goal", "priority",
               "next_action", "risk_reason", "status", "start_date", "end_date"):
         if k not in d:
             continue
@@ -3837,23 +3960,19 @@ def update_task(tid):
             d[k] = text_field(
                 d, k,
                 {"name": "事务名", "content": "事务内容", "goal": "闭环目标",
-                 "owner": "责任人", "priority": "优先级", "next_action": "下一步动作",
+                 "priority": "优先级", "next_action": "下一步动作",
                  "risk_reason": "风险原因", "status": "进展状态",
                  "start_date": "起始日期", "end_date": "结束日期"}[k],
                 nullable=(k == "end_date"),
             )
         if k == "name" and not (d[k] or "").strip():
             return jsonify({"error": "事务名不能为空"}), 400
-        if k in ("content", "owner", "status", "start_date", "end_date") and \
+        if k in ("content", "status", "start_date", "end_date") and \
                 not (d[k] or "").strip():
-            label = {"content": "事务内容", "owner": "责任人",
+            label = {"content": "事务内容",
                      "status": "进展状态", "start_date": "起始日期",
                      "end_date": "结束日期"}[k]
             raise ApiError(f"{label}不能为空")
-        if k == "owner":
-            d[k] = d[k].strip()
-            if d[k] not in get_workspace_member_names(db, workspace_id):
-                raise ApiError("责任人不是当前项目空间成员")
         if k == "name":
             d[k] = d[k].strip()
         if k == "priority" and d[k] not in PRIORITY_ENUM:
@@ -3930,10 +4049,13 @@ def update_task(tid):
                 db, workspace_id, tid, "updated", summary,
                 {"fields": changed_labels},
             )
-        new_owner = d.get("owner", row["owner"])
-        if new_owner != row["owner"]:
+        if new_owners != old_owners:
+            newly_assigned = [
+                owner for owner in new_owners if owner not in old_owners
+            ]
             add_notifications(
-                db, workspace_id, owner_user_ids(db, workspace_id, new_owner),
+                db, workspace_id,
+                owner_user_ids(db, workspace_id, newly_assigned),
                 "assigned",
                 f"{g.user['display_name']} 将事务「{d.get('name', row['name'])}」指派给你",
                 tid, g.user["id"],
@@ -3942,7 +4064,7 @@ def update_task(tid):
         if new_status != row["status"]:
             add_notifications(
                 db, workspace_id,
-                task_audience_user_ids(db, workspace_id, tid, new_owner),
+                task_audience_user_ids(db, workspace_id, tid, new_owners),
                 "status_changed",
                 f"{g.user['display_name']} 将事务「{d.get('name', row['name'])}」"
                 f"从「{row['status']}」改为「{new_status}」",
@@ -4097,12 +4219,13 @@ def import_tasks():
     imported_ids = []
     for task in rows:
         cur = db.execute(
-            "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,priority,"
+            "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,owners,priority,"
             "next_action,risk_reason,status,start_date,end_date,status_since,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 workspace_id, task["line_id"], task["name"], task["content"],
-                task["goal"], task["owner"], task["priority"], task["next_action"],
+                task["goal"], task["owner"], encode_task_owners(task["owners"]),
+                task["priority"], task["next_action"],
                 task["risk_reason"], task["status"], task["start_date"],
                 task["end_date"], today, today,
             ),
@@ -4147,7 +4270,7 @@ def export_tasks():
         "SELECT t.id,l.name AS line_name,"
         "CASE WHEN l.parent_id IS NULL THEN '主线' ELSE '支线' END AS line_type,"
         "p.name AS parent_name,t.name,t.content,t.goal,t.next_action,"
-        "t.risk_reason,t.priority,t.owner,t.status,t.start_date,t.end_date,"
+        "t.risk_reason,t.priority,t.owner,t.owners,t.status,t.start_date,t.end_date,"
         "t.status_since,t.updated_at FROM tasks t "
         "JOIN lines l ON l.id=t.line_id "
         "LEFT JOIN lines p ON p.id=l.parent_id "
@@ -4158,6 +4281,9 @@ def export_tasks():
     ).fetchall()]
     if scope == "selected" and len(rows) != selected_count:
         return jsonify({"error": "部分事务不存在或已删除"}), 404
+
+    for task in rows:
+        task["owner"] = "、".join(task_owner_names(task))
 
     output = task_export_workbook(rows)
     scope_name = "全部事务" if scope == "all" else "选中事务"
@@ -4183,7 +4309,7 @@ def bulk_tasks():
     workspace_id = current_workspace_id()
     marks = ",".join("?" * len(ids))
     existing = db.execute(
-        f"SELECT id,name,owner,status,line_id,priority FROM tasks "
+        f"SELECT id,name,owner,owners,status,line_id,priority FROM tasks "
         f"WHERE workspace_id=? AND deleted=0 "
         f"AND id IN ({marks})", [workspace_id] + ids
     ).fetchall()
@@ -4205,7 +4331,7 @@ def bulk_tasks():
     patch = d.get("patch")
     if not isinstance(patch, dict) or not patch:
         return jsonify({"error": "patch 不能为空"}), 400
-    allowed = {"line_id", "owner", "priority", "status"}
+    allowed = {"line_id", "owner", "owners", "priority", "status"}
     unknown = set(patch) - allowed
     if unknown:
         return jsonify({"error": "批量更新不支持该字段"}), 400
@@ -4219,14 +4345,18 @@ def bulk_tasks():
                 db, workspace_id,
                 current_dependency_ids(db, workspace_id, task_id),
             )
-    if "owner" in patch:
-        if not isinstance(patch["owner"], str):
-            return jsonify({"error": "责任人必须是字符串"}), 400
-        patch["owner"] = patch["owner"].strip()
-        if not patch["owner"]:
-            return jsonify({"error": "责任人不能为空"}), 400
-        if patch["owner"] not in get_workspace_member_names(db, workspace_id):
-            return jsonify({"error": "责任人不是当前项目空间成员"}), 400
+    owners_patch = None
+    if "owners" in patch or "owner" in patch:
+        try:
+            owners_patch = requested_task_owners(
+                patch, get_workspace_member_names(db, workspace_id)
+            )
+        except ApiError as exc:
+            return jsonify({"error": str(exc)}), exc.status
+        patch.pop("owners", None)
+        patch.pop("owner", None)
+        patch["owner"] = owners_patch[0]
+        patch["owners"] = encode_task_owners(owners_patch)
     if "line_id" in patch:
         required_id(patch["line_id"], "line_id")
         ln = db.execute(
@@ -4263,20 +4393,27 @@ def bulk_tasks():
         "priority": "优先级", "status": "进展状态",
     }
     for task in existing:
-        changed = [
+        changed = []
+        if owners_patch is not None and owners_patch != task_owner_names(task):
+            changed.append("责任人")
+        changed.extend(
             bulk_labels[key] for key, value in patch.items()
-            if task[key] != value
-        ]
+            if key not in {"owner", "owners"} and task[key] != value
+        )
         if not changed:
             continue
         add_task_activity(
             db, workspace_id, task["id"], "bulk_updated",
             f"批量更新了{'、'.join(changed)}", {"fields": changed},
         )
-        new_owner = patch.get("owner", task["owner"])
-        if new_owner != task["owner"]:
+        old_owners = task_owner_names(task)
+        new_owners = owners_patch if owners_patch is not None else old_owners
+        if new_owners != old_owners:
             add_notifications(
-                db, workspace_id, owner_user_ids(db, workspace_id, new_owner),
+                db, workspace_id, owner_user_ids(
+                    db, workspace_id,
+                    [owner for owner in new_owners if owner not in old_owners],
+                ),
                 "assigned",
                 f"{g.user['display_name']} 将事务「{task['name']}」指派给你",
                 task["id"], g.user["id"],
@@ -4285,7 +4422,7 @@ def bulk_tasks():
         if new_status != task["status"]:
             add_notifications(
                 db, workspace_id,
-                task_audience_user_ids(db, workspace_id, task["id"], new_owner),
+                task_audience_user_ids(db, workspace_id, task["id"], new_owners),
                 "status_changed",
                 f"{g.user['display_name']} 将事务「{task['name']}」"
                 f"从「{task['status']}」改为「{new_status}」",

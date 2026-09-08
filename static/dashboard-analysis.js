@@ -425,7 +425,7 @@ const DashboardAnalysis = (() => {
       try { projected = simulateDelay(original, context.delayTask, context.delayDays); }
       catch (error) { note(result, error.message); return; }
       const affected = projected.scene.tasks.filter(task => projected.shifts.has(task.id));
-      const owners = new Set(affected.map(task => task.owner).filter(Boolean));
+      const owners = new Set(affected.flatMap(task => taskOwners(task)));
       metricCards(result, [["受影响事务", affected.length, "包含所选起点"], ["涉及责任人", owners.size],
         ["相关里程碑", projected.milestones.length],
         ["最大顺延", affected.length ? Math.max(...projected.shifts.values()) + " 天" : "0 天"]]);
@@ -692,7 +692,7 @@ const DashboardAnalysis = (() => {
       const group = el("section", undefined, `status-${name}`);
       group.append(el("h3", `${name} · ${items.length}`), el("p", descriptions[name], "analysis-group-help"));
       for (const task of items) {
-        const entry = button(`${task.name} · ${task.owner || "未分配"} · ${task.status}`, () => openTaskModal(task));
+        const entry = button(`${task.name} · ${taskOwnerText(task, "未分配")} · ${task.status}`, () => openTaskModal(task));
         group.appendChild(entry);
         if (name === "受阻") note(group, "等待：" + prerequisiteIds(task.id).map(taskById)
           .filter(prior => prior && prior.status !== "已闭环").map(prior => prior.name).join("、"));
@@ -859,7 +859,7 @@ const DashboardAnalysis = (() => {
           dashboardSvg("circle", { cx: x(item.start_date), cy: y, r: 5, fill: color }, group);
         }
         description = delayComparison && prior ? `${isSource ? "延期起点" : "受影响事务"} · ${item.name} · 原计划 ${prior.start_date} → ${prior.end_date || "未设结束日期"} · 推演后 ${item.start_date} → ${item.end_date || "未设结束日期"}` :
-          `${item.name}${removed ? "（已移除）" : ""} · ${item.status} · ${item.owner || "未分配"} · ${item.start_date} → ${item.end_date || "未设结束日期"}`;
+          `${item.name}${removed ? "（已移除）" : ""} · ${item.status} · ${taskOwnerText(item, "未分配")} · ${item.start_date} → ${item.end_date || "未设结束日期"}`;
       }
       dashboardSvg("title", {}, group).textContent = description;
       group.setAttribute("tabindex", "0"); group.setAttribute("role", "button"); group.setAttribute("aria-label", description);

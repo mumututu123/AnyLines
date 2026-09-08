@@ -400,7 +400,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         source = body.decode("utf-8")
         self.assertIn("function personalTodoTasks()", source)
-        self.assertIn("ownerNames.has((task.owner || \"\").trim()) && !isDone(task)", source)
+        self.assertIn("taskOwners(task).some((owner) => ownerNames.has(owner))", source)
         self.assertIn("function renderMyStatusEntry()", source)
         self.assertIn("const count = todoCount + unreadCount", source)
         self.assertIn('badge.textContent = count > 99 ? "99+" : String(count)', source)
@@ -986,8 +986,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("function milestoneModalDraft(body)", source)
         self.assertIn("Number(selected.has(b.id)) - Number(selected.has(a.id))", source)
         self.assertIn("if (value && !names.includes(value)) names.push(value)", source)
-        self.assertIn("const owner = ownerInput(candidate.owner, true)", source)
-        self.assertIn('owner.className = "milestone-acceptance-owner"', source)
+        self.assertIn("const owner = ownerInput(taskOwners(candidate), true, true)", source)
+        self.assertIn('owner.classList.add("milestone-acceptance-owner")', source)
         self.assertIn('option.addEventListener("dblclick"', source)
         self.assertIn('event.target.closest?.(".milestone-acceptance-checkbox")', source)
         self.assertIn("onClosed: () => {", source)
@@ -1508,9 +1508,11 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn(
             '(draft?.endDate || initialStart)), true)', source
         )
-        self.assertIn(
-            '["起始日期", body._start], ["结束日期", body._end]', source
-        )
+        self.assertIn('["起始日期", body._start]', source)
+        self.assertIn('["结束日期", body._end]', source)
+        self.assertIn("function taskOwners(task)", source)
+        self.assertIn("function selectedOwnerNames(control)", source)
+        self.assertIn("owners: selectedOwnerNames(body._owner)", source)
         self.assertIn('$("#modal-header-tools").appendChild(del)', source)
         self.assertIn('$("#modal-mask").onclick = (event) => {', source)
         self.assertIn('event.target === event.currentTarget', source)
@@ -1536,6 +1538,69 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertEqual(status, 400, data)
         self.assertIn("责任人不能为空", data["error"])
+
+    def test_task_supports_multiple_owners(self):
+        self.add_member("multi_owner", "协作成员")
+        line_id = self.create_line()
+        payload = {
+            "line_id": line_id,
+            "name": "多人协作事务",
+            "content": "由两位成员共同负责",
+            "owners": ["系统管理员", "协作成员", "协作成员"],
+            "status": "进行中",
+            "start_date": self.today.isoformat(),
+            "end_date": (self.today + timedelta(days=2)).isoformat(),
+        }
+        status, data = self.request("POST", "/api/tasks", payload)
+        self.assertEqual(status, 201, data)
+        task_id = data["id"]
+
+        state = self.request("GET", "/api/state")[1]
+        task = next(item for item in state["tasks"] if item["id"] == task_id)
+        self.assertEqual(task["owners"], ["系统管理员", "协作成员"])
+        self.assertEqual(task["owner"], "系统管理员")
+        with sqlite3.connect(anyline.app.config["DATABASE"]) as db:
+            owner, owners = db.execute(
+                "SELECT owner,owners FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+        self.assertEqual(owner, "系统管理员")
+        self.assertEqual(json.loads(owners), ["系统管理员", "协作成员"])
+
+        self.login("multi_owner", "member123")
+        notifications = self.request("GET", "/api/notifications")[1]["notifications"]
+        self.assertTrue(any(item["kind"] == "assigned" for item in notifications))
+
+        self.login("admin", "admin123")
+        status, data = self.request(
+            "PATCH", f"/api/tasks/{task_id}", {"owners": ["协作成员"]}
+        )
+        self.assertEqual(status, 200, data)
+        task = next(
+            item for item in self.request("GET", "/api/state")[1]["tasks"]
+            if item["id"] == task_id
+        )
+        self.assertEqual(task["owners"], ["协作成员"])
+        self.assertEqual(task["owner"], "协作成员")
+
+        status, data = self.request(
+            "PATCH", "/api/tasks/bulk", {
+                "ids": [task_id],
+                "patch": {"owners": ["协作成员", "系统管理员"]},
+            },
+        )
+        self.assertEqual(status, 200, data)
+        task = next(
+            item for item in self.request("GET", "/api/state")[1]["tasks"]
+            if item["id"] == task_id
+        )
+        self.assertEqual(task["owners"], ["协作成员", "系统管理员"])
+
+        for invalid in ([], "协作成员", ["非空间成员"]):
+            with self.subTest(owners=invalid):
+                status, data = self.request(
+                    "PATCH", f"/api/tasks/{task_id}", {"owners": invalid}
+                )
+                self.assertEqual(status, 400, data)
 
     def test_table_line_dropdown_only_uses_main_and_branch_lines(self):
         main_id = self.create_line("产品主线")
@@ -1739,7 +1804,9 @@ class AnyLineHttpTests(unittest.TestCase):
         main_id = self.create_line("产品主线")
         branch_id = self.create_line("交付支线", parent_id=main_id)
         first = self.create_task(main_id, "=1+1")
-        second = self.create_task(branch_id, "交付事务", owner="李四")
+        second = self.create_task(
+            branch_id, "交付事务", owners=["系统管理员", "李四"]
+        )
 
         status, content = self.request(
             "POST", "/api/tasks/export", {"scope": "all", "ids": None}
@@ -1769,6 +1836,7 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(sheet.max_row, 2)
         self.assertEqual(sheet["A2"].value, second)
         self.assertEqual(sheet["E2"].value, "交付事务")
+        self.assertEqual(sheet["K2"].value, "系统管理员、李四")
 
         for payload, expected in (
             ({"scope": "selected", "ids": []}, 400),
@@ -2022,7 +2090,7 @@ class AnyLineHttpTests(unittest.TestCase):
         sheet.append([column[0] for column in anyline.TASK_IMPORT_COLUMNS])
         sheet.append([
             main_id, "产品主线", "接口联调", "完成接口联调", "联调通过", "修复问题", "",
-            "高", "张三", "进行中", date(2026, 8, 20), date(2026, 9, 5),
+            "高", "张三、李四", "进行中", date(2026, 8, 20), date(2026, 9, 5),
         ])
         sheet.append([
             None, "产品主线 / 交付支线", "准备验收", "整理验收材料", "材料齐备", "",
@@ -2035,6 +2103,8 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(data["count"], 2)
         _, state = self.request("GET", "/api/state")
         self.assertEqual(len(state["tasks"]), 2)
+        imported = next(task for task in state["tasks"] if task["name"] == "接口联调")
+        self.assertEqual(imported["owners"], ["张三", "李四"])
 
         status, data = self.upload_xlsx(b"not-an-excel-workbook")
         self.assertEqual(status, 400, data)
@@ -2330,8 +2400,8 @@ class DatabaseMigrationTests(unittest.TestCase):
                 INSERT INTO lines(id,name,parent_id,fork_date,deleted)
                 VALUES(1,'历史主线',NULL,'2026-01-01',0);
                 INSERT INTO tasks(
-                    id,line_id,name,status,start_date,status_since,deleted
-                ) VALUES(1,1,'历史事务','未启动','2026-01-01','2026-01-01',0);
+                    id,line_id,name,owner,status,start_date,status_since,deleted
+                ) VALUES(1,1,'历史事务','历史责任人','未启动','2026-01-01','2026-01-01',0);
                 INSERT INTO meta(key,value) VALUES('owners','["历史责任人"]');
                 """
             )
@@ -2358,6 +2428,9 @@ class DatabaseMigrationTests(unittest.TestCase):
                 "SELECT value FROM workspace_meta WHERE workspace_id=? AND key='owners'",
                 (workspace_id,),
             ).fetchone()[0]
+            task_owners = db.execute(
+                "SELECT owners FROM tasks WHERE id=1"
+            ).fetchone()[0]
             db.close()
             self.assertTrue(
                 {"description", "color", "deleted_at", "updated_at", "workspace_id"}
@@ -2366,7 +2439,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertTrue(
                 {
                     "priority", "next_action", "risk_reason", "deleted_at",
-                    "updated_at", "workspace_id",
+                    "updated_at", "workspace_id", "owners",
                 }
                 .issubset(task_columns)
             )
@@ -2382,6 +2455,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertEqual(task_workspace_id, workspace_id)
             self.assertEqual(admin_count, 1)
             self.assertEqual(json.loads(migrated_owners), ["历史责任人"])
+            self.assertEqual(json.loads(task_owners), ["历史责任人"])
 
 
 if __name__ == "__main__":

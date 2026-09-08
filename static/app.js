@@ -438,6 +438,22 @@ function decorateStatusSelect(select) {
 function ownerOptions() {
   return [...new Set(state.owners)].sort((a, b) => a.localeCompare(b, "zh-CN"));
 }
+function taskOwners(task) {
+  const values = Array.isArray(task?.owners) ? task.owners : [];
+  const owners = values.map((name) => String(name).trim()).filter(Boolean);
+  if (!owners.length && task?.owner) owners.push(String(task.owner).trim());
+  return [...new Set(owners)];
+}
+function taskOwnerText(task, empty = "无主") {
+  return taskOwners(task).join("、") || empty;
+}
+function selectedOwnerNames(control) {
+  if (typeof control?._selectedOwnerNames === "function") {
+    return control._selectedOwnerNames();
+  }
+  return [...control.querySelectorAll('input[type="checkbox"]:checked')]
+    .map((checkbox) => checkbox.value);
+}
 function taskHealth(t) {
   const h = {
     overdue: false, soon: false, stale: false, risk: RISK_STATUSES.has(t.status),
@@ -459,7 +475,7 @@ function taskHealth(t) {
 function searchableText(t) {
   const ln = lineById(t.line_id);
   return [
-    ln && ln.name, t.name, t.content, t.goal, t.owner, t.status,
+    ln && ln.name, t.name, t.content, t.goal, ...taskOwners(t), t.status,
     t.priority, t.next_action, t.risk_reason,
   ].filter(Boolean).join(" ").toLowerCase();
 }
@@ -469,7 +485,7 @@ function taskMatchesFilters(t) {
   const h = taskHealth(t);
   if (q && !searchableText(t).includes(q)) return false;
   if (f.line && String(t.line_id) !== f.line) return false;
-  if (f.owner && t.owner !== f.owner) return false;
+  if (f.owner && !taskOwners(t).includes(f.owner)) return false;
   if (f.status && t.status !== f.status) return false;
   if (f.priority && t.priority !== f.priority) return false;
   if (f.due === "overdue" && !h.overdue) return false;
@@ -623,7 +639,7 @@ function personalTodoTasks() {
   const ownerNames = currentAccountOwnerNames();
   if (!ownerNames.size) return [];
   return state.tasks.filter((task) =>
-    ownerNames.has((task.owner || "").trim()) && !isDone(task)
+    taskOwners(task).some((owner) => ownerNames.has(owner)) && !isDone(task)
   );
 }
 
@@ -1051,7 +1067,7 @@ function dashboardCompactTaskButton(task) {
   const name = document.createElement("strong");
   name.textContent = task.name;
   const meta = document.createElement("small");
-  meta.textContent = `${lineById(task.line_id)?.name || "未分组"} · ${task.owner || "无主"}`;
+  meta.textContent = `${lineById(task.line_id)?.name || "未分组"} · ${taskOwnerText(task)}`;
   main.append(name, meta);
   const date = document.createElement("time");
   date.textContent = task.status === "已闭环" ? task.status_since : task.end_date;
@@ -1338,7 +1354,7 @@ function renderDashboardBlockers(dependency) {
     const name = document.createElement("strong");
     name.textContent = item.task.name;
     const meta = document.createElement("span");
-    meta.textContent = `${item.task.owner || "无主"} · ${item.task.status}${item.external ? " · 筛选范围外前置" : ""}`;
+    meta.textContent = `${taskOwnerText(item.task)} · ${item.task.status}${item.external ? " · 筛选范围外前置" : ""}`;
     main.append(name, meta);
     main.onclick = () => openTaskListModal(`${item.task.name} 的影响链`, [item.task, ...item.affected]);
     const impact = document.createElement("button");
@@ -1475,7 +1491,9 @@ function renderDashboardOwnerLoad(tasks, dependency) {
   const container = $("#dashboard-owner-load");
   container.innerHTML = "";
   const active = tasks.filter((task) => !isDone(task));
-  const owners = [...new Set(active.map((task) => task.owner || "无主"))]
+  const owners = [...new Set(active.flatMap((task) =>
+    taskOwners(task).length ? taskOwners(task) : ["无主"]
+  ))]
     .sort((a, b) => a.localeCompare(b, "zh-CN"));
   if (!owners.length) {
     dashboardEmpty(container, "当前范围没有未闭环事务");
@@ -1488,7 +1506,8 @@ function renderDashboardOwnerLoad(tasks, dependency) {
     ["其他", "normal", () => true],
   ];
   const rows = owners.map((owner) => {
-    const ownerTasks = active.filter((task) => (task.owner || "无主") === owner);
+    const ownerTasks = active.filter((task) => owner === "无主" ?
+      taskOwners(task).length === 0 : taskOwners(task).includes(owner));
     const assigned = new Set();
     const buckets = categories.map(([label, key, matches]) => {
       const bucketTasks = ownerTasks.filter((task) => !assigned.has(task.id) && matches(task));
@@ -1616,7 +1635,7 @@ function openDashboardRiskLens(container, svg, node, viewWidth, viewHeight, trig
     const name = document.createElement("strong");
     name.textContent = task.name;
     const meta = document.createElement("span");
-    meta.textContent = `${task.priority}优先级 · ${task.owner || "无主"} · ${task.end_date || "无结束日期"}`;
+    meta.textContent = `${task.priority}优先级 · ${taskOwnerText(task)} · ${task.end_date || "无结束日期"}`;
     button.append(name, meta);
     button.onclick = () => {
       closeDashboardRiskLens();
@@ -1961,7 +1980,7 @@ function renderDashboardExceptions(tasks, dependency) {
       alertCell.appendChild(badge);
     }
     const ownerCell = document.createElement("td");
-    ownerCell.textContent = rowData.task.owner || "无主";
+    ownerCell.textContent = taskOwnerText(rowData.task);
     const statusCell = document.createElement("td");
     statusCell.textContent = rowData.task.status;
     statusCell.style.color = statusColor(rowData.task.status);
@@ -2028,7 +2047,7 @@ function renderTaskListTable(container, tasks, emptyText = "暂无符合条件�
       const values = [
         task.name,
         lineById(task.line_id)?.name || "—",
-        task.owner || "无主",
+        taskOwnerText(task),
         task.status,
         task.end_date || "—",
         health.labels.map(([label]) => label).join("、") || "—",
@@ -2515,7 +2534,8 @@ function renderClusterFocusLens({ key, tasks, milestones = [], line, anchorX, an
     status.className = "cluster-focus-status";
     status.textContent = task.status;
     const owner = document.createElement("span");
-    owner.textContent = task.owner ? `@${task.owner}` : "未指定责任人";
+    owner.textContent = taskOwners(task).length ?
+      taskOwners(task).map((name) => `@${name}`).join(" ") : "未指定责任人";
     meta.append(status, owner);
 
     const dates = document.createElement("div");
@@ -3230,7 +3250,7 @@ function renderCanvas() {
     });
     const title = svgEl("title", {}, node);
     title.textContent =
-      `${t.name}\n状态：${t.status}\n责任人：${t.owner || "—"}\n` +
+      `${t.name}\n状态：${t.status}\n责任人：${taskOwnerText(t, "—")}\n` +
       `${t.start_date} ~ ${t.end_date || "…"}\n内容：${t.content || "—"}\n` +
       `闭环目标：${t.goal || "—"}\n下一步：${t.next_action || "—"}\n风险原因：${t.risk_reason || "—"}`;
 
@@ -3240,7 +3260,9 @@ function renderCanvas() {
     if (density === "detail" && state.show.dur) {
       parts2.push(fmtDays(daysBetween(t.status_since, state.today)));
     }
-    if (density === "detail" && state.show.owner && t.owner) parts2.push("@" + t.owner);
+    if (density === "detail" && state.show.owner && taskOwners(t).length) {
+      parts2.push(taskOwners(t).map((name) => `@${name}`).join(" "));
+    }
     if (density === "detail" && state.show.date) {
       parts2.push(`${t.start_date.slice(5)}→${(t.end_date || t.start_date).slice(5)}`);
     }
@@ -3373,7 +3395,8 @@ function renderCanvas() {
       const titleLines = [
         `${anchorTask.start_date} 同天 ${itemCount} 项（单击临时聚焦）`,
         ...taskArr.map((t) =>
-          `· 事务 ${t.name}【${t.status}】${t.owner ? " @" + t.owner : ""}`),
+          `· 事务 ${t.name}【${t.status}】${taskOwners(t).length ?
+            " " + taskOwners(t).map((name) => `@${name}`).join(" ") : ""}`),
         ...msArr.map((m) => `· 里程碑 ${m.name}`),
       ];
       title.textContent = titleLines.join("\n");
@@ -3873,9 +3896,26 @@ function renderTable() {
 
     /* 责任人：配置了名单则下拉选择，否则文本输入 */
     const tdOwner = document.createElement("td");
-    const ownerEl = ownerInput(t.owner, true);
+    const ownerEl = ownerInput(taskOwners(t), true, true);
     ownerEl.disabled = archived;
-    ownerEl.onchange = () => saveTask(t.id, { owner: ownerEl.value });
+    let ownerPickerOpened = false;
+    ownerEl.addEventListener("toggle", () => {
+      if (ownerEl.open) {
+        ownerPickerOpened = true;
+        return;
+      }
+      if (!ownerPickerOpened) return;
+      ownerPickerOpened = false;
+      const owners = selectedOwnerNames(ownerEl);
+      if (!owners.length) {
+        toast("责任人不能为空");
+        ownerEl.open = true;
+        return;
+      }
+      if (owners.join("\u0000") !== taskOwners(t).join("\u0000")) {
+        saveTask(t.id, { owners });
+      }
+    });
     tdOwner.appendChild(ownerEl);
     tr.appendChild(tdOwner);
 
@@ -4100,8 +4140,9 @@ function field(parent, labelText, el, required = false) {
     mark.textContent = "*";
     mark.setAttribute("aria-hidden", "true");
     lb.appendChild(mark);
-    const requiredControl = el.matches("input, select, textarea") ?
-      el : el.querySelector("input, select, textarea");
+    const requiredControl = el.classList?.contains("owner-picker") ? el :
+      (el.matches("input, select, textarea") ?
+        el : el.querySelector("input, select, textarea"));
     if (requiredControl) {
       requiredControl.required = true;
       requiredControl.setAttribute("aria-required", "true");
@@ -4119,25 +4160,217 @@ function input(type = "text", value = "") {
   return i;
 }
 
-/* 责任人输入控件：选项直接来自当前项目空间成员。 */
-function ownerInput(value = "", required = false) {
-  const sel = document.createElement("select");
-  const empty = document.createElement("option");
-  empty.value = "";
-  empty.textContent = required ? "请选择责任人" : "（不指定）";
-  empty.disabled = required;
-  sel.appendChild(empty);
+/* 责任人多选控件：选项直接来自当前项目空间成员。 */
+function ownerInput(values = [], required = false, compact = false) {
+  const initialValues = Array.isArray(values) ? values : (values ? [values] : []);
+  const initialOwners = [...new Set(initialValues
+    .map((name) => String(name).trim()).filter(Boolean))];
+  let selectedOwners = [...initialOwners];
+  const picker = document.createElement("details");
+  picker.className = `owner-picker${compact ? " owner-picker-compact" : ""}`;
+  const summary = document.createElement("summary");
+  summary.setAttribute("role", "button");
+  summary.setAttribute("aria-label", "选择责任人，可多选");
+  const selection = document.createElement("span");
+  selection.className = "owner-picker-selection";
+  const panel = document.createElement("div");
+  panel.className = "owner-picker-options";
   const names = ownerOptions();
-  if (value && !names.includes(value)) names.push(value);
-  for (const n of names) {
-    const o = document.createElement("option");
-    o.value = n;
-    o.textContent = n === value && !state.owners.includes(n) ? `${n}（历史责任人）` : n;
-    if (n === value) o.selected = true;
-    sel.appendChild(o);
+  for (const value of initialOwners) {
+    if (value && !names.includes(value)) names.push(value);
   }
-  return sel;
+  names.sort((a, b) => {
+    const aIndex = initialOwners.indexOf(a);
+    const bIndex = initialOwners.indexOf(b);
+    if (aIndex >= 0 || bIndex >= 0) {
+      if (aIndex < 0) return 1;
+      if (bIndex < 0) return -1;
+      return aIndex - bIndex;
+    }
+    return a.localeCompare(b, "zh-CN");
+  });
+  const checkboxByName = new Map();
+  const clearDropMarkers = () => {
+    for (const chip of selection.querySelectorAll(".owner-picker-chip")) {
+      chip.classList.remove("is-dragging", "drop-before", "drop-after");
+    }
+  };
+  const moveOwner = (sourceName, targetName, after) => {
+    if (!sourceName || sourceName === targetName) return;
+    const next = selectedOwners.filter((name) => name !== sourceName);
+    const targetIndex = next.indexOf(targetName);
+    if (targetIndex < 0) return;
+    next.splice(targetIndex + (after ? 1 : 0), 0, sourceName);
+    selectedOwners = next;
+  };
+  const renderSelection = () => {
+    if (compact) {
+      summary.textContent = selectedOwners.length ? selectedOwners.join("、") :
+        (required ? "请选择责任人" : "（不指定）");
+      return;
+    }
+    selection.innerHTML = "";
+    if (!selectedOwners.length) {
+      const placeholder = document.createElement("span");
+      placeholder.className = "owner-picker-placeholder";
+      placeholder.textContent = required ? "请选择责任人" : "（不指定）";
+      selection.appendChild(placeholder);
+    }
+    for (const name of selectedOwners) {
+      const chip = document.createElement("span");
+      chip.className = "owner-picker-chip";
+      chip.dataset.owner = name;
+      chip.title = `拖拽调整“${name}”的顺序`;
+      chip.setAttribute("role", "button");
+      chip.setAttribute("aria-label", `责任人 ${name}，可拖拽排序`);
+      const chipName = document.createElement("span");
+      chipName.className = "owner-picker-chip-name";
+      chipName.textContent = name;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "owner-picker-chip-remove";
+      remove.textContent = "×";
+      remove.disabled = picker.disabled;
+      remove.setAttribute("aria-label", `删除责任人 ${name}`);
+      remove.title = `删除责任人 ${name}`;
+      remove.onclick = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (picker.disabled) return;
+        selectedOwners = selectedOwners.filter((owner) => owner !== name);
+        const checkbox = checkboxByName.get(name);
+        if (checkbox) checkbox.checked = false;
+        sync();
+      };
+      chip.addEventListener("pointerdown", (event) => {
+        if (picker.disabled || event.button !== 0 ||
+            event.target.closest(".owner-picker-chip-remove")) return;
+        picker._ownerPointerDrag = {
+          name, pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+          moved: false,
+        };
+        chip.setPointerCapture(event.pointerId);
+      });
+      chip.addEventListener("pointermove", (event) => {
+        const drag = picker._ownerPointerDrag;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        if (!drag.moved && Math.hypot(
+          event.clientX - drag.x, event.clientY - drag.y
+        ) < 5) return;
+        drag.moved = true;
+        event.preventDefault();
+        clearDropMarkers();
+        const target = document.elementFromPoint(event.clientX, event.clientY)
+          ?.closest?.(".owner-picker-chip");
+        if (!target || !selection.contains(target) || target.dataset.owner === drag.name) return;
+        const rect = target.getBoundingClientRect();
+        target.classList.add(event.clientX >= rect.left + rect.width / 2 ?
+          "drop-after" : "drop-before");
+        chip.classList.add("is-dragging");
+      });
+      const finishPointerDrag = (event, cancelled = false) => {
+        const drag = picker._ownerPointerDrag;
+        if (!drag || drag.pointerId !== event.pointerId) return;
+        if (chip.hasPointerCapture(event.pointerId)) {
+          chip.releasePointerCapture(event.pointerId);
+        }
+        let changed = false;
+        if (drag.moved && !cancelled) {
+          const target = document.elementFromPoint(event.clientX, event.clientY)
+            ?.closest?.(".owner-picker-chip");
+          if (target && selection.contains(target) && target.dataset.owner !== drag.name) {
+            const rect = target.getBoundingClientRect();
+            moveOwner(drag.name, target.dataset.owner,
+              event.clientX >= rect.left + rect.width / 2);
+            changed = true;
+          }
+        }
+        picker._ownerPointerDrag = null;
+        clearDropMarkers();
+        if (drag.moved) {
+          picker._suppressOwnerChipClick = true;
+          setTimeout(() => { picker._suppressOwnerChipClick = false; }, 0);
+        }
+        if (changed) sync();
+      };
+      chip.addEventListener("pointerup", (event) => finishPointerDrag(event));
+      chip.addEventListener("pointercancel", (event) => finishPointerDrag(event, true));
+      chip.addEventListener("click", (event) => {
+        if (!picker._suppressOwnerChipClick) return;
+        event.preventDefault();
+        event.stopPropagation();
+        picker._suppressOwnerChipClick = false;
+      });
+      chip.append(chipName, remove);
+      selection.appendChild(chip);
+    }
+  };
+  const sync = () => {
+    const selected = new Set(selectedOwners);
+    for (const [name, checkbox] of checkboxByName) {
+      checkbox.checked = selected.has(name);
+    }
+    renderSelection();
+    summary.title = selectedOwners.join("、");
+    picker.classList.toggle("is-empty", selectedOwners.length === 0);
+  };
+  for (const n of names) {
+    const option = document.createElement("label");
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = n;
+    checkbox.checked = selectedOwners.includes(n);
+    checkboxByName.set(n, checkbox);
+    checkbox.onchange = () => {
+      if (checkbox.checked) {
+        if (!selectedOwners.includes(n)) selectedOwners.push(n);
+      } else {
+        selectedOwners = selectedOwners.filter((name) => name !== n);
+      }
+      sync();
+      // 连续勾选时保持选项面板展开；仅点击控件外部或摘要时收起。
+      if (!picker.disabled) picker.open = true;
+    };
+    const label = document.createElement("span");
+    label.textContent = initialOwners.includes(n) && !state.owners.includes(n) ?
+      `${n}（历史责任人）` : n;
+    option.append(checkbox, label);
+    panel.appendChild(option);
+  }
+  if (!names.length) {
+    const empty = document.createElement("span");
+    empty.className = "owner-picker-empty";
+    empty.textContent = "当前空间暂无成员";
+    panel.appendChild(empty);
+  }
+  if (!compact) summary.appendChild(selection);
+  picker._selectedOwnerNames = () => [...selectedOwners];
+  picker.append(summary, panel);
+  Object.defineProperty(picker, "value", {
+    get: () => selectedOwners.join("、"),
+  });
+  Object.defineProperty(picker, "disabled", {
+    get: () => picker.classList.contains("is-disabled"),
+    set: (disabled) => {
+      picker.classList.toggle("is-disabled", Boolean(disabled));
+      summary.setAttribute("aria-disabled", String(Boolean(disabled)));
+      for (const checkbox of panel.querySelectorAll("input")) checkbox.disabled = disabled;
+      if (disabled) picker.open = false;
+      renderSelection();
+    },
+  });
+  picker.addEventListener("toggle", () => {
+    if (picker.disabled && picker.open) picker.open = false;
+  });
+  sync();
+  return picker;
 }
+
+document.addEventListener("click", (event) => {
+  for (const picker of document.querySelectorAll(".owner-picker[open]")) {
+    if (!picker.contains(event.target)) picker.open = false;
+  }
+});
 
 /* 新建/编辑线 */
 function openLineModal(line, parentId = null, options = {}) {
@@ -4253,11 +4486,11 @@ function createMilestoneAcceptancePicker(body, selectedIds = [], options = {}) {
     const taskMeta = document.createElement("span");
     taskMeta.textContent = line?.name || "未知线";
     text.append(taskName, taskMeta);
-    const owner = ownerInput(candidate.owner, true);
-    owner.className = "milestone-acceptance-owner";
+    const owner = ownerInput(taskOwners(candidate), true, true);
+    owner.classList.add("milestone-acceptance-owner");
     owner.disabled = true;
     owner.setAttribute("aria-label", `事务“${candidate.name}”的责任人`);
-    owner.title = `责任人：${owner.selectedOptions[0]?.textContent || "未指定责任人"}`;
+    owner.title = `责任人：${taskOwnerText(candidate, "未指定责任人")}`;
     option.setAttribute("aria-label", `${candidate.name}，${owner.title}`);
     const status = document.createElement("span");
     status.className = "dependency-status";
@@ -4267,7 +4500,7 @@ function createMilestoneAcceptancePicker(body, selectedIds = [], options = {}) {
     picker.appendChild(option);
     body._milestoneAcceptanceChecks.push({
       checkbox, option, taskId: candidate.id,
-      searchText: [candidate.name, candidate.content, candidate.owner,
+      searchText: [candidate.name, candidate.content, ...taskOwners(candidate),
         candidate.goal, candidate.next_action, candidate.status, line?.name]
         .filter(Boolean).join(" ").toLocaleLowerCase(),
     });
@@ -4463,7 +4696,7 @@ function createDependencyPicker(body, task, selectedIds = [], parent = body) {
       checkbox,
       option,
       taskId: candidate.id,
-      searchText: [candidate.name, candidate.content, candidate.owner,
+      searchText: [candidate.name, candidate.content, ...taskOwners(candidate),
         candidate.goal, candidate.next_action, candidate.status, line?.name]
         .filter(Boolean).join(" ").toLocaleLowerCase(),
     });
@@ -4540,7 +4773,7 @@ function saveTaskCreateDraft(body, fallbackLineId, openingDraftKey) {
   state.taskCreateDrafts.set(key, {
     name: body._name.value,
     content: body._content.value,
-    owner: body._owner.value,
+    owners: selectedOwnerNames(body._owner),
     status: body._status.value,
     startDate: body._start.value,
     endDate: body._end.value,
@@ -5279,8 +5512,9 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
       body._name = field(editorMain, "事务名",
         input("text", task ? task.name : (draft?.name || "")), true);
       field(editorMain, "事务内容", createTaskContentEditor(body, task, draft), true);
-      body._owner = field(editorMain, "责任人",
-        ownerInput(task ? task.owner : (draft?.owner || ""), true), true);
+      body._owner = field(editorMain, "责任人（可多选）",
+        ownerInput(task ? taskOwners(task) :
+          (draft?.owners || (draft?.owner ? [draft.owner] : [])), true), true);
       const sel = document.createElement("select");
       for (const s of state.statusEnum) {
         const o = document.createElement("option");
@@ -5381,7 +5615,7 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
         next_action: body._next.value,
         risk_reason: body._risk.value,
         priority: body._priority.value,
-        owner: body._owner.value.trim(),
+        owners: selectedOwnerNames(body._owner),
         status: body._status.value,
         start_date: body._start.value,
         end_date: body._end.value,
@@ -5399,8 +5633,8 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
       };
       const requiredFields = [
         ["事务名", body._name], ["事务内容", body._content],
-        ["责任人", body._owner], ["进展状态", body._status],
-        ["起始日期", body._start], ["结束日期", body._end],
+        ["进展状态", body._status], ["起始日期", body._start],
+        ["结束日期", body._end],
       ];
       for (const [label, element] of requiredFields) {
         if (!element.value.trim()) {
@@ -5408,6 +5642,11 @@ function openTaskModal(task, lineId = null, allowLineSelection = false, options 
           element.focus();
           return false;
         }
+      }
+      if (!payload.owners.length) {
+        toast("责任人不能为空");
+        body._owner.querySelector("summary")?.focus();
+        return false;
       }
       if (isNew) {
         const targetLineId = body._line ?

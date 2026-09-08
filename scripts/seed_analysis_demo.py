@@ -99,12 +99,13 @@ def seed(database):
         for key, item in task_defs.items():
             removed = item.get("removed")
             task_ids[key] = db.execute(
-                "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,priority,next_action,risk_reason,"
+                "INSERT INTO tasks(workspace_id,line_id,name,content,goal,owner,owners,priority,next_action,risk_reason,"
                 "status,start_date,end_date,status_since,deleted,del_batch,deleted_at,updated_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (workspace_id, line_ids[item["line"]], item["name"],
                  f"体验数据：{item['name']}。双击画布节点可查看详情和动态。",
-                 "按计划完成并满足发布验收标准", item["owner"], item["priority"],
+                 "按计划完成并满足发布验收标准", item["owner"],
+                 json.dumps([item["owner"]], ensure_ascii=False), item["priority"],
                  "查看依赖与下一次验收节点", item.get("risk", ""), item["status"],
                  day(item["start"]), day(item["end"]), day(item["since"]),
                  1 if removed is not None else 0, workspace_id if removed is not None else None,
@@ -202,7 +203,8 @@ def seed(database):
             elif key == "acceptance": status = "等待中" if offset >= -2 else "未启动"
             elif key in {"manual", "rollback", "cache"}: status = "进行中" if offset >= item["created"] + 1 else "未启动"
             return {"id": task_ids[key], "line_id": line_ids[item["line"]], "name": name,
-                    "owner": item["owner"], "priority": item["priority"], "status": status,
+                    "owner": item["owner"], "owners": [item["owner"]],
+                    "priority": item["priority"], "status": status,
                     "start_date": day(item["start"]), "end_date": day(end)}
 
         for offset in range(-14, 1):

@@ -140,12 +140,12 @@
 | 对象 | 创建必填 | 可选字段 / 默认 | PATCH 边界 |
 | --- | --- | --- | --- |
 | 线 | `name` | `description` 空、`color` 空、`parent_id` 空、`fork_date` 默认今日 | `name,description,color,fork_date,merge_date`；不支持修改父线 |
-| 事务 | `line_id,name,content,owner,status,start_date,end_date` | `priority` 默认中；`goal,next_action,risk_reason` 空；关系及文件数组默认空 | 业务字段及 `prerequisite_ids,images,attachments`；状态和日期按更新后的整体对象校验 |
+| 事务 | `line_id,name,content,owners,status,start_date,end_date` | `owners` 为至少一项的有序成员姓名数组，数组首项同步为兼容字段 `owner`；兼容旧版单值 `owner`；`priority` 默认中；`goal,next_action,risk_reason` 空；关系及文件数组默认空 | 业务字段及 `owners,prerequisite_ids,images,attachments`；`owners` 顺序原样保留；状态和日期按更新后的整体对象校验 |
 | 里程碑 | `line_id,name,target_description,milestone_date` | `acceptance_task_ids` 默认空 | `name,target_description,milestone_date,acceptance_task_ids`；不修改所属线 |
 
 事务表单及创建 API 均要求有效状态；数据库列的 `未启动` 默认值不替代 API 必填校验。依赖集合 `prerequisite_ids`、里程碑验收集合 `acceptance_task_ids` 是完整替换集合，更新时省略表示保留，传空数组表示清空。
 
-颜色使用 `#RRGGBB`，空值表示未指定；支线 `merge_date:null` 或空字符串取消反合。批量 patch 仅允许 `line_id,owner,status,priority`，不支持批量修改任意字段。
+颜色使用 `#RRGGBB`，空值表示未指定；支线 `merge_date:null` 或空字符串取消反合。批量 patch 仅允许 `line_id,owners,owner,status,priority`，不支持批量修改任意字段。
 
 ### 3.3 文件描述
 
@@ -170,7 +170,7 @@ Cookie: <登录会话>
   "line_id": 12,
   "name": "完成接口联调",
   "content": "核对请求与响应并记录异常",
-  "owner": "张三",
+  "owners": ["张三", "李四"],
   "status": "进行中",
   "start_date": "2026-09-07",
   "end_date": "2026-09-14",
