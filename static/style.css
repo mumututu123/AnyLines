@@ -1721,7 +1721,6 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   position: sticky; top: 0; width: 320px; min-width: 0;
   transition: width .18s ease;
 }
-.task-collaboration-column.is-collapsed { width: 184px; }
 .task-collaboration > summary {
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
   gap: 7px; min-height: 40px; padding: 9px 11px; list-style: none;
@@ -1806,6 +1805,40 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
 .collaboration-detail {
   margin-top: 3px; color: #24292f; font-size: 12px; line-height: 1.55;
   overflow-wrap: anywhere; white-space: pre-wrap;
+}
+
+@media (min-width: 861px) {
+  .task-collaboration-column.is-collapsed {
+    position: relative; display: flex; align-self: stretch; align-items: center;
+    justify-content: center; width: 54px; min-height: 100%;
+  }
+  .task-collaboration-column.is-collapsed::before {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
+    border-left: 1px solid #d8dee4;
+  }
+  .task-collaboration-column.is-collapsed .task-collaboration {
+    position: relative; z-index: 1; width: 42px; overflow: visible;
+    border: 0; background: transparent; box-shadow: none;
+  }
+  .task-collaboration-column.is-collapsed .task-collaboration > summary {
+    display: flex; flex-direction: column; gap: 7px; min-height: 0;
+    padding: 10px 8px; border: 1px solid #d8dee4; border-radius: 999px;
+    background: #fff; box-shadow: 0 3px 12px rgba(31, 35, 40, .09);
+  }
+  .task-collaboration-column.is-collapsed .task-collaboration > summary::before {
+    content: "‹";
+  }
+  .task-collaboration-column.is-collapsed .task-collaboration-summary-title {
+    overflow: visible; letter-spacing: 2px; text-overflow: clip;
+    white-space: normal; writing-mode: vertical-rl;
+  }
+  .task-collaboration-column.is-collapsed .task-collaboration-summary-meta {
+    width: 7px; height: 7px; overflow: hidden; padding: 0;
+    color: transparent; font-size: 0;
+  }
+  .task-collaboration-column.is-collapsed .task-collaboration-summary-meta.is-empty {
+    display: none;
+  }
 }
 
 @media (max-width: 860px) {
@@ -2089,6 +2122,12 @@ html[data-theme="dark"] :is(
 ) { color: #d2a8ff; }
 html[data-theme="dark"] .task-collaboration-summary-meta.is-empty {
   background: var(--dark-subtle); color: var(--dark-faint);
+}
+html[data-theme="dark"] .task-collaboration-column.is-collapsed::before {
+  border-color: var(--dark-border);
+}
+html[data-theme="dark"] .task-collaboration-column.is-collapsed .task-collaboration > summary {
+  border-color: var(--dark-border); background: var(--dark-surface);
 }
 
 html[data-theme="dark"] :is(.badge-overdue, .cluster-focus-health.badge-overdue,

@@ -204,6 +204,16 @@ const assert = require('node:assert/strict');
     await until(`document.querySelector('.task-collaboration-summary-meta').textContent === '暂无记录'`);
     assert.equal(await evaluate(`document.querySelector('.task-collaboration').open`), false);
     assert.equal(await evaluate(`document.querySelector('.task-collaboration-column').classList.contains('is-collapsed')`), true);
+    await delay(250);
+    assert.equal(await evaluate(`(() => {
+      const main = document.querySelector('.task-editor-main').getBoundingClientRect();
+      const summary = document.querySelector('.task-collaboration > summary').getBoundingClientRect();
+      const column = document.querySelector('.task-collaboration-column');
+      return column.getBoundingClientRect().width <= 56 &&
+        getComputedStyle(document.querySelector('.task-collaboration-summary-title')).writingMode === 'vertical-rl' &&
+        getComputedStyle(column, '::before').borderLeftWidth === '1px' &&
+        Math.abs((summary.top + summary.height / 2) - (main.top + main.height / 2)) < 2;
+    })()`), true);
     await evaluate(`window.fetch = window.taskCollaborationFetch; delete window.taskCollaborationFetch; document.querySelector('#modal-cancel').click()`);
     await until(`document.querySelector('#modal-mask').classList.contains('hidden')`);
     await evaluate(`document.querySelector('.analysis-delay-gantt [data-analysis-kind="milestone"][data-analysis-id="1"]')
@@ -290,6 +300,12 @@ const assert = require('node:assert/strict');
     assert.equal(await evaluate(`document.querySelector('#modal').classList.contains('task-editor-modal')`), true);
     assert.equal(await evaluate(`Boolean(document.querySelector('.task-collaboration-draft'))`), true);
     assert.equal(await evaluate(`document.querySelector('.task-collaboration-draft').open`), false);
+    await delay(250);
+    assert.equal(await evaluate(`document.querySelector('.task-collaboration-column').getBoundingClientRect().width <= 56`), true);
+    const taskCreationCollapsedScreenshot = await cdp('Page.captureScreenshot', { format: 'png' });
+    const taskCreationCollapsedPath = path.join(temporary, 'task-creation-collapsed.png');
+    writeFileSync(taskCreationCollapsedPath, Buffer.from(taskCreationCollapsedScreenshot.data, 'base64'));
+    console.log('Task creation collapsed screenshot: ' + taskCreationCollapsedPath);
     await evaluate(`(() => {
       document.querySelector('.task-collaboration-draft > summary').click();
       const body = document.querySelector('#modal-body');
@@ -299,6 +315,7 @@ const assert = require('node:assert/strict');
       body._initialComment.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
     assert.equal(await evaluate(`document.querySelector('.task-collaboration-summary-meta').textContent`), '1 条待发布');
+    await delay(250);
     const taskCreationScreenshot = await cdp('Page.captureScreenshot', { format: 'png' });
     const taskCreationScreenshotPath = path.join(temporary, 'task-creation-collaboration.png');
     writeFileSync(taskCreationScreenshotPath, Buffer.from(taskCreationScreenshot.data, 'base64'));
