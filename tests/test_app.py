@@ -636,6 +636,32 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertTrue(data["authenticated"])
         self.assertEqual(data["current_workspace"]["role"], "admin")
 
+    def test_session_expiry_preserves_interrupted_editor_for_relogin(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn("function captureInterruptedWork()", source)
+        self.assertIn("modalWasOpen:", source)
+        self.assertIn("activeElement: document.activeElement", source)
+        self.assertIn("function restoreInterruptedWork()", source)
+        self.assertIn("recovery.userId === state.user?.id", source)
+        self.assertIn("recovery.workspaceId === state.currentWorkspace?.id", source)
+        self.assertIn('showLoggedOut({ recoverable: true })', source)
+        self.assertIn("restoreInterruptedWork();", source)
+        self.assertIn("登录已过期，请重新登录；成功后将继续刚才的编辑。", source)
+
+    def test_more_metrics_menu_auto_dismisses(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn('summaryMore.addEventListener("mouseleave", closeSummaryMore)', source)
+        self.assertIn('summaryMore.addEventListener("focusout"', source)
+        self.assertIn('document.addEventListener("pointerdown"', source)
+        self.assertIn('if (event.key !== "Escape") return', source)
+        self.assertIn('if ($("#summary-more").contains(btn))', source)
+
     def test_workspace_isolation_and_member_permissions(self):
         default_line = self.create_line("默认空间主线")
         status, created = self.request(

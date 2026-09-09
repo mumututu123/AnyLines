@@ -55,6 +55,7 @@ const MAX_TASK_IMPORT_BYTES = 5 * 1024 * 1024;
 const PREFS_KEY = "anyline.prefs";
 const THEME_KEY = "anyline.theme";
 const auditView = { page: 1, total: 0, pageSize: 25, request: 0, previousView: "canvas", filters: {} };
+let reauthRecovery = null;
 
 function storedTheme() {
   try {
@@ -202,14 +203,54 @@ async function api(url, method = "GET", body = null) {
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401 && url !== "/api/auth/login") showLoggedOut();
+    if (res.status === 401 && url !== "/api/auth/login") {
+      showLoggedOut({ recoverable: true });
+    }
     toast(data.error || `请求失败 (${res.status})`);
     throw new Error(data.error || res.status);
   }
   return data;
 }
 
-function showLoggedOut() {
+function captureInterruptedWork() {
+  if (reauthRecovery || !document.body.classList.contains("authenticated")) return;
+  reauthRecovery = {
+    userId: state.user?.id,
+    username: state.user?.username || "",
+    workspaceId: state.currentWorkspace?.id,
+    view: state.view,
+    modalWasOpen: !$("#modal-mask").classList.contains("hidden"),
+    activeElement: document.activeElement,
+    canvasScrollLeft: $("#canvas-wrap").scrollLeft,
+    canvasScrollTop: $("#canvas-wrap").scrollTop,
+  };
+}
+
+function restoreInterruptedWork() {
+  const recovery = reauthRecovery;
+  reauthRecovery = null;
+  if (!recovery) return;
+  const sameContext = recovery.userId === state.user?.id &&
+    recovery.workspaceId === state.currentWorkspace?.id;
+  if (!sameContext) {
+    state.taskCreateDrafts.clear();
+    $("#modal-mask").classList.add("hidden");
+    toast("登录账号或项目空间已变化，未恢复之前的编辑界面");
+    return;
+  }
+  switchView(recovery.view);
+  requestAnimationFrame(() => {
+    $("#canvas-wrap").scrollLeft = recovery.canvasScrollLeft;
+    $("#canvas-wrap").scrollTop = recovery.canvasScrollTop;
+    if (recovery.modalWasOpen) $("#modal-mask").classList.remove("hidden");
+    if (recovery.activeElement?.isConnected) recovery.activeElement.focus();
+    toast("已恢复登录前的工作界面");
+  });
+}
+
+function showLoggedOut({ recoverable = false } = {}) {
+  if (recoverable) captureInterruptedWork();
+  else reauthRecovery = null;
   DashboardAnalysis.reset();
   if (state.view === "audit") switchView(auditView.previousView);
   clearAuditView();
@@ -222,9 +263,12 @@ function showLoggedOut() {
   state.user = null;
   state.workspaces = [];
   state.currentWorkspace = null;
-  state.taskCreateDrafts.clear();
+  if (!reauthRecovery) state.taskCreateDrafts.clear();
   $("#modal-mask").classList.add("hidden");
   $("#login-password").value = "";
+  if (reauthRecovery?.username) $("#login-username").value = reauthRecovery.username;
+  $("#login-error").textContent = reauthRecovery ?
+    "登录已过期，请重新登录；成功后将继续刚才的编辑。" : "";
   $("#login-username").focus();
 }
 
@@ -6052,6 +6096,7 @@ $("#login-form").onsubmit = async (event) => {
     });
     applySession(data);
     await reload();
+    restoreInterruptedWork();
   } catch (loginError) {
     error.textContent = loginError.message;
   } finally {
@@ -6631,9 +6676,26 @@ for (const btn of document.querySelectorAll(".summary-card")) {
   btn.onclick = () => {
     state.quickFilter = state.quickFilter === btn.dataset.quick ? "" : btn.dataset.quick;
     state.selectedTaskIds.clear();
+    if ($("#summary-more").contains(btn)) $("#summary-more").open = false;
     render();
   };
 }
+
+const summaryMore = $("#summary-more");
+const closeSummaryMore = () => { summaryMore.open = false; };
+summaryMore.addEventListener("mouseleave", closeSummaryMore);
+summaryMore.addEventListener("focusout", (event) => {
+  if (!summaryMore.contains(event.relatedTarget)) closeSummaryMore();
+});
+document.addEventListener("pointerdown", (event) => {
+  if (summaryMore.open && !summaryMore.contains(event.target)) closeSummaryMore();
+});
+summaryMore.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  closeSummaryMore();
+  summaryMore.querySelector("summary").focus();
+});
 
 // 记录当前右键上下文所定位的事务节点；仅在右键事务节点时非空。
 let canvasContextTaskId = null;
@@ -6790,7 +6852,7 @@ async function downloadDataImportTemplate(button) {
     const response = await fetch("/api/data/import-template");
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      if (response.status === 401) showLoggedOut();
+      if (response.status === 401) showLoggedOut({ recoverable: true });
       throw new Error(data.error || "模板下载失败");
     }
     await downloadResponse(response, "AnyLine-数据导入模板.xlsx");
@@ -6916,7 +6978,7 @@ async function importDataFromExcel(file, button, inputElement) {
     const response = await fetch("/api/data/import", { method: "POST", body: formData });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      if (response.status === 401) showLoggedOut();
+      if (response.status === 401) showLoggedOut({ recoverable: true });
       if (data.row_errors?.length) showImportErrors(data, "数据");
       else toast(data.error || "导入失败");
       return;
@@ -6945,7 +7007,7 @@ async function exportData(scope, ids, button) {
     });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
-      if (response.status === 401) showLoggedOut();
+      if (response.status === 401) showLoggedOut({ recoverable: true });
       throw new Error(data.error || "导出失败");
     }
     await downloadResponse(
