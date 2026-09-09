@@ -1403,6 +1403,67 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   color: #57606a; font-size: 18px; line-height: 1; cursor: pointer;
 }
 
+/* ---------------- in-page quick-start tour ---------------- */
+#quick-start-tour {
+  position: fixed; inset: 0; z-index: 140; pointer-events: none;
+}
+.quick-start-shade {
+  position: fixed; z-index: 0; background: rgba(31, 35, 40, .7);
+  pointer-events: auto; transition: inset .18s ease, width .18s ease, height .18s ease;
+}
+.quick-start-target {
+  outline: 3px solid #54aeff !important; outline-offset: 4px;
+  border-radius: 6px; scroll-margin: 18px;
+}
+#quick-start-popover {
+  position: fixed; z-index: 2; width: min(360px, calc(100vw - 24px));
+  padding: 17px 18px; border: 1px solid #b6d7fa; border-radius: 10px;
+  background: #fff; color: #24292f; box-shadow: 0 12px 32px rgba(31, 35, 40, .28);
+  pointer-events: auto;
+}
+#quick-start-popover:focus { outline: none; }
+.quick-start-popover-header {
+  display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;
+}
+#quick-start-progress { color: #0969da; font-size: 11px; font-weight: 700; }
+#quick-start-close {
+  width: 28px; height: 28px; border: 0; border-radius: 50%; background: transparent;
+  color: #57606a; font-size: 20px; line-height: 1; cursor: pointer;
+}
+#quick-start-close:hover, #quick-start-close:focus-visible {
+  outline: none; background: #f6f8fa; color: #0969da;
+}
+#quick-start-title { margin-bottom: 8px; font-size: 18px; line-height: 1.35; }
+#quick-start-description { color: #57606a; font-size: 13px; line-height: 1.6; }
+#quick-start-points { display: grid; gap: 7px; margin: 13px 0; padding-left: 19px; }
+#quick-start-points li { padding-left: 2px; font-size: 12px; line-height: 1.55; }
+.quick-start-tip {
+  padding: 8px 10px; border-radius: 6px; background: #f6f8fa;
+  color: #6e7781; font-size: 11px; line-height: 1.5;
+}
+#quick-start-dots {
+  display: flex; align-items: center; justify-content: center; gap: 6px; margin: 14px 0 12px;
+}
+#quick-start-dots button {
+  width: 7px; height: 7px; padding: 0; border: 0; border-radius: 50%;
+  background: #afb8c1; cursor: pointer; transition: width .15s ease, background-color .15s ease;
+}
+#quick-start-dots button.active { width: 20px; border-radius: 999px; background: #0969da; }
+#quick-start-dots button:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
+.quick-start-controls {
+  display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px;
+}
+.quick-start-controls button {
+  padding: 6px 11px; border: 1px solid #d0d7de; border-radius: 6px;
+  background: #f6f8fa; color: #24292f; font: inherit; font-size: 12px; cursor: pointer;
+}
+.quick-start-controls button:hover:not(:disabled) { background: #eaeef2; }
+.quick-start-controls button:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
+.quick-start-controls button:disabled { opacity: .4; cursor: not-allowed; }
+#quick-start-exit { border-color: transparent; background: transparent; color: #57606a; }
+body.quick-start-active #modal-mask,
+body.quick-start-active #canvas-context-menu { z-index: 180; }
+
 /* ---------------- modal & toast ---------------- */
 #modal-mask {
   position: fixed; inset: 0; background: rgba(31,35,40,.45);
@@ -1962,6 +2023,8 @@ button.primary { background: #0969da !important; color: #fff; border-color: #096
   .dashboard-exception-heading { align-items: flex-start; }
   .dashboard-exception-heading > div { align-items: flex-start; flex-direction: column; gap: 2px; }
   #modal.task-list-modal { padding: 16px; width: calc(100vw - 20px); }
+  #quick-start-popover { padding: 15px; }
+  .quick-start-controls { grid-template-columns: auto 1fr auto auto; }
   #image-lightbox {
     grid-template-columns: 38px minmax(0, 1fr) 38px; gap: 6px;
     padding: 52px 8px 18px;
@@ -2075,6 +2138,22 @@ html[data-theme="dark"] :is(
   #context-merge-line
 ) { border-color: var(--dark-border); }
 html[data-theme="dark"] .workspace-current-indicator { color: #3fb950; }
+
+html[data-theme="dark"] #quick-start-popover {
+  border-color: #1f6feb; background: var(--dark-raised); color: var(--dark-text);
+}
+html[data-theme="dark"] #quick-start-description { color: var(--dark-muted); }
+html[data-theme="dark"] .quick-start-tip {
+  background: var(--dark-subtle); color: var(--dark-muted);
+}
+html[data-theme="dark"] .quick-start-controls button {
+  border-color: var(--dark-border); background: var(--dark-subtle); color: var(--dark-text);
+}
+html[data-theme="dark"] .quick-start-controls button:hover:not(:disabled),
+html[data-theme="dark"] #quick-start-close:hover,
+html[data-theme="dark"] #quick-start-close:focus-visible { background: var(--dark-hover); }
+html[data-theme="dark"] #quick-start-exit,
+html[data-theme="dark"] #quick-start-close { color: var(--dark-muted); }
 
 html[data-theme="dark"] .filter-chip {
   background: #13233a; color: var(--dark-accent);

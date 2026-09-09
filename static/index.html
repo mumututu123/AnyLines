@@ -103,6 +103,7 @@
         </div>
         <span id="current-username"></span>
       </div>
+      <button id="btn-quick-start" type="button" role="menuitem">快速入门</button>
       <button id="btn-workspaces" class="admin-only" type="button" role="menuitem">项目管理</button>
       <button id="btn-members" class="admin-only" type="button" role="menuitem">成员管理</button>
       <button id="btn-statuses" type="button" role="menuitem">状态设置</button>
@@ -462,6 +463,32 @@
 <div id="cell-preview" class="hidden" role="dialog" aria-label="单元格完整内容">
   <button id="cell-preview-close" type="button" aria-label="关闭">×</button>
   <div id="cell-preview-content"></div>
+</div>
+
+<!-- 页面内快速入门引导 -->
+<div id="quick-start-tour" class="hidden" aria-hidden="true">
+  <div class="quick-start-shade" data-side="top"></div>
+  <div class="quick-start-shade" data-side="right"></div>
+  <div class="quick-start-shade" data-side="bottom"></div>
+  <div class="quick-start-shade" data-side="left"></div>
+  <section id="quick-start-popover" role="dialog" aria-labelledby="quick-start-title"
+           aria-describedby="quick-start-description" tabindex="-1">
+    <header class="quick-start-popover-header">
+      <span id="quick-start-progress"></span>
+      <button id="quick-start-close" type="button" aria-label="退出快速入门">×</button>
+    </header>
+    <h2 id="quick-start-title"></h2>
+    <p id="quick-start-description"></p>
+    <ul id="quick-start-points"></ul>
+    <p class="quick-start-tip">引导会自动切换到对应板块，当前步骤结束前不会离开教程。</p>
+    <div id="quick-start-dots" aria-label="快速入门步骤"></div>
+    <footer class="quick-start-controls">
+      <button id="quick-start-exit" type="button">退出引导</button>
+      <span></span>
+      <button id="quick-start-prev" type="button">上一步</button>
+      <button id="quick-start-next" class="primary" type="button">下一步</button>
+    </footer>
+  </section>
 </div>
 
 <!-- 通用弹窗 -->

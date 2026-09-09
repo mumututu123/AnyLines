@@ -249,6 +249,9 @@ function restoreInterruptedWork() {
 }
 
 function showLoggedOut({ recoverable = false } = {}) {
+  if (typeof quickStartTour !== "undefined" && quickStartTour.active) {
+    endQuickStartTour({ restoreFocus: false });
+  }
   if (recoverable) captureInterruptedWork();
   else reauthRecovery = null;
   DashboardAnalysis.reset();
@@ -4143,6 +4146,13 @@ function openModal(title, bodyBuilder, onOk, options = {}) {
     const onClosed = mask._onClosed;
     mask._onClosed = null;
     if (onClosed) onClosed(reason);
+    if (typeof quickStartTour !== "undefined" && quickStartTour.active) {
+      requestAnimationFrame(() => {
+        if (quickStartTour.active && mask.classList.contains("hidden")) {
+          renderQuickStartStep();
+        }
+      });
+    }
   };
   $("#modal-cancel").onclick = () => {
     if (options.onCancel) options.onCancel();
@@ -6082,6 +6092,280 @@ function openPasswordModal() {
   });
 }
 
+const QUICK_START_TOUR_STEPS = [
+  {
+    target: "#view-switch",
+    title: "按场景切换工作视图",
+    description: "看板用于判断全局，画布用于规划路径，表格用于集中维护。",
+    points: [
+      "三个入口始终位于顶部，切换视图不会改变事务数据。",
+      "引导期间点击“下一步”，页面会自动进入对应板块。",
+    ],
+  },
+  {
+    target: ".dashboard-heading",
+    view: "dashboard",
+    title: "先用看板判断优先级",
+    description: "开始处理事务前，先确认整体进度、计划偏差、风险和阻塞。",
+    points: [
+      "按 7 天、30 天或全部范围查看成果与到期情况。",
+      "指标和异常清单可以下钻到具体事务。",
+    ],
+  },
+  {
+    target: "#canvas-wrap",
+    view: "canvas",
+    title: "在画布上搭建推进路径",
+    description: "用主线、支线和反合表达项目结构，再按时间放置事务和里程碑。",
+    points: [
+      "在空白处右键创建主线；选中线后可创建支线、事务或里程碑。",
+      "单击事务聚焦依赖链，双击事务进入编辑。",
+    ],
+  },
+  {
+    target: "#canvas-opts",
+    view: "canvas",
+    title: "高效创建并组织事务",
+    description: "为事务补齐内容、责任人、状态和日期，并建立必要的前置关系。",
+    points: [
+      "选中线后按 A 或 N 新建事务，按 B 建支线，按 M 建里程碑。",
+      "编辑器支持图片、附件、多责任人、依赖、关注、评论和 @成员。",
+    ],
+  },
+  {
+    target: "#filters",
+    view: "canvas",
+    title: "筛出当前最需要处理的事务",
+    description: "用关键词、线路、责任人、状态、优先级和到期情况快速缩小范围。",
+    points: [
+      "顶部概览可一键筛选未闭环、风险、超期、临期和停留过久。",
+      "筛选同时作用于画布和表格，方便切换观察方式。",
+    ],
+  },
+  {
+    target: "#btn-my-status",
+    view: "canvas",
+    title: "从“我的情况”回到个人行动",
+    description: "集中查看分配给自己的未闭环事务和未读协作通知。",
+    points: [
+      "待办按超期、风险、临期和阻塞聚合，点击即可定位事务。",
+      "指派、提及、评论、状态变化和依赖解除会进入通知。",
+    ],
+  },
+  {
+    target: "#table-bar",
+    view: "table",
+    title: "在表格中批量维护",
+    description: "需要清单核对或集中调整时，表格视图更高效。",
+    points: [
+      "单元格修改后自动保存；勾选事务可批量改状态、责任人和优先级。",
+      "“导入 / 导出”支持用 Excel 成批维护数据。",
+    ],
+  },
+  {
+    target: "#account-menu",
+    view: "table",
+    openAccountMenu: true,
+    title: "从头像菜单完成管理与复盘",
+    description: "日常操作之外的设置、恢复和审计功能都集中在这里。",
+    points: [
+      "误删内容可从回收站恢复；画布编辑还支持 Ctrl+Z 撤销。",
+      "管理员可维护项目、成员和状态，并通过操作审计追溯变更。",
+    ],
+  },
+];
+
+const quickStartTour = {
+  active: false,
+  index: 0,
+  target: null,
+  positionFrame: null,
+  returnFocus: null,
+};
+
+function setQuickStartShade(side, left, top, width, height) {
+  const shade = $(`.quick-start-shade[data-side="${side}"]`);
+  Object.assign(shade.style, {
+    left: `${left}px`, top: `${top}px`, width: `${Math.max(0, width)}px`,
+    height: `${Math.max(0, height)}px`,
+  });
+}
+
+function positionQuickStartTour() {
+  if (!quickStartTour.active || !quickStartTour.target?.isConnected) return;
+  const viewportWidth = document.documentElement.clientWidth;
+  const viewportHeight = document.documentElement.clientHeight;
+  const targetRect = quickStartTour.target.getBoundingClientRect();
+  const padding = 7;
+  const left = Math.max(0, targetRect.left - padding);
+  const top = Math.max(0, targetRect.top - padding);
+  const right = Math.min(viewportWidth, targetRect.right + padding);
+  const bottom = Math.min(viewportHeight, targetRect.bottom + padding);
+  setQuickStartShade("top", 0, 0, viewportWidth, top);
+  setQuickStartShade("right", right, top, viewportWidth - right, bottom - top);
+  setQuickStartShade("bottom", 0, bottom, viewportWidth, viewportHeight - bottom);
+  setQuickStartShade("left", 0, top, left, bottom - top);
+
+  const popover = $("#quick-start-popover");
+  popover.style.visibility = "hidden";
+  popover.style.left = "12px";
+  popover.style.top = "12px";
+  const popoverRect = popover.getBoundingClientRect();
+  const gap = 14;
+  const edge = 12;
+  const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
+  let placement;
+  let popoverLeft;
+  let popoverTop;
+  if (viewportWidth - right >= popoverRect.width + gap) {
+    placement = "right";
+    popoverLeft = right + gap;
+    popoverTop = clamp(top + (bottom - top - popoverRect.height) / 2,
+      edge, viewportHeight - popoverRect.height - edge);
+  } else if (left >= popoverRect.width + gap) {
+    placement = "left";
+    popoverLeft = left - popoverRect.width - gap;
+    popoverTop = clamp(top + (bottom - top - popoverRect.height) / 2,
+      edge, viewportHeight - popoverRect.height - edge);
+  } else if (viewportHeight - bottom >= popoverRect.height + gap) {
+    placement = "bottom";
+    popoverLeft = clamp(left + (right - left - popoverRect.width) / 2,
+      edge, viewportWidth - popoverRect.width - edge);
+    popoverTop = bottom + gap;
+  } else if (top >= popoverRect.height + gap) {
+    placement = "top";
+    popoverLeft = clamp(left + (right - left - popoverRect.width) / 2,
+      edge, viewportWidth - popoverRect.width - edge);
+    popoverTop = top - popoverRect.height - gap;
+  } else {
+    placement = "floating";
+    popoverLeft = viewportWidth - popoverRect.width - edge;
+    popoverTop = viewportHeight - popoverRect.height - edge;
+  }
+  popover.dataset.placement = placement;
+  popover.style.left = `${Math.max(edge, popoverLeft)}px`;
+  popover.style.top = `${Math.max(edge, popoverTop)}px`;
+  popover.style.visibility = "visible";
+}
+
+function scheduleQuickStartPosition() {
+  if (!quickStartTour.active) return;
+  cancelAnimationFrame(quickStartTour.positionFrame);
+  quickStartTour.positionFrame = requestAnimationFrame(positionQuickStartTour);
+}
+
+function renderQuickStartStep() {
+  if (!quickStartTour.active) return;
+  const step = QUICK_START_TOUR_STEPS[quickStartTour.index];
+  closeAccountMenu();
+  if (step.view && state.view !== step.view) switchView(step.view);
+  $("#quick-start-progress").textContent =
+    `${quickStartTour.index + 1} / ${QUICK_START_TOUR_STEPS.length}`;
+  $("#quick-start-title").textContent = step.title;
+  $("#quick-start-description").textContent = step.description;
+  const points = $("#quick-start-points");
+  points.replaceChildren(...step.points.map((text) => {
+    const item = document.createElement("li");
+    item.textContent = text;
+    return item;
+  }));
+  $("#quick-start-prev").disabled = quickStartTour.index === 0;
+  $("#quick-start-next").textContent =
+    quickStartTour.index === QUICK_START_TOUR_STEPS.length - 1 ? "完成" : "下一步";
+  for (const [index, dot] of [...$("#quick-start-dots").children].entries()) {
+    const active = index === quickStartTour.index;
+    dot.classList.toggle("active", active);
+    dot.setAttribute("aria-current", active ? "step" : "false");
+  }
+
+  requestAnimationFrame(() => {
+    if (!quickStartTour.active) return;
+    if (step.openAccountMenu) {
+      $("#account-menu").classList.remove("hidden");
+      $("#account-trigger").setAttribute("aria-expanded", "true");
+    }
+    quickStartTour.target?.classList.remove("quick-start-target");
+    quickStartTour.target = $(step.target);
+    if (!quickStartTour.target) {
+      endQuickStartTour();
+      return;
+    }
+    quickStartTour.target.classList.add("quick-start-target");
+    quickStartTour.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    scheduleQuickStartPosition();
+  });
+}
+
+function showQuickStartStep(index) {
+  if (!quickStartTour.active || index < 0 || index >= QUICK_START_TOUR_STEPS.length) return;
+  quickStartTour.index = index;
+  renderQuickStartStep();
+}
+
+function endQuickStartTour({ restoreFocus = true } = {}) {
+  if (!quickStartTour.active) return;
+  quickStartTour.active = false;
+  cancelAnimationFrame(quickStartTour.positionFrame);
+  quickStartTour.target?.classList.remove("quick-start-target");
+  quickStartTour.target = null;
+  closeAccountMenu();
+  $("#quick-start-tour").classList.add("hidden");
+  $("#quick-start-tour").setAttribute("aria-hidden", "true");
+  document.body.classList.remove("quick-start-active");
+  if (restoreFocus && quickStartTour.returnFocus?.isConnected) {
+    quickStartTour.returnFocus.focus();
+  }
+  quickStartTour.returnFocus = null;
+}
+
+function startQuickStartTour() {
+  if (quickStartTour.active) endQuickStartTour({ restoreFocus: false });
+  quickStartTour.active = true;
+  quickStartTour.index = 0;
+  quickStartTour.returnFocus = $("#account-trigger");
+  closeAccountMenu();
+  const dots = $("#quick-start-dots");
+  dots.replaceChildren(...QUICK_START_TOUR_STEPS.map((step, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("aria-label", `前往第 ${index + 1} 步：${step.title}`);
+    button.onclick = () => showQuickStartStep(index);
+    return button;
+  }));
+  $("#quick-start-tour").classList.remove("hidden");
+  $("#quick-start-tour").setAttribute("aria-hidden", "false");
+  document.body.classList.add("quick-start-active");
+  renderQuickStartStep();
+  requestAnimationFrame(() => $("#quick-start-popover").focus());
+}
+
+$("#quick-start-prev").onclick = () => showQuickStartStep(quickStartTour.index - 1);
+$("#quick-start-next").onclick = () => {
+  if (quickStartTour.index === QUICK_START_TOUR_STEPS.length - 1) endQuickStartTour();
+  else showQuickStartStep(quickStartTour.index + 1);
+};
+$("#quick-start-close").onclick = () => endQuickStartTour();
+$("#quick-start-exit").onclick = () => endQuickStartTour();
+for (const shade of document.querySelectorAll(".quick-start-shade")) {
+  shade.onclick = () => endQuickStartTour();
+}
+window.addEventListener("resize", scheduleQuickStartPosition);
+document.addEventListener("scroll", scheduleQuickStartPosition, true);
+document.addEventListener("keydown", (event) => {
+  if (!quickStartTour.active) return;
+  if (!$("#modal-mask").classList.contains("hidden") ||
+      !$("#image-lightbox").classList.contains("hidden") ||
+      !$("#canvas-context-menu").classList.contains("hidden")) return;
+  if (event.key === "Escape") endQuickStartTour();
+  else if (event.key === "ArrowLeft") showQuickStartStep(quickStartTour.index - 1);
+  else if (event.key === "ArrowRight") {
+    if (quickStartTour.index === QUICK_START_TOUR_STEPS.length - 1) endQuickStartTour();
+    else showQuickStartStep(quickStartTour.index + 1);
+  } else return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+
 /* ============================================================== 事件绑定 */
 $("#login-form").onsubmit = async (event) => {
   event.preventDefault();
@@ -6179,6 +6463,7 @@ $("#btn-password").onclick = () => {
   closeAccountMenu();
   openPasswordModal();
 };
+$("#btn-quick-start").onclick = startQuickStartTour;
 $("#btn-audit").onclick = () => {
   closeAccountMenu();
   if (state.currentWorkspace?.role !== "admin") return;

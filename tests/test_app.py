@@ -662,6 +662,49 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn('if (event.key !== "Escape") return', source)
         self.assertIn('if ($("#summary-more").contains(btn))', source)
 
+    def test_quick_start_tutorial_follows_task_management_workflow(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        markup = body.decode("utf-8")
+        self.assertIn('id="btn-quick-start"', markup)
+        self.assertIn('role="menuitem">快速入门</button>', markup)
+        self.assertIn('id="quick-start-tour"', markup)
+        self.assertIn('id="quick-start-popover"', markup)
+        self.assertEqual(markup.count('class="quick-start-shade"'), 4)
+
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn("const QUICK_START_TOUR_STEPS = [", source)
+        expected_order = [
+            'target: "#view-switch"',
+            'target: ".dashboard-heading"',
+            'target: "#canvas-wrap"',
+            'target: "#canvas-opts"',
+            'target: "#filters"',
+            'target: "#btn-my-status"',
+            'target: "#table-bar"',
+            'target: "#account-menu"',
+        ]
+        positions = [source.index(target) for target in expected_order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn("function startQuickStartTour()", source)
+        self.assertIn("function showQuickStartStep(index)", source)
+        self.assertIn("function endQuickStartTour", source)
+        self.assertIn('$("#btn-quick-start").onclick = startQuickStartTour', source)
+        self.assertIn('dot.setAttribute("aria-current", active ? "step" : "false")', source)
+        self.assertIn('quickStartTour.index === QUICK_START_TOUR_STEPS.length - 1', source)
+        self.assertNotIn("quick-start-modal", source)
+
+        status, body = self.request("GET", "/static/style.css")
+        self.assertEqual(status, 200)
+        styles = body.decode("utf-8")
+        self.assertIn("#quick-start-tour", styles)
+        self.assertIn(".quick-start-shade", styles)
+        self.assertIn("#quick-start-popover", styles)
+        self.assertIn("body.quick-start-active #modal-mask", styles)
+        self.assertIn("@media (max-width: 560px)", styles)
+
     def test_workspace_isolation_and_member_permissions(self):
         default_line = self.create_line("默认空间主线")
         status, created = self.request(
