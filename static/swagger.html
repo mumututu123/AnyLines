@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AnyLine API 接口</title>
+  <link rel="stylesheet" href="/static/vendor/swagger-ui/swagger-ui.css">
+  <style>
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; background: #f6f8fa; }
+    body { color: #24292f; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+    .api-docs-header {
+      position: sticky; top: 0; z-index: 20; display: flex; align-items: center;
+      justify-content: space-between; gap: 20px; min-height: 54px; padding: 10px 24px;
+      border-bottom: 1px solid #d0d7de; background: #fff;
+    }
+    .api-docs-brand { color: #24292f; font-size: 18px; font-weight: 700; text-decoration: none; }
+    .api-docs-brand span { color: #0969da; }
+    .api-docs-warning { color: #57606a; font-size: 12px; text-align: center; }
+    .api-docs-back {
+      flex: 0 0 auto; border: 1px solid #d0d7de; border-radius: 6px; padding: 6px 10px;
+      background: #f6f8fa; color: #24292f; font-size: 12px; text-decoration: none;
+    }
+    .api-docs-back:hover, .api-docs-back:focus-visible { border-color: #0969da; color: #0969da; }
+    .swagger-ui .topbar { display: none; }
+    .swagger-ui .info { margin: 32px 0 24px; }
+    .swagger-ui .scheme-container { box-shadow: 0 1px 2px rgba(31, 35, 40, .08); }
+    @media (max-width: 620px) {
+      .api-docs-header { align-items: flex-start; padding: 10px 12px; }
+      .api-docs-warning { display: none; }
+      .swagger-ui .info { margin-top: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="api-docs-header">
+    <a class="api-docs-brand" href="/">Any<span>Line</span> API</a>
+    <p class="api-docs-warning">“Try it out” 会使用当前登录会话并直接操作当前项目空间</p>
+    <a class="api-docs-back" href="/">返回工作台</a>
+  </header>
+  <div id="swagger-ui"></div>
+  <script src="/static/vendor/swagger-ui/swagger-ui-bundle.js"></script>
+  <script>
+    window.addEventListener("DOMContentLoaded", () => {
+      window.ui = SwaggerUIBundle({
+        url: "/api/openapi.json",
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        displayRequestDuration: true,
+        docExpansion: "list",
+        filter: true,
+        tryItOutEnabled: true,
+        withCredentials: true,
+        requestInterceptor(request) {
+          request.credentials = "same-origin";
+          return request;
+        },
+      });
+    });
+  </script>
+</body>
+</html>

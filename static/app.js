@@ -6170,7 +6170,7 @@ const QUICK_START_TOUR_STEPS = [
     description: "日常操作之外的设置、恢复和审计功能都集中在这里。",
     points: [
       "误删内容可从回收站恢复；画布编辑还支持 Ctrl+Z 撤销。",
-      "管理员可维护项目、成员和状态，并通过操作审计追溯变更。",
+      "“API 接口”集中展示调用约定与样例；管理员还可通过操作审计追溯变更。",
     ],
   },
 ];
@@ -6464,6 +6464,10 @@ $("#btn-password").onclick = () => {
   openPasswordModal();
 };
 $("#btn-quick-start").onclick = startQuickStartTour;
+$("#btn-api-docs").onclick = () => {
+  window.open("/api-docs/", "_blank", "noopener,noreferrer");
+  if (!quickStartTour.active) closeAccountMenu();
+};
 $("#btn-audit").onclick = () => {
   closeAccountMenu();
   if (state.currentWorkspace?.role !== "admin") return;

@@ -24,6 +24,7 @@ flowchart TB
 | --- | --- | --- |
 | HTTP 与业务应用 | [`app.py`](../app.py) | 身份上下文、权限、业务校验、数据访问、迁移、文件与 Excel 接口 |
 | 审计模块 | [`audit.py`](../audit.py) | 审计表初始化、快照采集、敏感字段剔除、对象差异记录、事务提交 |
+| API 文档 | [`openapi.py`](../openapi.py)、[`static/swagger.html`](../static/swagger.html) | OpenAPI 3 契约、样例和本地 Swagger UI 入口 |
 | 页面结构 | [`static/index.html`](../static/index.html) | 登录、工作台、视图、账号菜单、审计页和弹窗容器 |
 | 前端逻辑 | [`static/app.js`](../static/app.js) | 状态加载、交互、画布和表格、个人通知、审计查询 |
 | 样式 | [`static/style.css`](../static/style.css) | 布局、主题、响应式显示、打印样式 |
@@ -124,6 +125,7 @@ erDiagram
 | 日夜主题 | `localStorage` 的 `anyline.theme` | 显式选择优先，支持系统偏好与浏览器 storage 同步 |
 | 新建事务草稿 | 页面内存中的 `Map` | 按空间和线隔离；不承诺刷新恢复 |
 | 审计筛选与分页 | `auditView` | 查询页会话；切换空间、退出时清理 |
+| Swagger UI | 独立 `/api-docs/` 页面 | 读取公开 OpenAPI 定义；调试调用复用当前同源 Cookie 会话 |
 | 项目地图分析 | `DashboardAnalysis`，`anyline.analysis.v1.<userId>.<workspaceId>.*` | 独立前端模块；变化确认点、基线与讲解路径存于浏览器，切换上下文时清理内存。打开页面不会移动确认点；回放带请求代次检查并在离开或隐藏页面时停止 |
 
 审计查询和快照详情使用请求序号及空间 ID 检查异步响应，避免旧请求覆盖新空间页面。快照使用文本节点展示 JSON，不将用户数据作为 HTML 注入。

@@ -3,6 +3,7 @@ import io
 import json
 import os
 import base64
+import re
 import sqlite3
 import tempfile
 import threading
@@ -704,6 +705,76 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertIn("#quick-start-popover", styles)
         self.assertIn("body.quick-start-active #modal-mask", styles)
         self.assertIn("@media (max-width: 560px)", styles)
+
+    def test_openapi_document_and_swagger_ui_cover_all_api_routes(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        markup = body.decode("utf-8")
+        audit_position = markup.index('id="btn-audit"')
+        docs_position = markup.index('id="btn-api-docs"')
+        logout_position = markup.index('id="btn-logout"')
+        self.assertLess(audit_position, docs_position)
+        self.assertLess(docs_position, logout_position)
+
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn('$("#btn-api-docs").onclick', source)
+        self.assertIn('window.open("/api-docs/", "_blank", "noopener,noreferrer")', source)
+
+        status, body = self.request("GET", "/api-docs/")
+        self.assertEqual(status, 200)
+        swagger_markup = body.decode("utf-8")
+        self.assertIn('id="swagger-ui"', swagger_markup)
+        self.assertIn("SwaggerUIBundle", swagger_markup)
+        self.assertIn('url: "/api/openapi.json"', swagger_markup)
+        self.assertIn('request.credentials = "same-origin"', swagger_markup)
+        self.assertNotIn("cdn.jsdelivr.net", swagger_markup)
+        self.assertEqual(self.request(
+            "GET", "/static/vendor/swagger-ui/swagger-ui.css"
+        )[0], 200)
+        self.assertEqual(self.request(
+            "GET", "/static/vendor/swagger-ui/swagger-ui-bundle.js"
+        )[0], 200)
+
+        self.cookie = None
+        status, document = self.request("GET", "/api/openapi.json")
+        self.assertEqual(status, 200)
+        self.assertEqual(document["openapi"], "3.0.3")
+        self.assertEqual(document["info"]["title"], "AnyLine HTTP API")
+        self.assertIn("cookieAuth", document["components"]["securitySchemes"])
+        self.assertEqual(
+            document["paths"]["/api/auth/login"]["post"]["security"], []
+        )
+        self.assertIn(
+            "201", document["paths"]["/api/tasks"]["post"]["responses"]
+        )
+        self.assertEqual(
+            document["paths"]["/api/tasks"]["post"]["requestBody"]
+            ["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/TaskWrite",
+        )
+
+        normalize = lambda path: re.sub(
+            r"<(?:int:)?([^>]+)>", lambda match: "{" + match.group(1) + "}", path
+        )
+        actual = {
+            (normalize(rule.rule), method.lower())
+            for rule in anyline.app.url_map.iter_rules()
+            if rule.rule.startswith("/api/")
+            for method in rule.methods - {"HEAD", "OPTIONS"}
+        }
+        documented = {
+            (path, method)
+            for path, path_item in document["paths"].items()
+            for method in path_item
+        }
+        self.assertEqual(documented, actual)
+        for path_item in document["paths"].values():
+            for operation in path_item.values():
+                self.assertTrue(operation["summary"])
+                self.assertTrue(operation["tags"])
+                self.assertTrue({"200", "201"} & operation["responses"].keys())
 
     def test_workspace_isolation_and_member_permissions(self):
         default_line = self.create_line("默认空间主线")

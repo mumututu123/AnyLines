@@ -8,6 +8,7 @@ import sqlite3
 import base64
 import binascii
 import audit
+from openapi import build_openapi_spec
 from zipfile import BadZipFile
 from io import BytesIO
 from datetime import date, datetime, timezone
@@ -1319,7 +1320,7 @@ def validate_password(value, required=True):
 def load_authenticated_context():
     if not request.path.startswith("/api/"):
         return None
-    if request.endpoint in {"auth_login", "auth_session"}:
+    if request.endpoint in {"auth_login", "auth_session", "api_openapi"}:
         return None
     user_id = session.get("user_id")
     if not user_id:
@@ -1362,7 +1363,9 @@ def finish_audit_request(response):
         if request.endpoint == "create_workspace" and response.status_code == 201:
             created_id = response.get_json()["id"]
         audit.finish(db, request.method, 200 <= response.status_code < 300, created_id)
-    if request.path.startswith("/api/audit"):
+    if request.path == "/api/openapi.json":
+        response.headers["Cache-Control"] = "public, max-age=300"
+    elif request.path.startswith("/api/audit"):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -2313,6 +2316,17 @@ def get_status_colors(db, statuses=None):
 @app.route("/")
 def index():
     return send_from_directory(str(app.static_folder), "index.html")
+
+
+@app.route("/api-docs")
+@app.route("/api-docs/")
+def api_docs():
+    return send_from_directory(str(app.static_folder), "swagger.html")
+
+
+@app.route("/api/openapi.json")
+def api_openapi():
+    return jsonify(build_openapi_spec())
 
 
 def session_payload(db, user):

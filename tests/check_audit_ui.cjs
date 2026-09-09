@@ -35,7 +35,8 @@ const assert = require('node:assert/strict');
       await delay(100);
     }
     const chrome = process.env.ANYLINE_TEST_CHROME || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-    browser = spawn(chrome, ['--headless=new', '--remote-debugging-port=0', '--no-first-run',
+    browser = spawn(chrome, ['--headless=new', '--no-sandbox', '--disable-gpu',
+      '--remote-debugging-port=0', '--no-first-run',
       '--no-default-browser-check', `--user-data-dir=${path.join(temporary, 'browser')}`, 'about:blank'],
       { windowsHide: true, stdio: 'ignore' });
     browser.on('error', error => { for (const p of pending.values()) p.reject(error); });
@@ -99,7 +100,7 @@ const assert = require('node:assert/strict');
       });
     })()`);
     await evaluate(`document.querySelector('#account-trigger').click()`);
-    assert.equal(await evaluate(`document.querySelector('#account-menu').lastElementChild.id`), 'btn-audit');
+    assert.equal(await evaluate(`document.querySelector('#btn-audit').nextElementSibling.id`), 'btn-api-docs');
     await evaluate(`document.querySelector('#btn-audit').click()`);
     await until(`document.querySelectorAll('#audit-rows tr').length === 25`);
     assert.equal(await evaluate(`getComputedStyle(document.querySelector('#workbench')).display`), 'none');

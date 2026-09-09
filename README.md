@@ -14,6 +14,7 @@ AnyLine 是一个基于 Flask + SQLite 的轻量级事务管理网站，用“�
 - 账号权限：空间角色分为管理员和普通用户；管理员可创建空间并维护成员，所有成员均可读写所在空间的业务对象。
 - 快速入门：用户可从头像菜单启动页面内功能导览，按看板总览、画布规划、事务录入、协同推进、日常跟进、批量处理和验收复盘的顺序操作真实界面；跨视图和打开业务弹窗时会持续保留当前导览。
 - 操作审计：空间管理员从头像菜单底部进入审计页，按账号、操作类型、对象和时间查询当前空间的编辑记录，查看操作前后快照。
+- API 接口：头像菜单“操作审计”下方提供 Swagger UI，统一展示全部 HTTP 接口、字段结构和可执行样例；页面使用当前 Cookie 会话，调试写请求会直接作用于当前项目空间。
 - 表格视图：新增事务时可快速搜索并选择所属主线或支线，并可按行编辑、自动保存。
 - Excel 导入：使用一个模板批量创建主线、支线和事务，跨工作表校验通过后一次写入。
 - Excel 导出：一个工作簿同时导出线和事务；导出选中事务时自动包含所属线及祖先线，文件可直接回导。
@@ -48,6 +49,7 @@ AnyLine 是一个基于 Flask + SQLite 的轻量级事务管理网站，用“�
 .
 ├── app.py              # Flask 后端、SQLite 初始化、REST API
 ├── audit.py            # 编辑审计、对象快照与事务提交
+├── openapi.py          # OpenAPI 3 接口定义与请求响应样例
 ├── anyline.db          # SQLite 数据库文件
 ├── requirements.txt    # Python 依赖版本范围
 ├── server.log          # 服务日志
@@ -55,8 +57,10 @@ AnyLine 是一个基于 Flask + SQLite 的轻量级事务管理网站，用“�
 │   └── test_app.py     # HTTP 接口与数据库迁移回归测试
 └── static/
     ├── index.html      # 单页前端入口
+    ├── swagger.html    # 本地 Swagger UI 页面
     ├── app.js          # 前端交互、画布绘制、API 调用
-    └── style.css       # 页面样式
+    ├── style.css       # 页面样式
+    └── vendor/         # 随项目部署的 Swagger UI 静态资源
 ```
 
 ## 环境要求
@@ -122,6 +126,7 @@ python -m unittest discover -s tests -v
 node --check static\app.js
 node --check static\dashboard-analysis.js
 node tests/check_dashboard_analysis.cjs
+node --experimental-websocket tests/check_issue_regressions.cjs
 ```
 
 新建、编辑事务的多责任人真实点击与保存检查（Windows 已安装 Chrome、Node 20+）：
@@ -284,8 +289,12 @@ python app.py
 
 ## REST API
 
+登录后可从头像菜单选择 `API 接口`，或直接访问 `/api-docs/`。Swagger UI 从
+`/api/openapi.json` 读取 OpenAPI 3.0 定义；定义本身公开可读，业务请求仍按下表执行登录、空间和角色校验。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| `GET` | `/api/openapi.json` | 获取完整 OpenAPI 3.0 接口定义与样例 |
 | `POST` | `/api/auth/login` | 登录 |
 | `POST` | `/api/auth/logout` | 退出登录 |
 | `GET` | `/api/auth/session` | 获取当前账号、空间及角色 |
