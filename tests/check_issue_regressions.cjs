@@ -277,8 +277,38 @@ const assert = require('node:assert/strict');
       state.tasks.some(task => task.name === '不能丢失的事务名')`);
     assert.equal(await evaluate(`state.tasks.find(
       task => task.name === '不能丢失的事务名').content.includes('重登录后继续编辑')`), true);
+
+    currentStep = 'checking same-day branch fork collapse';
+    const forkFixture = await evaluate(`(async () => {
+      const parent = await api('/api/lines', 'POST', {
+        name: '同日分叉主线', fork_date: state.today,
+      });
+      const branches = [];
+      for (const name of ['同日支线一', '同日支线二', '同日支线三']) {
+        branches.push(await api('/api/lines', 'POST', {
+          name, parent_id: parent.id, fork_date: state.today,
+        }));
+      }
+      await reload();
+      switchView('canvas');
+      return { parentId: parent.id, branchIds: branches.map(branch => branch.id) };
+    })()`);
+    const branchIds = forkFixture.branchIds.join(',');
+    await until(`document.querySelector('.fork-control[data-branch-ids="${branchIds}"]')`);
+    assert.equal(await evaluate(`document.querySelectorAll(
+      '.fork-control[data-branch-ids="${branchIds}"]').length`), 1);
+    await evaluate(`document.querySelector(
+      '.fork-control[data-branch-ids="${branchIds}"]').dispatchEvent(
+        new MouseEvent('click', { bubbles: true }))`);
+    assert.equal(await evaluate(`${JSON.stringify(forkFixture.branchIds)}.every(
+      id => state.hiddenBranchIds.has(id))`), true);
+    await evaluate(`document.querySelector(
+      '.fork-control[data-branch-ids="${branchIds}"]').dispatchEvent(
+        new MouseEvent('click', { bubbles: true }))`);
+    assert.equal(await evaluate(`${JSON.stringify(forkFixture.branchIds)}.every(
+      id => !state.hiddenBranchIds.has(id))`), true);
     assert.deepEqual(browserErrors, []);
-    console.log('Browser checks passed: quick start, Swagger API docs, more-metrics dismissal, and session recovery.');
+    console.log('Browser checks passed: quick start, Swagger API docs, more-metrics dismissal, session recovery, and same-day branch collapse.');
   } finally {
     clearTimeout(timeout);
     socket?.close();

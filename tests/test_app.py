@@ -474,6 +474,23 @@ class AnyLineHttpTests(unittest.TestCase):
         )
         self.assertNotIn("pointOnLineAtX", source)
 
+    def test_same_day_branches_share_one_fork_control(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn("const forkGroups = new Map();", source)
+        self.assertIn('const key = `${branch.parent_id}:${branch.fork_date}`;', source)
+        self.assertIn('"data-branch-ids": branches.map((branch) => branch.id).join(",")', source)
+        self.assertIn(
+            "branches.every((branch) => state.hiddenBranchIds.has(branch.id))",
+            source,
+        )
+        self.assertIn(
+            "for (const branch of branches) state.hiddenBranchIds.delete(branch.id)",
+            source,
+        )
+
     def test_canvas_shortcuts_include_redo_today_branch_and_task(self):
         status, body = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)
