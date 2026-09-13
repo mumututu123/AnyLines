@@ -76,7 +76,7 @@ def account_snapshot(row):
     return item
 
 
-def capture(db, workspace_id, account_id=None):
+def capture(db, workspace_id, account_id=None, focus=None):
     objects = {}
     if account_id is not None:
         row = db.execute("SELECT * FROM users WHERE id=?", (account_id,)).fetchone()
@@ -87,35 +87,73 @@ def capture(db, workspace_id, account_id=None):
     if not row:
         return objects
     objects[("workspace", str(workspace_id))] = dict(row)
-    for table, kind in (("lines", "line"), ("tasks", "task"),
-                        ("milestones", "milestone"), ("task_comments", "comment")):
-        for row in db.execute(f"SELECT * FROM {table} WHERE workspace_id=? ORDER BY id",
-                              (workspace_id,)):
+    # 单事务编辑只需要采集该事务及其关系；创建、批量及线编辑仍使用
+    # 完整空间快照，以保持审计对级联变化的覆盖范围。
+    task_ids = None
+    if focus and focus.get("task_ids"):
+        task_ids = sorted({int(task_id) for task_id in focus["task_ids"]})
+    tables = (("lines", "line"), ("tasks", "task"),
+              ("milestones", "milestone"), ("task_comments", "comment"))
+    for table, kind in tables:
+        if task_ids is not None and table != "tasks":
+            continue
+        params = [workspace_id]
+        where = "workspace_id=?"
+        if task_ids is not None:
+            marks = ",".join("?" for _ in task_ids)
+            where += f" AND id IN ({marks})"
+            params.extend(task_ids)
+        for row in db.execute(
+            f"SELECT * FROM {table} WHERE {where} ORDER BY id", params
+        ):
             item = dict(row)
             if kind == "task":
                 item.update(dependencies=[], images=[], attachments=[])
             elif kind == "milestone":
                 item["acceptance_task_ids"] = []
             objects[(kind, str(row["id"]))] = item
-    for row in db.execute("SELECT * FROM task_dependencies WHERE workspace_id=? "
-                          "ORDER BY dependent_task_id,prerequisite_task_id", (workspace_id,)):
+    dependency_params = [workspace_id]
+    dependency_where = "workspace_id=?"
+    if task_ids is not None:
+        marks = ",".join("?" for _ in task_ids)
+        dependency_where += f" AND dependent_task_id IN ({marks})"
+        dependency_params.extend(task_ids)
+    for row in db.execute(
+        "SELECT * FROM task_dependencies WHERE " + dependency_where +
+        " ORDER BY dependent_task_id,prerequisite_task_id", dependency_params
+    ):
         task = objects.get(("task", str(row["dependent_task_id"])))
         if task is not None:
             task["dependencies"].append(row["prerequisite_task_id"])
-    for row in db.execute("SELECT * FROM milestone_tasks WHERE workspace_id=? "
-                          "ORDER BY milestone_id,task_id", (workspace_id,)):
+    if task_ids is None:
+        milestone_task_rows = db.execute(
+            "SELECT * FROM milestone_tasks WHERE workspace_id=? "
+            "ORDER BY milestone_id,task_id", (workspace_id,)
+        )
+    else:
+        milestone_task_rows = ()
+    for row in milestone_task_rows:
         milestone = objects.get(("milestone", str(row["milestone_id"])))
         if milestone is not None:
             milestone["acceptance_task_ids"].append(row["task_id"])
     for table, field in (("task_images", "images"), ("task_attachments", "attachments")):
-        for row in db.execute(f"SELECT * FROM {table} WHERE workspace_id=? ORDER BY id",
-                              (workspace_id,)):
+        params = [workspace_id]
+        where = "workspace_id=?"
+        if task_ids is not None:
+            marks = ",".join("?" for _ in task_ids)
+            where += f" AND task_id IN ({marks})"
+            params.extend(task_ids)
+        for row in db.execute(
+            f"SELECT * FROM {table} WHERE {where} ORDER BY id", params
+        ):
             task = objects.get(("task", str(row["task_id"])))
             if task is not None:
                 item = dict(row)
                 data = item.pop("data")
                 item.update(bytes=len(data), sha256=hashlib.sha256(data).hexdigest())
                 task[field].append(item)
+    if task_ids is not None:
+        return objects
     for row in db.execute("SELECT u.*,m.workspace_id,m.role,m.joined_at FROM workspace_members m "
                           "JOIN users u ON u.id=m.user_id WHERE m.workspace_id=? ORDER BY u.id",
                           (workspace_id,)):
@@ -130,14 +168,15 @@ def capture(db, workspace_id, account_id=None):
     return objects
 
 
-def begin(db, workspace_id, user, endpoint):
+def begin(db, workspace_id, user, endpoint, focus=None):
     import uuid
     db.execute("BEGIN IMMEDIATE")
     account_id = user["id"] if endpoint in {"auth_change_password", "auth_avatar_update"} else None
     db.audit_context = {
         "workspace_id": workspace_id, "user_id": user["id"], "username": user["username"],
         "endpoint": endpoint, "account_id": account_id, "request_id": uuid.uuid4().hex,
-        "before": capture(db, workspace_id, account_id),
+        "focus": focus,
+        "before": capture(db, workspace_id, account_id, focus),
     }
 
 
@@ -168,7 +207,7 @@ def finish(db, method, success, created_workspace_id=None):
             db.rollback()
             return
         workspace_id = created_workspace_id or context["workspace_id"]
-        after = capture(db, workspace_id, context["account_id"])
+        after = capture(db, workspace_id, context["account_id"], context.get("focus"))
         before = context["before"]
         created_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
         for key in sorted(before.keys() | after.keys()):

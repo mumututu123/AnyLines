@@ -2167,6 +2167,12 @@ html[data-theme="dark"] :is(#summary-more > summary:hover,
   #table-data-actions > div button:hover) {
   background: var(--dark-hover) !important; color: var(--dark-accent);
 }
+html[data-theme="dark"] #canvas-context-menu {
+  background: var(--dark-surface);
+  color: var(--dark-text);
+  border-color: var(--dark-border);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
 html[data-theme="dark"] #canvas-context-menu button { color: var(--dark-text); }
 html[data-theme="dark"] #canvas-context-menu button:disabled { color: var(--dark-faint); }
 

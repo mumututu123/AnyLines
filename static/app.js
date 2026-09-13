@@ -3082,39 +3082,58 @@ function renderCanvas() {
     lbl.addEventListener("click", select);
   }
 
-  /* 分叉点始终保留在父线上，点击可折叠或展开对应支线。 */
+  /*
+   * 分叉点始终保留在父线上。同一父线同一天创建的支线共用一个
+   * 分叉点，避免重叠的独立命中区域只能操作最后绘制的那条支线。
+   */
   const gForks = svgEl("g", {}, root);
+  const forkGroups = new Map();
   for (const branch of state.lines.filter((line) => line.parent_id !== null)) {
-    const parent = lineById(branch.parent_id);
+    const key = `${branch.parent_id}:${branch.fork_date}`;
+    if (!forkGroups.has(key)) forkGroups.set(key, []);
+    forkGroups.get(key).push(branch);
+  }
+  for (const group of forkGroups.values()) {
+    const branches = group
+      .filter((branch) => !hasActiveCanvasFilter || rows.has(branch.id))
+      .sort((a, b) => a.id - b.id);
+    if (!branches.length) continue;
+    const firstBranch = branches[0];
+    const parent = lineById(firstBranch.parent_id);
     if (!parent || !rows.has(parent.id)) continue;
-    if (hasActiveCanvasFilter && !rows.has(branch.id)) continue;
-    const hidden = !hasActiveCanvasFilter && state.hiddenBranchIds.has(branch.id);
-    const { x: cx, y: cy } = branchStartPoint(branch, parent);
-    const color = colorOf(branch);
+    const hidden = !hasActiveCanvasFilter &&
+      branches.every((branch) => state.hiddenBranchIds.has(branch.id));
+    const { x: cx, y: cy } = branchStartPoint(firstBranch, parent);
+    const color = colorOf(firstBranch);
     const control = svgEl("g", {
       class: `fork-control${hidden ? " collapsed" : ""}`,
-      "data-branch-id": branch.id,
+      "data-branch-ids": branches.map((branch) => branch.id).join(","),
     }, gForks);
     svgEl("circle", { cx, cy, r: 12, class: "fork-hit" }, control);
     svgEl("circle", {
       cx, cy, r: hidden ? 6 : 4.5, fill: color,
       class: `fork-dot${hidden ? " collapsed" : ""}`,
     }, control);
-    if (hidden) {
+    if (hidden || branches.length > 1) {
       const symbol = svgEl("text", {
         x: cx, y: cy + 3.5, "text-anchor": "middle", class: "fork-symbol",
       }, control);
-      symbol.textContent = "+";
+      symbol.textContent = hidden ? "+" : String(branches.length);
     }
     const title = svgEl("title", {}, control);
-    title.textContent = `${hidden ? "展开" : "折叠"}支线：${branch.name}`;
+    const branchNames = branches.map((branch) => branch.name).join("、");
+    title.textContent = `${hidden ? "展开" : "折叠"}${branches.length}条支线：${branchNames}`;
     control.addEventListener("click", (event) => {
       event.stopPropagation();
       if (hidden) {
-        state.hiddenBranchIds.delete(branch.id);
+        for (const branch of branches) state.hiddenBranchIds.delete(branch.id);
       } else {
-        state.hiddenBranchIds.add(branch.id);
-        const hiddenIds = new Set([branch.id, ...descendantIds(branch.id)]);
+        const hiddenIds = new Set();
+        for (const branch of branches) {
+          state.hiddenBranchIds.add(branch.id);
+          hiddenIds.add(branch.id);
+          for (const id of descendantIds(branch.id)) hiddenIds.add(id);
+        }
         if (hiddenIds.has(state.selectedLineId)) state.selectedLineId = parent.id;
         const selectedTask = state.tasks.find((task) => task.id === state.selectedTaskId);
         if (selectedTask && hiddenIds.has(selectedTask.line_id)) state.selectedTaskId = null;

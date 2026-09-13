@@ -11,6 +11,7 @@ import unittest
 from contextlib import closing
 from datetime import date, timedelta
 from urllib.parse import urlencode
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 from PIL import Image
@@ -323,6 +324,16 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/state")[1]["lines"], [])
         self.assertEqual(self.audit_records()["total"], 0)
 
+    def test_task_edit_audit_captures_only_edited_task(self):
+        line_id = self.create_line()
+        task_id = self.create_task(line_id, "待编辑")
+        self.create_task(line_id, "不相关事务")
+        with patch.object(anyline.audit, "capture", wraps=anyline.audit.capture) as capture:
+            status, _ = self.request("PATCH", f"/api/tasks/{task_id}", {"name": "已编辑"})
+        self.assertEqual(status, 200)
+        focuses = [call.args[3] for call in capture.call_args_list if len(call.args) > 3]
+        self.assertEqual(focuses, [{"task_ids": [task_id]}, {"task_ids": [task_id]}])
+
     def test_index_and_empty_state(self):
         status, body = self.request("GET", "/")
         self.assertEqual(status, 200)
@@ -473,6 +484,31 @@ class AnyLineHttpTests(unittest.TestCase):
             source,
         )
         self.assertNotIn("pointOnLineAtX", source)
+
+    def test_same_day_branches_share_one_fork_control(self):
+        status, body = self.request("GET", "/static/app.js")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+
+        self.assertIn("const forkGroups = new Map();", source)
+        self.assertIn('const key = `${branch.parent_id}:${branch.fork_date}`;', source)
+        self.assertIn('"data-branch-ids": branches.map((branch) => branch.id).join(",")', source)
+        self.assertIn(
+            "branches.every((branch) => state.hiddenBranchIds.has(branch.id))",
+            source,
+        )
+        self.assertIn(
+            "for (const branch of branches) state.hiddenBranchIds.delete(branch.id)",
+            source,
+        )
+
+    def test_canvas_context_menu_has_explicit_dark_surface(self):
+        status, body = self.request("GET", "/static/style.css")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn('html[data-theme="dark"] #canvas-context-menu {', source)
+        self.assertIn("background: var(--dark-surface);", source)
+        self.assertIn("box-shadow: 0 8px 24px rgba(0, 0, 0, .45);", source)
 
     def test_canvas_shortcuts_include_redo_today_branch_and_task(self):
         status, body = self.request("GET", "/static/app.js")
