@@ -491,6 +491,14 @@ class AnyLineHttpTests(unittest.TestCase):
             source,
         )
 
+    def test_canvas_context_menu_has_explicit_dark_surface(self):
+        status, body = self.request("GET", "/static/style.css")
+        self.assertEqual(status, 200)
+        source = body.decode("utf-8")
+        self.assertIn('html[data-theme="dark"] #canvas-context-menu {', source)
+        self.assertIn("background: var(--dark-surface);", source)
+        self.assertIn("box-shadow: 0 8px 24px rgba(0, 0, 0, .45);", source)
+
     def test_canvas_shortcuts_include_redo_today_branch_and_task(self):
         status, body = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)

@@ -151,6 +151,12 @@ const assert = require('node:assert/strict');
     await evaluate(`applyTheme('dark')`);
     assert.equal(await evaluate(`getComputedStyle(
       document.querySelector('#quick-start-popover')).backgroundColor`), 'rgb(28, 33, 40)');
+    await evaluate(`switchView('canvas');
+      document.querySelector('#canvas-wrap').dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, clientX: 80, clientY: 80 }))`);
+    assert.equal(await evaluate(`getComputedStyle(
+      document.querySelector('#canvas-context-menu')).backgroundColor`), 'rgb(22, 27, 34)');
+    await evaluate(`closeCanvasContextMenu()`);
     await cdp('Emulation.setDeviceMetricsOverride', {
       width: 390, height: 844, deviceScaleFactor: 1, mobile: false,
     });
