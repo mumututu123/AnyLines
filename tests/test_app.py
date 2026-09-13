@@ -11,6 +11,7 @@ import unittest
 from contextlib import closing
 from datetime import date, timedelta
 from urllib.parse import urlencode
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 from PIL import Image
@@ -322,6 +323,16 @@ class AnyLineHttpTests(unittest.TestCase):
         self.assertEqual(status, 500)
         self.assertEqual(self.request("GET", "/api/state")[1]["lines"], [])
         self.assertEqual(self.audit_records()["total"], 0)
+
+    def test_task_edit_audit_captures_only_edited_task(self):
+        line_id = self.create_line()
+        task_id = self.create_task(line_id, "待编辑")
+        self.create_task(line_id, "不相关事务")
+        with patch.object(anyline.audit, "capture", wraps=anyline.audit.capture) as capture:
+            status, _ = self.request("PATCH", f"/api/tasks/{task_id}", {"name": "已编辑"})
+        self.assertEqual(status, 200)
+        focuses = [call.args[3] for call in capture.call_args_list if len(call.args) > 3]
+        self.assertEqual(focuses, [{"task_ids": [task_id]}, {"task_ids": [task_id]}])
 
     def test_index_and_empty_state(self):
         status, body = self.request("GET", "/")

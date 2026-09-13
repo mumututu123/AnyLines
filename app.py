@@ -1351,7 +1351,12 @@ def load_authenticated_context():
             require_workspace_admin(target_id)
         if request.endpoint == "create_workspace":
             target_id = None
-        audit.begin(db, target_id, user, request.endpoint)
+        focus = None
+        if request.endpoint in {"update_task", "delete_task", "task_dependency"}:
+            task_id = (request.view_args or {}).get("tid")
+            if task_id is not None:
+                focus = {"task_ids": [task_id]}
+        audit.begin(db, target_id, user, request.endpoint, focus=focus)
     return None
 
 
